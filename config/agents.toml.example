@@ -1,0 +1,26 @@
+# agentmux agent configuration
+# Copy this file to ~/.agentmux/agents.toml and edit to suit.
+# Agents are launched in the order defined. tmc with no argument defaults to the first agent.
+# flag: optional single-letter shorthand for tmc -<flag>
+
+[[agents]]
+name = "work"
+flag = "w"
+cmd = "CLAUDE_CONFIG_DIR=~/.claude-work claude"
+colour_inactive = "fg=black,bg=colour30"
+colour_active = "fg=black,bg=colour37,bold"
+
+[[agents]]
+name = "personal"
+flag = "p"
+cmd = "CLAUDE_CONFIG_DIR=~/.claude-personal claude"
+colour_inactive = "fg=black,bg=colour82"
+colour_active = "fg=black,bg=colour154,bold"
+
+[[agents]]
+name = "ollama"
+cmd = "ollama run llama3.2"
+colour_inactive = "fg=black,bg=colour208"
+colour_active = "fg=black,bg=colour214,bold"
+keep_alive = true
+reattach = true
