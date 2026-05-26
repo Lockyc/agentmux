@@ -33,9 +33,8 @@ pane_key=$(echo "$TMUX_PANE" | tr -d '%')
 longfile="/tmp/claude-long-${pane_key}.txt"
 subjectfile="/tmp/claude-subject-${pane_key}.txt"
 substartfile="/tmp/claude-substart-${pane_key}.txt"
-label="claude"
-_mode=$(tmux show-options -wv -t "$TMUX_PANE" "@window-claude-mode" 2>/dev/null)
-case "$_mode" in work) label="claude·work" ;; personal) label="claude·pers" ;; esac
+TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-"$SCRIPT_DIR/tab_label.sh"}"
+label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" claude 2>/dev/null || echo "claude")
 project=$(basename "$PWD" 2>/dev/null)
 [ -z "$project" ] && project="$label"
 
