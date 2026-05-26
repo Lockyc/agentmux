@@ -10,6 +10,7 @@ AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
 AGENTMUX_SCRIPTS="${AGENTMUX_SCRIPTS:-$HOME/.agentmux/scripts}"
 
 source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
+source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 
 _amux_default_session_name() {
   basename "$PWD" | tr . _
@@ -44,8 +45,6 @@ _amux_launch_window0() {
       cmd="$cmd; exec \$SHELL"
     fi
   fi
-
-  source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 
   tmux rename-window -t "$session:0" "$agent"
   agentmux_set_window_style "$agent" "$session:0"

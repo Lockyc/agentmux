@@ -74,9 +74,9 @@ else
   tmux set -u -t "$session" @l2fg 2>/dev/null
 fi
 
-# The 3-row Claude summary block only applies to auto-claude sessions
-# (the `tmc` alias sets @autoagent=1). Everything else (tm/twork/
-# tpersonal/plain) keeps a single normal status line — no summary rows,
+# The 3-row AI summary block only applies to @autoagent sessions
+# (the `tmc` function sets @autoagent=1). Everything else (tm and
+# plain sessions) keeps a single normal status line — no summary rows,
 # no wasted terminal height. `status` is a per-session option so this
 # overrides the global default (1) just for tmc sessions. status 4 =
 # line 0 + the 3 summary rows (status-format[1..3]).
