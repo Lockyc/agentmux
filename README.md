@@ -120,8 +120,6 @@ export LMSTUDIO_TIMEOUT=20   # seconds
 
 ## Session colours
 
-The status bar and the summary rows are automatically coloured on every session attach. The colour is **deterministic from the session name**: `cksum(name) % palette_size` indexes a curated palette of saturated mid/dark backgrounds, so the same project directory always maps to the same colour on any machine. The summary rows (status-format[1..3]) get a distinct shade of the same hue — darker when the status bar uses a light foreground, lighter when it uses a dark one — so the two bars are visually related but clearly separate.
+Each session gets a colour derived deterministically from its name — same directory, same colour, on every machine. The summary rows use a matching shade of the same hue. Colours update automatically on attach; no config needed.
 
-Session names default to `basename $PWD` (dots replaced with underscores), so opening agentmux from the same directory reliably produces the same colour. You can also pass an explicit session name with `amux <agent> <name>` to pin a colour regardless of working directory.
-
-`update_colors.sh` is wired to the `client-attached`, `session-created`, and `client-session-changed` tmux hooks; no manual step is needed.
+Session names default to `basename $PWD` (dots → underscores). Pass an explicit name with `amux <agent> <name>` to pin a colour regardless of working directory.
