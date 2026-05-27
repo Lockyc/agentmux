@@ -56,8 +56,65 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
 
+## AI tab states (Claude Code)
+
+`tmux-status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:
+
+| Emoji | State |
+|---|---|
+| 🤖 | Session started |
+| ⚡ | Working |
+| 🔐 | Awaiting permission |
+| 📣 | Waiting for input |
+| ✅ | Done (unseen) |
+| 👀 | Done (window active/seen) |
+
+**Setup:** copy the hook scripts to `~/.claude/hooks/`:
+
+```bash
+cp scripts/tmux-status.sh scripts/claude_ctx.sh scripts/claude_digest.sh ~/.claude/hooks/
+chmod +x ~/.claude/hooks/tmux-status.sh ~/.claude/hooks/claude_ctx.sh ~/.claude/hooks/claude_digest.sh
+```
+
+Wire them in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh 🤖" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh ⚡" }] }],
+    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh ⚡" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh 📣" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh 🔐 --notify 'Claude is waiting for permission'" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh ✅ --notify 'Claude has finished working'" }] }]
+  }
+}
+```
+
+The `--notify` flag triggers a macOS notification via `osascript`. Remove it if you don't want desktop alerts.
+
 ## AI summary status lines
 
-The 3-row status bar (subject / done / now / next) is driven by a generic protocol: any agent writes its status to `/tmp/agentmux-status-<pane_key>.txt` (where `pane_key=$(echo $TMUX_PANE | tr -d '%')`), and `summary_rows.sh` renders it. `summarise.sh` (LM Studio backend, `localhost:1234`) generates the done/now/next text from any digest input.
+The 3-row status bar shows a rolling `done / now / next` summary of the active session. `agentmux.conf` already wires `status-format[1-3]` to `summary_rows.sh`; you just need LM Studio and the Claude Code hooks above.
 
-**Claude Code integration:** Claude Code hooks in `~/.claude/hooks/` handle the Claude-specific pipeline (`claude_ctx.sh` + `claude_digest.sh` → `summarise.sh` → status file). Non-Claude agents show blank rows until they implement the write protocol.
+**Requirements:**
+- LM Studio running at `localhost:1234` with a small non-reasoning instruct model loaded (e.g. `qwen2.5-14b-instruct`)
+- `agentmux.conf` sourced in `~/.tmux.conf`
+- Claude Code hooks wired (above) — the `⚡` hook triggers the summariser
+
+**Pipeline** (runs detached on every `⚡` hook):
+1. `claude_ctx.sh` — extracts recent prose turns from the Claude Code transcript
+2. `claude_digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
+3. `summarise.sh stand` — sends the digest to LM Studio; receives `"<subject>. done: …; now: …; next: …"`
+4. Result written to `/tmp/agentmux-status-<pane_key>.txt`
+5. `summary_rows.sh` (called by tmux `status-format[1-3]`) splits that into three display rows
+
+Override the LM Studio endpoint or model with environment variables:
+
+```bash
+export LMSTUDIO_URL=http://localhost:1234/v1/chat/completions
+export LMSTUDIO_MODEL=qwen2.5-14b-instruct
+export LMSTUDIO_TIMEOUT=20   # seconds
+```
+
+**Non-Claude agents:** any agent can participate by writing to `/tmp/agentmux-status-<pane_key>.txt` directly (where `pane_key=$(echo $TMUX_PANE | tr -d '%')`). The format is a single line: `<subject>. done: <text>; now: <text>; next: <text>` — any of the `done`/`now`/`next` labels may be omitted.
