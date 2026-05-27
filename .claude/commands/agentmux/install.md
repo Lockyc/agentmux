@@ -73,7 +73,7 @@ Use AskUserQuestion with a **multi-select** question:
 
 **"What should I set up for you?"**
 
-Mark as "Recommended" those not already detected as wired:
+Mark as "Recommended" those not already detected as wired. Also mark **AI summary status lines** as Recommended if either LLM endpoint was detected running in step 3.
 
 - **Shell config** — appends `source ~/.agentmux/shell/agentmux.sh` to `~/.zshrc` (or `~/.bashrc`)
 - **tmux config** — appends `source-file ~/.agentmux/tmux/agentmux.conf` to `~/.tmux.conf`
@@ -144,11 +144,10 @@ Use AskUserQuestion (single-select):
 
 **"Which local LLM are you using for AI summaries?"**
 
-Use the probe results from step 3 to add "(detected — running)" next to options that responded:
+Use the probe results from step 3 to add "(detected — running)" next to options that responded. Use the built-in Other escape hatch for custom URLs.
 
 - **LM Studio** — endpoint: `http://localhost:1234/v1/chat/completions`
 - **Ollama** — endpoint: `http://localhost:11434/v1/chat/completions`
-- **Other / custom endpoint** — I'll enter the URL (user can type via the Other option)
 - **Skip for now** — I'll configure this later in `~/.agentmux/agents.toml`
 
 **9b. Ask for model name**
@@ -159,10 +158,10 @@ Use AskUserQuestion (single-select):
 
 **"Which model do you want to use for summaries? (small, fast instruct models work best)"**
 
-Options tailored to the provider:
-- For **LM Studio**: `qwen2.5-7b-instruct`, `qwen2.5-14b-instruct`, `mistral-7b-instruct`, Other (enter yours)
-- For **Ollama**: `qwen2.5:7b`, `qwen2.5:14b`, `llama3.1:8b`, Other (enter yours)
-- For **Custom**: `qwen2.5-14b-instruct`, Other (enter yours)
+Options tailored to the provider (use the built-in Other escape hatch for unlisted models):
+- For **LM Studio**: `qwen2.5-7b-instruct`, `qwen2.5-14b-instruct`, `mistral-7b-instruct`
+- For **Ollama**: `qwen2.5:7b`, `qwen2.5:14b`, `llama3.1:8b`
+- For **Custom**: `qwen2.5-14b-instruct`, `mistral-7b-instruct`, `llama3.1-8b-instruct`
 
 **9c. Write config**
 
@@ -184,8 +183,10 @@ Read `$REPO_DIR/.claude/commands/agentmux/install.md` and write it verbatim to `
 
 Print a summary in three sections:
 
+Read `$REPO_DIR/VERSION` to get the installed version string.
+
 **Installed**
-- agentmux vX.X.X → `~/.agentmux/` ✓
+- agentmux vX.X.X → `~/.agentmux/` ✓  (substitute actual version from VERSION file)
 - List each wired item (shell config / tmux config / hooks / LLM) with its target file and status (wired / already present / skipped)
 
 **Reload**
