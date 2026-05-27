@@ -1,7 +1,7 @@
 # agentmux agent configuration
 # Copy this file to ~/.agentmux/agents.toml and edit to suit.
 # Agents are launched in the order defined. amux with no argument defaults to the first agent.
-# flag:  optional single-letter shorthand for tmc -<flag>
+# flag:  optional single-letter shorthand for amux -<flag>
 # label: optional short display name for tmux tabs (defaults to name if omitted)
 
 [[agents]]

@@ -11,12 +11,14 @@ _amux_json() {
     printf '%s' "$_amux_json_cache"; return 0
   fi
 
-  # Disk cache keyed on config mtime — avoids toml2json on every hook invocation.
+  # Disk cache in a user-private dir, keyed on config mtime.
+  # Avoids toml2json on every hook invocation (in-memory cache only lives per-process).
+  local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux"
   local mtime
   mtime=$(stat -f %m "$AGENTMUX_CONFIG" 2>/dev/null \
        || stat -c %Y "$AGENTMUX_CONFIG" 2>/dev/null \
        || echo "0")
-  local cache_file="/tmp/agentmux-config-${mtime}.json"
+  local cache_file="$cache_dir/config-${mtime}.json"
 
   if [ -f "$cache_file" ]; then
     _amux_json_cache=$(cat "$cache_file")
@@ -28,8 +30,8 @@ _amux_json() {
     echo "agentmux: failed to parse $AGENTMUX_CONFIG" >&2; return 1
   }
   _amux_json_cache="$json"
-  # Evict stale cache files before writing the new one.
-  find /tmp -maxdepth 1 -name 'agentmux-config-*.json' -delete 2>/dev/null
+  mkdir -p "$cache_dir" 2>/dev/null
+  find "$cache_dir" -maxdepth 1 -name 'config-*.json' -delete 2>/dev/null
   printf '%s' "$json" > "$cache_file" 2>/dev/null || true
   printf '%s' "$json"
 }

@@ -115,7 +115,11 @@ claude-personal() {
 # Zsh completion: amux <tab> completes agent names and -<flag> shortcuts.
 if [ -n "${ZSH_VERSION:-}" ]; then
   _amux_zsh_complete() {
-    (( CURRENT == 2 )) && compadd -- $(agentmux_list_agent_completions 2>/dev/null)
+    if (( CURRENT == 2 )); then
+      local -a _amux_comps
+      _amux_comps=("${(@f)$(agentmux_list_agent_completions 2>/dev/null)}")
+      compadd -- "${_amux_comps[@]}"
+    fi
   }
   compdef _amux_zsh_complete amux
 fi

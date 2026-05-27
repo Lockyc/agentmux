@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/agent_window_style.sh"
 
 SESSION=$(tmux display-message -p "#S")
 WIN=$(tmux display-message -p "#{window_id}")
+PANE=$(tmux display-message -p "#{pane_id}")
 AGENT=$(tmux show-options -v -t "$SESSION" "@agent-mode" 2>/dev/null)
 [ -z "$AGENT" ] && AGENT=$(agentmux_first_agent)
 
@@ -17,4 +18,4 @@ idx=$(agentmux_find_by_name "$AGENT")
 CMD=$(agentmux_build_cmd "$idx")
 
 agentmux_set_window_style "$AGENT" "$WIN"
-tmux send-keys "$CMD" Enter
+tmux send-keys -t "$PANE" "$CMD" Enter

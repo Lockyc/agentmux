@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # launch_agent.sh — tmux after-new-window hook.
 # Auto-launches the configured agent in new windows of @autoagent=1 sessions.
-# Window 0 is handled by tmc directly (after-new-window doesn't fire for new-session).
+# Window 0 is handled by amux directly (after-new-window doesn't fire for new-session).
 # Args: <window_id> <pane_id> (format strings expanded by tmux before shell runs)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
