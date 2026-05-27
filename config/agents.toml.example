@@ -32,8 +32,6 @@ name = "ollama"
 cmd = "ollama launch claude --model kimi-k2.6:cloud"
 colour_inactive = "fg=black,bg=colour208"
 colour_active = "fg=black,bg=colour214,bold"
-keep_alive = true
-reattach = true
 
 [[agents]]
 name = "opencode"
