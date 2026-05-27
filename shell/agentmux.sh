@@ -93,10 +93,6 @@ amux() {
   _amux_attach "$name"
 }
 
-# Convenience shorthands — equivalent to amux -w / amux -p.
-amuxw() { amux -w "$@"; }
-amuxp() { amux -p "$@"; }
-
 # tm [session_name] — plain tmux session, no agent auto-launch
 tm() {
   local name="${1:-$(_amux_default_session_name)}"

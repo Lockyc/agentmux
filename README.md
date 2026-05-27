@@ -27,8 +27,6 @@ Edit `~/.agentmux/agents.toml` to define your agents, then add to your shell con
 | `amux -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
 | `amux <name>` | New/attach session, agent by name |
 | `amux <name> <session>` | New/attach named session with specified agent |
-| `amuxw [session]` | Shorthand for `amux -w` |
-| `amuxp [session]` | Shorthand for `amux -p` |
 | `tm [name]` | Plain tmux session, no agent |
 | `prefix-m` | Cycle `@agent-mode` through defined agents |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
