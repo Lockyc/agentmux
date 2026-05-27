@@ -137,7 +137,7 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
       echo "FAIL: $desc — expected '$expected' got '$actual'"; fail=$((fail+1))
     fi
   }
-  _assert "agent_count"         "3"        "$(agentmux_agent_count)"
+  _assert "agent_count"         "4"        "$(agentmux_agent_count)"
   _assert "first_agent"         "work"     "$(agentmux_first_agent)"
   _assert "field name[0]"       "work"     "$(agentmux_agent_field 0 name)"
   _assert "field flag[1]"       "p"        "$(agentmux_agent_field 1 flag)"
@@ -146,16 +146,20 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "find_by_name work"   "0"        "$(agentmux_find_by_name work)"
   _assert "find_by_name miss"   "-1"       "$(agentmux_find_by_name doesnotexist)"
   _assert "find_by_flag w"      "0"        "$(agentmux_find_by_flag w)"
+  _assert "find_by_flag o"      "3"        "$(agentmux_find_by_flag o)"
   _assert "find_by_flag miss"   "-1"       "$(agentmux_find_by_flag z)"
   _assert "next_agent work"     "personal" "$(agentmux_next_agent work)"
-  _assert "next_agent wraps"    "work"     "$(agentmux_next_agent ollama)"
+  _assert "next_agent ollama"   "opencode" "$(agentmux_next_agent ollama)"
+  _assert "next_agent wraps"    "work"     "$(agentmux_next_agent opencode)"
   _assert "next_agent unknown"  "work"     "$(agentmux_next_agent unknown)"
   completions=$(agentmux_list_agent_completions)
   _assert "completions work"    "work"     "$(printf '%s\n' "$completions" | grep '^work$')"
   _assert "completions -w"      "-w"       "$(printf '%s\n' "$completions" | grep '^-w$')"
   _assert "completions ollama"  "ollama"   "$(printf '%s\n' "$completions" | grep '^ollama$')"
+  _assert "completions opencode" "opencode" "$(printf '%s\n' "$completions" | grep '^opencode$')"
   _assert "build_cmd work"      "CLAUDE_CONFIG_DIR=~/.claude-work claude" "$(agentmux_build_cmd 0)"
-  _assert "build_cmd ollama"    'ollama run llama3.2; exec reattach-to-user-namespace -l $SHELL' "$(agentmux_build_cmd 2)"
+  _assert "build_cmd ollama"    'ollama launch claude --model kimi-k2.6:cloud; exec reattach-to-user-namespace -l $SHELL' "$(agentmux_build_cmd 2)"
+  _assert "build_cmd opencode"  "opencode" "$(agentmux_build_cmd 3)"
   _assert "llm_field url"       "http://localhost:1234/v1/chat/completions" "$(agentmux_llm_field url)"
   _assert "llm_field model"     "qwen2.5-14b-instruct"                     "$(agentmux_llm_field model)"
   _assert "llm_field timeout"   "20"                                        "$(agentmux_llm_field timeout)"
