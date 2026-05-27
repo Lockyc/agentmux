@@ -47,7 +47,10 @@ source ~/.zshrc                  # or restart your shell
 tmux source ~/.tmux.conf         # or start a new tmux server
 ```
 
-That's it — run `amux` to launch your first session.
+**6. Launch your first session:**
+```bash
+amux
+```
 
 ## Usage
 
