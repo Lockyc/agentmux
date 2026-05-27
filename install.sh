@@ -11,15 +11,23 @@ echo "Installing agentmux to $INSTALL_DIR ..."
 
 mkdir -p "$INSTALL_DIR/scripts" "$INSTALL_DIR/shell" "$INSTALL_DIR/tmux"
 
-# Copy scripts
-cp "$REPO_DIR"/scripts/*.sh "$INSTALL_DIR/scripts/"
+# Copy scripts (exclude claude_*.sh and tmux-status.sh — those live in ~/.claude/hooks/)
+for f in "$REPO_DIR"/scripts/*.sh; do
+  case "$(basename "$f")" in
+    claude_*.sh|tmux-status.sh) continue ;;
+  esac
+  dest="$INSTALL_DIR/scripts/$(basename "$f")"
+  [ "$f" -ef "$dest" ] || cp "$f" "$dest"
+done
 chmod +x "$INSTALL_DIR/scripts/"*.sh
 
 # Copy shell functions
-cp "$REPO_DIR/shell/agentmux.sh" "$INSTALL_DIR/shell/agentmux.sh"
+src="$REPO_DIR/shell/agentmux.sh"; dest="$INSTALL_DIR/shell/agentmux.sh"
+[ "$src" -ef "$dest" ] || cp "$src" "$dest"
 
 # Copy tmux snippet
-cp "$REPO_DIR/tmux/agentmux.conf" "$INSTALL_DIR/tmux/agentmux.conf"
+src="$REPO_DIR/tmux/agentmux.conf"; dest="$INSTALL_DIR/tmux/agentmux.conf"
+[ "$src" -ef "$dest" ] || cp "$src" "$dest"
 
 # Create default config if none exists
 if [ ! -f "$INSTALL_DIR/agents.toml" ]; then

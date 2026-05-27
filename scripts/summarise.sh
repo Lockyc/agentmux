@@ -1,15 +1,15 @@
 #!/bin/sh
-# claude_summarise.sh <maxwords> [mode]
-# stdin: free text (conversation context). stdout: a <=<maxwords>-word
+# summarise.sh <maxwords> [mode]
+# stdin: free text (agent context/digest). stdout: a <=<maxwords>-word
 # lowercase ASCII summary, or NOTHING on any failure. Always exits 0 —
 # callers are cosmetic tmux/hook code and must never see an error or block.
 # mode: "label" (default) = a terse ticket-style noun phrase ([a-z0-9 ]
 #       only, for the session subject); "stand" = a short lowercase
-#       done/now/next line describing $CLAUDE_SUBJECT (for the 2-row status
-#       block).
+#       done/now/next line (output written to /tmp/agentmux-status-<pane>.txt
+#       by the caller; displayed by summary_rows.sh).
 # Backend: local LM Studio OpenAI endpoint, a small NON-reasoning instruct
 # model (no key, no cost). Test overrides: LMSTUDIO_URL, LMSTUDIO_MODEL,
-# LMSTUDIO_TIMEOUT, CLAUDE_SUMMARISE_SELFTEST=1 (run pure-cleaner asserts).
+# LMSTUDIO_TIMEOUT, SUMMARISE_SELFTEST=1 (run pure-cleaner asserts).
 
 maxwords="${1:-4}"
 mode="${2:-label}"
@@ -43,7 +43,7 @@ _clean_para() {
     | awk -v n="${maxwords:-30}" '{for(i=1;i<=NF&&i<=n;i++) printf (i>1?" ":"") $i}'
 }
 
-if [ "${CLAUDE_SUMMARISE_SELFTEST:-}" = "1" ]; then
+if [ "${SUMMARISE_SELFTEST:-}" = "1" ]; then
   fail=0
   got=$( ( maxwords=3; printf '  "Refactor The Auth-Module!!"  \n' | _clean ) )
   [ "$got" = "refactor the auth" ] || { echo "selftest1 FAIL got=[$got]" >&2; fail=1; }

@@ -1,19 +1,18 @@
 #!/bin/sh
-# claude_long.sh <pane-id> <row> [width]
-# Renders the pane's /tmp/claude-long-<pane>.txt across THREE status rows,
-# one done/now/next field per row (the `stand` summariser emits
-# "<subject>. done: …; now: …; next: …"):
+# summary_rows.sh <pane-id> <row> [width]
+# Renders the pane's /tmp/agentmux-status-<pane>.txt across THREE status rows.
+# Agents write "done/now/next" text to that file; this script displays it.
+# Format produced by summarise.sh stand mode: "<subject>. done: …; now: …; next: …"
 #   row 1 = "<subject>. done: …"  (everything before " now:")
 #   row 2 = "now: …"              (between " now:" and " next:")
 #   row 3 = "next: …"             (from " next:" to end)
 # Each row is trimmed and clipped to <width> with a trailing "…" if it
-# overflows (a long "done" clips on row 1 by design). Missing fields print a
-# blank row. If the text has no " now:"/" next:" marker (a non-conforming
-# summary, e.g. just a subject) it lands whole on row 1, rows 2/3 blank.
+# overflows. Missing fields print a blank row. If text has no " now:"/" next:"
+# marker it lands whole on row 1, rows 2/3 blank.
 # tmux re-parses #() output for format directives so '#' is escaped to '##'.
 # Always exits 0. Content is the lowercase ASCII set _clean_para emits, so
 # byte-wise substr == column-wise.
-# Test: CLAUDE_LONG_SELFTEST=1.
+# Test: SUMMARY_ROWS_SELFTEST=1.
 
 # _render <content> <row> <width> -> the row's field, trimmed/clipped/escaped.
 _render() {
@@ -37,7 +36,7 @@ _render() {
     }'
 }
 
-if [ "${CLAUDE_LONG_SELFTEST:-}" = "1" ]; then
+if [ "${SUMMARY_ROWS_SELFTEST:-}" = "1" ]; then
   fail=0
   s="billing soft delete migration. done: edited models.py, wrote backfill.py; now: add proration tests; next: fix and rerun"
   got=$(_render "$s" 1 200)
@@ -80,7 +79,7 @@ width=${3:-120}
 case "$row" in 1|2|3) ;; *) exit 0 ;; esac
 case "$width" in ''|*[!0-9]*) width=120 ;; esac
 [ "$width" -lt 20 ] && width=120
-f="/tmp/claude-long-${pane}.txt"
+f="/tmp/agentmux-status-${pane}.txt"
 [ -s "$f" ] || exit 0
 content=$(tr '\n' ' ' < "$f")
 _render "$content" "$row" "$width"
