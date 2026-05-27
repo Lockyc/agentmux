@@ -117,3 +117,11 @@ export LMSTUDIO_TIMEOUT=20   # seconds
 ```
 
 **Non-Claude agents:** any agent can participate by writing to `/tmp/agentmux-status-<pane_key>.txt` directly (where `pane_key=$(echo $TMUX_PANE | tr -d '%')`). The format is a single line: `<subject>. done: <text>; now: <text>; next: <text>` — any of the `done`/`now`/`next` labels may be omitted.
+
+## Session colours
+
+The status bar and the summary rows are automatically coloured on every session attach. The colour is **deterministic from the session name**: `cksum(name) % palette_size` indexes a curated palette of saturated mid/dark backgrounds, so the same project directory always maps to the same colour on any machine. The summary rows (status-format[1..3]) get a distinct shade of the same hue — darker when the status bar uses a light foreground, lighter when it uses a dark one — so the two bars are visually related but clearly separate.
+
+Session names default to `basename $PWD` (dots replaced with underscores), so opening agentmux from the same directory reliably produces the same colour. You can also pass an explicit session name with `amux <agent> <name>` to pin a colour regardless of working directory.
+
+`update_colors.sh` is wired to the `client-attached`, `session-created`, and `client-session-changed` tmux hooks; no manual step is needed.
