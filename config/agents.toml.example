@@ -1,7 +1,8 @@
 # agentmux agent configuration
 # Copy this file to ~/.agentmux/agents.toml and edit to suit.
 # Agents are launched in the order defined. tmc with no argument defaults to the first agent.
-# flag: optional single-letter shorthand for tmc -<flag>
+# flag:  optional single-letter shorthand for tmc -<flag>
+# label: optional short display name for tmux tabs (defaults to name if omitted)
 
 [[agents]]
 name = "work"
@@ -12,6 +13,7 @@ colour_active = "fg=black,bg=colour37,bold"
 
 [[agents]]
 name = "personal"
+label = "pers"
 flag = "p"
 cmd = "CLAUDE_CONFIG_DIR=~/.claude-personal claude"
 colour_inactive = "fg=black,bg=colour82"
