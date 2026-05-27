@@ -163,6 +163,46 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "llm_field model"     "qwen2.5-14b-instruct"                     "$(agentmux_llm_field model)"
   _assert "llm_field timeout"   "20"                                        "$(agentmux_llm_field timeout)"
   _assert "llm_field absent"    ""                                          "$(agentmux_llm_field nonexistent)"
+
+  # Self-contained coverage for agentmux_build_cmd's keep_alive/reattach
+  # wrapping — exercises every branch without depending on the example
+  # config carrying those optional fields.
+  _tmpcfg=$(mktemp /tmp/agentmux-selftest-XXXXXX.toml) || exit 1
+  cat > "$_tmpcfg" <<'TOML'
+[[agents]]
+name = "wrapped"
+cmd = "myagent run"
+keep_alive = true
+reattach = true
+
+[[agents]]
+name = "keep"
+cmd = "myagent serve"
+keep_alive = true
+
+[[agents]]
+name = "warn"
+cmd = "myagent oops"
+reattach = true
+
+[[agents]]
+name = "bare"
+cmd = "myagent"
+TOML
+  AGENTMUX_CONFIG="$_tmpcfg"
+  _amux_json_cache=""
+  _assert "build_cmd keep_alive+reattach"  'myagent run; exec reattach-to-user-namespace -l $SHELL' "$(agentmux_build_cmd 0)"
+  _assert "build_cmd keep_alive only"      'myagent serve; exec $SHELL'                              "$(agentmux_build_cmd 1)"
+  _assert "build_cmd reattach-only stdout" 'myagent oops'                                            "$(agentmux_build_cmd 2 2>/dev/null)"
+  _err=$(agentmux_build_cmd 2 2>&1 >/dev/null)
+  case "$_err" in *"reattach=true requires keep_alive=true"*) _got="warns" ;; *) _got="silent" ;; esac
+  _assert "build_cmd reattach-only warns"  "warns"                                                   "$_got"
+  _assert "build_cmd bare"                 'myagent'                                                 "$(agentmux_build_cmd 3)"
+  # Tidy: mktemp file + the disk cache entry it produced. The mtime-keyed
+  # cache cleanup runs on next access anyway, but explicit is friendlier.
+  _tmp_mtime=$(stat -f %m "$_tmpcfg" 2>/dev/null || stat -c %Y "$_tmpcfg" 2>/dev/null || echo 0)
+  rm -f "$_tmpcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_tmp_mtime}.json"
+
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
 fi
