@@ -9,7 +9,7 @@ Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; session
 - tmux
 - `toml2json`: `brew install go-toml`
 - `jq`: `brew install jq`
-- LM Studio on `localhost:1234` (optional — for AI summary status lines)
+- A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
 - `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in agents.toml)
 - `osascript` (optional, macOS — only for `--notify` desktop alerts in the Claude Code hooks)
 
@@ -92,10 +92,10 @@ The `--notify` flag triggers a macOS notification via `osascript`. Remove it if 
 
 ## AI summary status lines
 
-The 3-row status bar shows a rolling `done / now / next` summary of the active session. `agentmux.conf` already wires `status-format[1-3]` to `summary_rows.sh`; you just need LM Studio and the Claude Code hooks above.
+The 3-row status bar shows a rolling `done / now / next` summary of the active session. `agentmux.conf` already wires `status-format[1-3]` to `summary_rows.sh`; you just need a local LLM endpoint and the Claude Code hooks above.
 
 **Requirements:**
-- LM Studio running at `localhost:1234` with a small non-reasoning instruct model loaded (e.g. `qwen2.5-14b-instruct`)
+- A local OpenAI-compatible LLM endpoint with a small non-reasoning instruct model loaded (e.g. LM Studio at `localhost:1234` with `qwen2.5-14b-instruct`, or Ollama at `localhost:11434`)
 - `agentmux.conf` sourced in `~/.tmux.conf`
 - Claude Code hooks wired (above) — the `working` hook triggers the summariser
 
@@ -108,7 +108,7 @@ The 3 extra status rows only appear for sessions started with `amux` (sets `@aut
 4. Result written to `/tmp/agentmux-status-<pane_key>.txt`
 5. `summary_rows.sh` (called by tmux `status-format[1-3]`) splits that into three display rows
 
-Override the endpoint or model with environment variables (defaults shown match LM Studio; Ollama would use `http://localhost:11434/v1/chat/completions`):
+Override the endpoint or model with environment variables:
 
 ```bash
 export AGENTMUX_LLM_URL=http://localhost:1234/v1/chat/completions
