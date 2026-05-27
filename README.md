@@ -58,10 +58,10 @@ That's it — run `amux` to launch your first session.
 | `amux <name>` | New/attach session, agent by name |
 | `amux <name> <session>` | New/attach named session with specified agent |
 | `prefix-c` | New tab, auto-launches current `@agent-mode` agent |
-| `prefix-m` | Cycle `@agent-mode` through defined agents |
+| `prefix-m` | Cycle `@agent-mode` through defined agents (agentmux sessions only) |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
 
-When `amux` creates a session it sets `@autoagent=1` on it and names it after `basename $PWD` (dots → underscores). That flag is what gates the coloured status bar, AI summary rows, and tab-state emojis — plain tmux sessions without it are left unstyled. Pass an explicit name with `amux <agent> <name>` to override the default.
+Sessions are named after `basename $PWD` (dots → underscores) by default — run `amux` in your project directory and it picks up the name automatically. Pass an explicit name with `amux <agent> <name>` to override. agentmux sessions get a coloured status bar, AI summary rows, and tab-state emojis; plain tmux sessions are left unstyled.
 
 ## Adding an agent
 
