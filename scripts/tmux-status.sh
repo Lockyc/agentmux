@@ -1,8 +1,11 @@
 #!/bin/sh
 # Usage: tmux-status.sh <state> [--notify <message>]
-# Shared status-hook core — called by each agent's hook glue (e.g. Claude Code
-# settings.json). Agent identity is set via AGENTMUX_AGENT_NAME (default: claude);
-# transcript adapters via AGENTMUX_CTX_BIN / AGENTMUX_DIGEST_BIN. Two jobs:
+# Shared status-hook core — called by each agent's hook glue (e.g. claude-status.sh).
+# Agent identity and transcript adapters must be set by the caller:
+#   AGENTMUX_AGENT_NAME  agent label used in tab and temp-file names (default: agent)
+#   AGENTMUX_CTX_BIN     path to transcript context extractor (no default)
+#   AGENTMUX_DIGEST_BIN  path to transcript digest builder (no default)
+# Two jobs:
 #  1. Tab label = "<emoji> <agent>" — a STABLE, state-only tab.
 #     State tokens: start working permission notify done
 #     Emojis:       🤖     ⚡       🔐         📣     ✅  (👀 derived internally)
@@ -21,11 +24,10 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Cosmetic hook running as a sibling of cavemem's hooks. Must be invisible to
-# Claude's control flow: SessionStart/UserPromptSubmit hook stdout is injected
-# into the prompt context, and a non-zero exit (esp. 2 on Stop) alters
-# Claude's behaviour. So: no stdout, exit 0 unconditionally, all LM work
-# detached (never blocks the turn). stderr left alone (debugging).
+# Cosmetic hook — must be invisible to the agent's control flow: hook stdout is
+# injected into the prompt context, and a non-zero exit alters agent behaviour.
+# So: no stdout, exit 0 unconditionally, all LM work detached (never blocks the
+# turn). stderr left alone (debugging).
 exec >/dev/null
 
 # Map semantic state token → display emoji. Unknown tokens are ignored.
@@ -103,11 +105,11 @@ fi
 tmux rename-window -t "$TMUX_PANE" "$render $label"
 
 # working → AI summary: a stable SUBJECT (derived once from early turns,
-# re-anchored when work shifts topic) + done/now/next from claude_digest.sh
+# re-anchored when work shifts topic) + done/now/next from AGENTMUX_DIGEST_BIN
 # piped into summarise.sh stand mode. Detached: never blocks the hook
 # (cosmetic-hook contract); the foreground already did exec >/dev/null and will
 # exit 0. Spawned nohup ... >/dev/null 2>&1 </dev/null & so it shares no fd
-# with Claude. Up to 3 LM calls (subject-derive OR shift-candidate, then stand);
+# with the agent. Up to 3 LM calls (subject-derive OR shift-candidate, then stand);
 # detached + per-pane lock so latency is invisible.
 SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
 CTX="${AGENTMUX_CTX_BIN:-}"
