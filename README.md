@@ -21,7 +21,33 @@ cd agentmux
 bash install.sh
 ```
 
-Edit `~/.agentmux/agents.toml` to define your agents, then add to your shell config and tmux config as directed by the installer output.
+Then complete the setup:
+
+**1. Install dependencies** (if not already present):
+```bash
+which toml2json || brew install go-toml
+which jq        || brew install jq
+```
+
+**2. Add to your shell config** (`~/.zshrc` or `~/.bashrc`):
+```bash
+source ~/.agentmux/shell/agentmux.sh
+```
+
+**3. Add to your `~/.tmux.conf`:**
+```
+source-file ~/.agentmux/tmux/agentmux.conf
+```
+
+**4. Edit `~/.agentmux/agents.toml`** to define your agents (created from the example by the installer).
+
+**5. Reload:**
+```bash
+source ~/.zshrc                  # or restart your shell
+tmux source ~/.tmux.conf         # or start a new tmux server
+```
+
+That's it — run `amux` to launch your first session.
 
 ## Usage
 
