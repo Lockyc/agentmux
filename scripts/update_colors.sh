@@ -75,11 +75,8 @@ else
 fi
 
 # The 3-row AI summary block only applies to @autoagent sessions
-# (the `amux` function sets @autoagent=1). Everything else (tm and
-# plain sessions) keeps a single normal status line — no summary rows,
-# no wasted terminal height. `status` is a per-session option so this
-# overrides the global default (1) just for tmc sessions. status 4 =
-# line 0 + the 3 summary rows (status-format[1..3]).
+# (`amux` sets @autoagent=1). Plain sessions keep a single status line.
+# `status` is a per-session option; status 4 = line 0 + 3 summary rows.
 if [ "$(tmux show-options -t "$session" -qv @autoagent 2>/dev/null)" = "1" ]; then
   tmux set -t "$session" status 4
 else
