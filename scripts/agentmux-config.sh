@@ -25,14 +25,18 @@ _amux_json() {
     printf '%s' "$_amux_json_cache"; return 0
   fi
 
-  local json
+  local json _tmp
   json=$(toml2json < "$AGENTMUX_CONFIG") || {
     echo "agentmux: failed to parse $AGENTMUX_CONFIG" >&2; return 1
   }
   _amux_json_cache="$json"
   mkdir -p "$cache_dir" 2>/dev/null
   find "$cache_dir" -maxdepth 1 -name 'config-*.json' -delete 2>/dev/null
-  printf '%s' "$json" > "$cache_file" 2>/dev/null || true
+  # Write via tmp + rename so concurrent readers see either no file (and
+  # fall through to live toml2json) or the complete new one, never a partial.
+  _tmp="$cache_file.tmp.$$"
+  printf '%s' "$json" > "$_tmp" 2>/dev/null && mv "$_tmp" "$cache_file" 2>/dev/null
+  rm -f "$_tmp" 2>/dev/null
   printf '%s' "$json"
 }
 

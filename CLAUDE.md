@@ -38,9 +38,12 @@ Bump `VERSION` (semver) when making a meaningful change. `amux --version` reads 
 Several scripts have built-in selftests — run before changing them:
 
 ```bash
-SUMMARISE_SELFTEST=1      scripts/summarise.sh
-SUMMARY_ROWS_SELFTEST=1   scripts/summary_rows.sh
-CLAUDE_DIGEST_SELFTEST=1  scripts/claude/digest.sh
+SUMMARISE_SELFTEST=1       scripts/summarise.sh
+SUMMARY_ROWS_SELFTEST=1    scripts/summary_rows.sh
+CLAUDE_CTX_SELFTEST=1      scripts/claude/ctx.sh
+CLAUDE_DIGEST_SELFTEST=1   scripts/claude/digest.sh
 AGENTMUX_CONFIG_SELFTEST=1 bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1  bash scripts/agent_window_style.sh
 ```
+
+Also run `shellcheck scripts/*.sh scripts/claude/*.sh shell/*.sh install.sh` if installed — lint-only, not a runtime dep, so doesn't conflict with the toml2json + jq rule.

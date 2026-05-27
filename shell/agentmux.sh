@@ -100,6 +100,11 @@ EOF
   fi
 
   session_arg="${1:-$(_amux_default_session_name)}"
+  # tmux uses . and : as target separators (`session.win.pane`, `session:win`);
+  # an unsanitised name (any path the default doesn't cover, e.g. user-supplied
+  # `mysite.com`) breaks `tmux has-session -t` and friends. _amux_default_session_name
+  # already strips . from the PWD basename; mirror that for explicit names.
+  session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
   [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
 
   local name="$session_arg"
