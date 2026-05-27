@@ -7,7 +7,7 @@ Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; session
 - tmux
 - `toml2json`: `brew install go-toml`
 - `jq`: `brew install jq`
-- Two Claude Code accounts (optional — configure your own agents in `agents.toml`)
+- LM Studio on `localhost:1234` (optional — for AI summary status lines)
 
 ## Install
 
@@ -51,9 +51,12 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 | Field | Default | Effect |
 |---|---|---|
 | `flag` | — | Single-letter shorthand for `tmc -<flag>` |
+| `label` | name | Short display name used in tmux tab labels (e.g. `label = "pers"` for a `name = "personal"` agent) |
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
 
 ## AI summary status lines
 
-The 3-row status bar summary (subject / done / now / next) activates automatically for Claude-based agents via Claude Code hooks. Requires LM Studio running locally on `localhost:1234` with a compatible model loaded. Non-Claude agents show blank status lines.
+The 3-row status bar (subject / done / now / next) is driven by a generic protocol: any agent writes its status to `/tmp/agentmux-status-<pane_key>.txt` (where `pane_key=$(echo $TMUX_PANE | tr -d '%')`), and `summary_rows.sh` renders it. `summarise.sh` (LM Studio backend, `localhost:1234`) generates the done/now/next text from any digest input.
+
+**Claude Code integration:** Claude Code hooks in `~/.claude/hooks/` handle the Claude-specific pipeline (`claude_ctx.sh` + `claude_digest.sh` → `summarise.sh` → status file). Non-Claude agents show blank rows until they implement the write protocol.
