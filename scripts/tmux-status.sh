@@ -1,10 +1,12 @@
 #!/bin/sh
 # Usage: tmux-status.sh <state> [--notify <message>]
 # Shared status-hook core — called by each agent's hook glue (e.g. claude/status.sh).
-# Agent identity and transcript adapters must be set by the caller:
-#   AGENTMUX_AGENT_NAME  agent label used in tab and temp-file names (default: agent)
-#   AGENTMUX_CTX_BIN     path to transcript context extractor (no default)
-#   AGENTMUX_DIGEST_BIN  path to transcript digest builder (no default)
+# The adapter sets these env vars before exec'ing this script:
+#   AGENTMUX_AGENT_NAME       agent label used in tab and temp-file names (default: agent)
+#   AGENTMUX_CTX_BIN          path to transcript context extractor (no default)
+#   AGENTMUX_DIGEST_BIN       path to transcript digest builder (no default)
+#   AGENTMUX_HOOK_PROMPT      (working state only) latest user prompt
+#   AGENTMUX_HOOK_TRANSCRIPT  (working state only) path to the agent's session transcript
 # Two jobs:
 #  1. Tab label = "<emoji> <agent>" — a STABLE, state-only tab.
 #     State tokens: start working permission notify done
@@ -70,17 +72,10 @@ if [ "$emoji" = "🤖" ]; then
   rmdir "/tmp/agentmux-sum-${pane_key}.lock.d" 2>/dev/null
 fi
 
-# Read the hook payload ONLY for working — that's the only state that needs the
-# prompt + transcript_path (the long-summary job). Reading stdin for the
-# other states would `cat`-block forever whenever the caller doesn't send
-# and close a payload (only working is piped one), hanging the hook.
-prompt=""
-transcript=""
-if [ "$emoji" = "⚡" ] && [ ! -t 0 ] && command -v jq >/dev/null 2>&1; then
-  payload=$(cat)
-  prompt=$(printf '%s' "$payload" | jq -r '.prompt // empty' 2>/dev/null)
-  transcript=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)
-fi
+# Hook payload is parsed by the adapter and handed in via env vars — agent
+# hook schemas differ, so payload parsing lives per-adapter (e.g. claude/status.sh).
+prompt="${AGENTMUX_HOOK_PROMPT:-}"
+transcript="${AGENTMUX_HOOK_TRANSCRIPT:-}"
 
 # Precedence: notify fires AFTER a turn ends if you don't respond promptly, and
 # would otherwise overwrite the done/seen/permission tracking. A done or blocked
@@ -115,11 +110,15 @@ SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
 CTX="${AGENTMUX_CTX_BIN:-}"
 DIG="${AGENTMUX_DIGEST_BIN:-}"
 if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] && [ -x "$DIG" ]; then
+  # Resolve the configured LLM URL (used for the diag-ping fallback inside the
+  # detached subshell). env > [llm] in agents.toml > default.
+  . "$SCRIPT_DIR/llm-config.sh"
+  _amux_load_llm
   pfile=$(mktemp /tmp/agentmux-raw-XXXXXX 2>/dev/null) || pfile=""
   if [ -n "$pfile" ]; then
     printf '%s' "$prompt" > "$pfile"
     nohup sh -c '
-      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9
+      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}
       cur=$(cat "$pf" 2>/dev/null); rm -f "$pf"
       recent=$("$ctx" "$tp" 6 400 tail 2>/dev/null)
       if [ -n "$recent" ] && [ -n "$cur" ]; then blob="$recent / $cur"
@@ -181,8 +180,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
         rm -f "$df" 2>/dev/null
       else
         if command -v curl >/dev/null 2>&1; then
-          _llm_url="${AGENTMUX_LLM_URL:-http://localhost:1234/v1/chat/completions}"
-          if curl -s --max-time 3 "$_llm_url" >/dev/null 2>&1; then
+          if curl -s --max-time 3 "$llm_url" >/dev/null 2>&1; then
             printf "context: building..." > "$df"
           else
             printf "llm: unreachable" > "$df"
@@ -190,7 +188,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
         fi
       fi
       rmdir "$lock" 2>/dev/null
-    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" \
+    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" \
       >/dev/null 2>&1 </dev/null &
   fi
 elif [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ]; then

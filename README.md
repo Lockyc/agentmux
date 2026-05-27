@@ -60,6 +60,38 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
 
+## Adding an agent integration
+
+`amux` and friends launch any CLI from `agents.toml`. The richer integration — tab-state emojis and the AI summary status lines — runs through a per-agent **adapter** that lives at `scripts/<agent>/status.sh`. The shipped Claude Code adapter (`scripts/claude/`) is the reference implementation.
+
+An adapter is a thin shim that:
+
+1. Exports three env vars and execs the shared core (`scripts/tmux-status.sh`):
+
+   | Env var | Purpose |
+   |---|---|
+   | `AGENTMUX_AGENT_NAME` | Label used in tab and temp-file names (e.g. `claude`, `gemini`) |
+   | `AGENTMUX_CTX_BIN` | Path to a transcript context extractor (see below) |
+   | `AGENTMUX_DIGEST_BIN` | Path to a transcript digest builder (see below) |
+
+2. Parses whatever hook payload its agent sends and re-exports:
+
+   | Env var | Purpose |
+   |---|---|
+   | `AGENTMUX_HOOK_PROMPT` | Latest user prompt (working state only) |
+   | `AGENTMUX_HOOK_TRANSCRIPT` | Filesystem path to the agent's session transcript (working state only) |
+
+The shared core is hook-schema-agnostic — it consumes only those env vars, never stdin. Hook-payload parsing belongs in the adapter because every agent has a different schema.
+
+**Contracts for `ctx.sh` and `digest.sh`** (both read the transcript path as `$1`):
+
+- `ctx.sh <transcript> <max_msgs> [percap] [head|tail]` — prints prose-only turns joined by ` / `; used to derive the stable subject and to anchor recent activity. Filters out tool noise and pasted dumps.
+- `digest.sh <transcript> [start_line] [char_budget]` — prints a chronological digest (prose + mutating tool one-liners) for the done/now/next summariser. Drops oldest prose first when over budget; keeps tool lines.
+
+Both must print nothing and exit 0 on any error — the shared core treats them as cosmetic.
+
+To add e.g. a Gemini CLI adapter: create `scripts/gemini/{status,ctx,digest}.sh` following the Claude versions, wire your agent's hook system to call `~/.agentmux/scripts/gemini/status.sh <state>` with `state` ∈ `start|working|notify|permission|done`, and `install.sh` will pick the directory up automatically.
+
 ## AI tab states (Claude Code)
 
 `claude/status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:

@@ -8,9 +8,9 @@
 #       done/now/next line (output written to /tmp/agentmux-status-<pane>.txt
 #       by the caller; displayed by summary_rows.sh).
 # Backend: any OpenAI-compatible local endpoint (LM Studio, Ollama, etc.), a
-# small NON-reasoning instruct model (no key, no cost). Settings read from
-# [llm] in agents.toml (disk-cached); AGENTMUX_LLM_URL / AGENTMUX_LLM_MODEL /
-# AGENTMUX_LLM_TIMEOUT env vars override. SUMMARISE_SELFTEST=1 runs asserts.
+# small NON-reasoning instruct model (no key, no cost). Settings resolved by
+# llm-config.sh (env vars > [llm] in agents.toml > defaults).
+# SUMMARISE_SELFTEST=1 runs asserts.
 
 maxwords="${1:-4}"
 mode="${2:-label}"
@@ -71,31 +71,11 @@ prompt=$(cat)
 command -v curl >/dev/null 2>&1 || exit 0
 command -v jq   >/dev/null 2>&1 || exit 0
 
-# Load LLM settings from TOML config (disk-cached JSON); env vars take precedence.
-_amux_llm_json=""
-_amux_cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
-if [ -f "$_amux_cfg" ]; then
-  _amux_mtime=$(stat -f %m "$_amux_cfg" 2>/dev/null \
-             || stat -c %Y "$_amux_cfg" 2>/dev/null \
-             || echo 0)
-  _amux_cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_amux_mtime}.json"
-  if [ -f "$_amux_cache" ]; then
-    _amux_llm_json=$(cat "$_amux_cache")
-  elif command -v toml2json >/dev/null 2>&1; then
-    _amux_llm_json=$(toml2json < "$_amux_cfg" 2>/dev/null || true)
-  fi
-fi
-if [ -n "$_amux_llm_json" ]; then
-  _llm_out=$(printf '%s' "$_amux_llm_json" \
-    | jq -r '.llm.url // empty, .llm.model // empty, .llm.timeout // empty' 2>/dev/null)
-  _llm_url=$(printf '%s\n' "$_llm_out"   | sed -n '1p')
-  _llm_model=$(printf '%s\n' "$_llm_out" | sed -n '2p')
-  _llm_timeout=$(printf '%s\n' "$_llm_out" | sed -n '3p')
-fi
-url="${AGENTMUX_LLM_URL:-${_llm_url:-http://localhost:1234/v1/chat/completions}}"
-model="${AGENTMUX_LLM_MODEL:-${_llm_model:-qwen2.5-14b-instruct}}"
-timeout="${AGENTMUX_LLM_TIMEOUT:-${_llm_timeout:-20}}"
-case "$timeout" in ''|*[!0-9.]*) timeout=20 ;; esac
+# Load LLM settings (env > [llm] in agents.toml > defaults) via shared helper.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/llm-config.sh"
+_amux_load_llm
+url="$_llm_url"; model="$_llm_model"; timeout="$_llm_timeout"
 
 if [ "$mode" = "stand" ]; then
   subj="${AGENTMUX_SUBJECT:-}"
