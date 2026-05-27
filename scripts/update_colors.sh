@@ -77,7 +77,7 @@ if [ "$(tmux show-options -t "$session" -qv @autoagent 2>/dev/null)" = "1" ]; th
 
   tmux set -t "$session" status 4
 else
-  tmux set -u -t "$session" status-style 2>/dev/null
+  tmux set -t "$session" status-style "bg=default,fg=default"
   tmux set -u -t "$session" @l2bg 2>/dev/null
   tmux set -u -t "$session" @l2fg 2>/dev/null
   tmux set -t "$session" status on
