@@ -35,17 +35,7 @@ if [ "$idx" = "-1" ]; then
   idx=0
 fi
 
-CMD=$(agentmux_agent_field "$idx" cmd)
-KEEP_ALIVE=$(agentmux_agent_field "$idx" keep_alive)
-REATTACH=$(agentmux_agent_field "$idx" reattach)
-
-if [ "$KEEP_ALIVE" = "true" ]; then
-  if [ "$REATTACH" = "true" ]; then
-    CMD="$CMD; exec reattach-to-user-namespace -l \$SHELL"
-  else
-    CMD="$CMD; exec \$SHELL"
-  fi
-fi
+CMD=$(agentmux_build_cmd "$idx")
 
 tmux rename-window "${tw[@]}" "$AGENT"
 agentmux_set_window_style "$AGENT" "$HOOK_WIN"

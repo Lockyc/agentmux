@@ -7,12 +7,31 @@ AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
 
 _amux_json_cache=""
 _amux_json() {
-  if [ -z "$_amux_json_cache" ]; then
-    _amux_json_cache=$(toml2json < "$AGENTMUX_CONFIG") || {
-      echo "agentmux: failed to parse $AGENTMUX_CONFIG" >&2; return 1
-    }
+  if [ -n "$_amux_json_cache" ]; then
+    printf '%s' "$_amux_json_cache"; return 0
   fi
-  printf '%s' "$_amux_json_cache"
+
+  # Disk cache keyed on config mtime — avoids toml2json on every hook invocation.
+  local mtime
+  mtime=$(stat -f %m "$AGENTMUX_CONFIG" 2>/dev/null \
+       || stat -c %Y "$AGENTMUX_CONFIG" 2>/dev/null \
+       || echo "0")
+  local cache_file="/tmp/agentmux-config-${mtime}.json"
+
+  if [ -f "$cache_file" ]; then
+    _amux_json_cache=$(cat "$cache_file")
+    printf '%s' "$_amux_json_cache"; return 0
+  fi
+
+  local json
+  json=$(toml2json < "$AGENTMUX_CONFIG") || {
+    echo "agentmux: failed to parse $AGENTMUX_CONFIG" >&2; return 1
+  }
+  _amux_json_cache="$json"
+  # Evict stale cache files before writing the new one.
+  find /tmp -maxdepth 1 -name 'agentmux-config-*.json' -delete 2>/dev/null
+  printf '%s' "$json" > "$cache_file" 2>/dev/null || true
+  printf '%s' "$json"
 }
 
 # Number of agents defined in config.
@@ -26,7 +45,7 @@ agentmux_agent_field() {
   _amux_json | jq -r ".agents[$1].${2} // empty"
 }
 
-# Name of the first agent (default for bare tmc).
+# Name of the first agent (default for bare amux).
 agentmux_first_agent() {
   agentmux_agent_field 0 name
 }
@@ -64,8 +83,48 @@ agentmux_next_agent() {
   agentmux_agent_field "$next_idx" name
 }
 
+# Newline-separated list of all agent names.
+agentmux_list_agents() {
+  _amux_json | jq -r '.agents[].name'
+}
+
+# Newline-separated list of agent names and -<flag> shortcuts for shell completions.
+agentmux_list_agent_completions() {
+  _amux_json | jq -r '.agents[] | .name, (if .flag then "-" + .flag else empty end)'
+}
+
+# Build the launch command for agent at index, applying keep_alive/reattach wrappers.
+# Warns to stderr if reattach=true without keep_alive=true.
+agentmux_build_cmd() {
+  local idx="$1"
+  local cmd keep_alive reattach
+  cmd=$(agentmux_agent_field "$idx" cmd)
+  keep_alive=$(agentmux_agent_field "$idx" keep_alive)
+  reattach=$(agentmux_agent_field "$idx" reattach)
+
+  if [ "$reattach" = "true" ] && [ "$keep_alive" != "true" ]; then
+    local name
+    name=$(agentmux_agent_field "$idx" name)
+    echo "agentmux: agent '$name': reattach=true requires keep_alive=true (reattach ignored)" >&2
+  fi
+
+  if [ "$keep_alive" = "true" ]; then
+    if [ "$reattach" = "true" ]; then
+      cmd="$cmd; exec reattach-to-user-namespace -l \$SHELL"
+    else
+      cmd="$cmd; exec \$SHELL"
+    fi
+  fi
+
+  printf '%s' "$cmd"
+}
+
 # Self-test: AGENTMUX_CONFIG_SELFTEST=1 bash scripts/agentmux-config.sh
 if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
+  # Run against the example config so assertions are config-independent.
+  _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"
+  _amux_json_cache=""
   pass=0; fail=0
   _assert() {
     local desc="$1" expected="$2" actual="$3"
@@ -88,6 +147,12 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "next_agent work"     "personal" "$(agentmux_next_agent work)"
   _assert "next_agent wraps"    "work"     "$(agentmux_next_agent ollama)"
   _assert "next_agent unknown"  "work"     "$(agentmux_next_agent unknown)"
+  completions=$(agentmux_list_agent_completions)
+  _assert "completions work"    "work"     "$(printf '%s\n' "$completions" | grep '^work$')"
+  _assert "completions -w"      "-w"       "$(printf '%s\n' "$completions" | grep '^-w$')"
+  _assert "completions ollama"  "ollama"   "$(printf '%s\n' "$completions" | grep '^ollama$')"
+  _assert "build_cmd work"      "CLAUDE_CONFIG_DIR=~/.claude-work claude" "$(agentmux_build_cmd 0)"
+  _assert "build_cmd ollama"    'ollama run llama3.2; exec reattach-to-user-namespace -l $SHELL' "$(agentmux_build_cmd 2)"
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
 fi

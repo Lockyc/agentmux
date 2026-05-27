@@ -29,29 +29,19 @@ _amux_attach() {
 
 _amux_launch_window0() {
   local session="$1" agent="$2"
-  local idx cmd keep_alive reattach
+  local idx cmd
 
   idx=$(agentmux_find_by_name "$agent")
   [ "$idx" = "-1" ] && return 1
 
-  cmd=$(agentmux_agent_field "$idx" cmd)
-  keep_alive=$(agentmux_agent_field "$idx" keep_alive)
-  reattach=$(agentmux_agent_field "$idx" reattach)
-
-  if [ "$keep_alive" = "true" ]; then
-    if [ "$reattach" = "true" ]; then
-      cmd="$cmd; exec reattach-to-user-namespace -l \$SHELL"
-    else
-      cmd="$cmd; exec \$SHELL"
-    fi
-  fi
+  cmd=$(agentmux_build_cmd "$idx")
 
   tmux rename-window -t "$session:0" "$agent"
   agentmux_set_window_style "$agent" "$session:0"
   tmux send-keys -t "$session:0" "$cmd" Enter
 }
 
-# tmc [(-<flag> | <agent_name>)] [session_name]
+# amux [(-<flag> | <agent_name>)] [session_name]
 #
 # Creates or attaches a tmux session managed by agentmux.
 # Agent selection (in precedence order):
@@ -59,7 +49,7 @@ _amux_launch_window0() {
 #   <agent_name>   exact agent name (e.g. "work")
 #   (none)         first agent in config
 # Remaining arg (if any) is the session name; defaults to current dir basename.
-tmc() {
+amux() {
   local agent_name="" session_arg=""
 
   if [ $# -gt 0 ]; then
@@ -103,6 +93,10 @@ tmc() {
   _amux_attach "$name"
 }
 
+# Convenience shorthands — equivalent to amux -w / amux -p.
+amuxw() { amux -w "$@"; }
+amuxp() { amux -p "$@"; }
+
 # tm [session_name] — plain tmux session, no agent auto-launch
 tm() {
   local name="${1:-$(_amux_default_session_name)}"
@@ -110,7 +104,7 @@ tm() {
   _amux_attach "$name"
 }
 
-# Personal wrappers — kept for direct invocation outside tmc sessions.
+# Personal wrappers — kept for direct invocation outside amux sessions.
 # These also self-correct the window tab colour when called inside tmux.
 claude-work() {
   agentmux_set_window_style work
@@ -121,3 +115,11 @@ claude-personal() {
   agentmux_set_window_style personal
   CLAUDE_CONFIG_DIR="$HOME/.claude-personal" claude "$@"
 }
+
+# Zsh completion: amux <tab> completes agent names and -<flag> shortcuts.
+if [ -n "${ZSH_VERSION:-}" ]; then
+  _amux_zsh_complete() {
+    (( CURRENT == 2 )) && compadd -- $(agentmux_list_agent_completions 2>/dev/null)
+  }
+  compdef _amux_zsh_complete amux
+fi

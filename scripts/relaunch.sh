@@ -14,17 +14,7 @@ AGENT=$(tmux show-options -v -t "$SESSION" "@agent-mode" 2>/dev/null)
 idx=$(agentmux_find_by_name "$AGENT")
 [ "$idx" = "-1" ] && idx=0
 
-CMD=$(agentmux_agent_field "$idx" cmd)
-KEEP_ALIVE=$(agentmux_agent_field "$idx" keep_alive)
-REATTACH=$(agentmux_agent_field "$idx" reattach)
-
-if [ "$KEEP_ALIVE" = "true" ]; then
-  if [ "$REATTACH" = "true" ]; then
-    CMD="$CMD; exec reattach-to-user-namespace -l \$SHELL"
-  else
-    CMD="$CMD; exec \$SHELL"
-  fi
-fi
+CMD=$(agentmux_build_cmd "$idx")
 
 agentmux_set_window_style "$AGENT" "$WIN"
 tmux send-keys "$CMD" Enter

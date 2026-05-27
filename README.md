@@ -23,10 +23,12 @@ Edit `~/.agentmux/agents.toml` to define your agents, then add to your shell con
 
 | Command | Effect |
 |---|---|
-| `tmc` | New/attach session, default agent (first in list) |
-| `tmc -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
-| `tmc <name>` | New/attach session, agent by name |
-| `tmc <name> <session>` | New/attach named session with specified agent |
+| `amux` | New/attach session, default agent (first in list) |
+| `amux -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
+| `amux <name>` | New/attach session, agent by name |
+| `amux <name> <session>` | New/attach named session with specified agent |
+| `amuxw [session]` | Shorthand for `amux -w` |
+| `amuxp [session]` | Shorthand for `amux -p` |
 | `tm [name]` | Plain tmux session, no agent |
 | `prefix-m` | Cycle `@agent-mode` through defined agents |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
@@ -50,7 +52,7 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 
 | Field | Default | Effect |
 |---|---|---|
-| `flag` | — | Single-letter shorthand for `tmc -<flag>` |
+| `flag` | — | Single-letter shorthand for `amux -<flag>` |
 | `label` | name | Short display name used in tmux tab labels (e.g. `label = "pers"` for a `name = "personal"` agent) |
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
