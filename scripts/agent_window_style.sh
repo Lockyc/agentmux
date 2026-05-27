@@ -22,6 +22,8 @@ agentmux_set_window_style() {
 
   [ -n "$inactive" ] && tmux set-window-option "${t[@]}" window-status-style         "$inactive"
   [ -n "$active"   ] && tmux set-window-option "${t[@]}" window-status-current-style "$active"
+  tmux set-window-option "${t[@]}" window-status-format         " #I: #W "
+  tmux set-window-option "${t[@]}" window-status-current-format "[#I: #W]"
   tmux set-window-option "${t[@]}" "@window-agent" "$name"
 }
 
