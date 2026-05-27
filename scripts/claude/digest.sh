@@ -1,5 +1,5 @@
 #!/bin/sh
-# claude_digest.sh <transcript_path> [start_line] [char_budget]
+# digest.sh <transcript_path> [start_line] [char_budget]
 # Compact chronological digest of a Claude Code transcript JSONL, from
 # start_line (1-based, default 1) to EOF, for the done/now/next status line.
 # Emits oldest->newest, joined by " / ":

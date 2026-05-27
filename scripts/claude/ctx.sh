@@ -1,5 +1,5 @@
 #!/bin/sh
-# claude_ctx.sh <transcript_path> <max_msgs> [percap] [head|tail]
+# ctx.sh <transcript_path> <max_msgs> [percap] [head|tail]
 # end=head → the EARLIEST <max_msgs> turns (for the session subject);
 # end=tail (default) → the most RECENT ones (for current activity).
 # Prints the text of the last <max_msgs> *user AND assistant* turns from a

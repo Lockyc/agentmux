@@ -4,6 +4,14 @@
 # flag:  optional single-letter shorthand for amux -<flag>
 # label: optional short display name for tmux tabs (defaults to name if omitted)
 
+[llm]
+# OpenAI-compatible endpoint used for AI session summaries (summarise.sh).
+# Works with LM Studio, Ollama, llama.cpp, etc. — any /v1/chat/completions server.
+# AGENTMUX_LLM_URL / AGENTMUX_LLM_MODEL / AGENTMUX_LLM_TIMEOUT env vars override these.
+url     = "http://localhost:1234/v1/chat/completions"
+model   = "qwen2.5-14b-instruct"
+timeout = 20
+
 [[agents]]
 name = "work"
 flag = "w"
