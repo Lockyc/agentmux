@@ -4,8 +4,10 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
 source "$SCRIPT_DIR/agentmux-config.sh"
+source "$SCRIPT_DIR/agent_window_style.sh"
 
 SESSION=$(tmux display-message -p "#S")
+WIN=$(tmux display-message -p "#{window_id}")
 AGENT=$(tmux show-options -v -t "$SESSION" "@agent-mode" 2>/dev/null)
 [ -z "$AGENT" ] && AGENT=$(agentmux_first_agent)
 
@@ -24,4 +26,5 @@ if [ "$KEEP_ALIVE" = "true" ]; then
   fi
 fi
 
+agentmux_set_window_style "$AGENT" "$WIN"
 tmux send-keys "$CMD" Enter

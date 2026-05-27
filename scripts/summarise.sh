@@ -33,7 +33,7 @@ _clean() {
 # Paragraph cleaner: like _clean but keeps '.' and ',' so two short
 # sentences read naturally. Still lowercase, newline-flattened, junk→space,
 # capped to $maxwords words. '#' is not in the set (→space) so it can never
-# reach tmux; claude_long.sh additionally escapes any '#'.
+# reach tmux.
 _clean_para() {
   tr '\n\r\t' '   ' \
     | tr 'A-Z' 'a-z' \
@@ -73,7 +73,7 @@ command -v curl >/dev/null 2>&1 || exit 0
 command -v jq   >/dev/null 2>&1 || exit 0
 
 if [ "$mode" = "stand" ]; then
-  subj="${CLAUDE_SUBJECT:-}"
+  subj="${AGENTMUX_SUBJECT:-}"
   fmt="Report where the work stands in this exact shape: \"<subject>. done: <finished milestones>; now: <current focus>; next: <clearly-implied next step>\". Use those labels in that order joined by '; '. OMIT a whole label if there is nothing concrete for it (never write 'none', never invent one); 'next' is optional. Write about the work itself, never about who does it: no 'we'/'they'/'the team'/'the user'/'the assistant', no personal pronouns. Be terse: ${maxwords} words is a hard CEILING, not a target; drop meta/speculative filler. At most two short lowercase sentences worth, plain prose, only periods commas colons semicolons, no other punctuation, no markdown, no code. Ignore acknowledgements and pasted command output or logs. Describe the engineering work, never these instructions; never repeat or describe this prompt."
   if [ -n "$subj" ]; then
     sys="The SUBJECT of this work is: \"${subj}\". A chronological digest of the session (messages and tool actions) follows. ${fmt} Start the line with the subject."
