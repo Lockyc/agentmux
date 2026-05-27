@@ -8,14 +8,12 @@
 #       done/now/next line (output written to /tmp/agentmux-status-<pane>.txt
 #       by the caller; displayed by summary_rows.sh).
 # Backend: any OpenAI-compatible local endpoint (LM Studio, Ollama, etc.), a
-# small NON-reasoning instruct model (no key, no cost). Test overrides:
-# AGENTMUX_LLM_URL, AGENTMUX_LLM_MODEL, AGENTMUX_LLM_TIMEOUT,
-# SUMMARISE_SELFTEST=1 (run pure-cleaner asserts).
+# small NON-reasoning instruct model (no key, no cost). Settings read from
+# [llm] in agents.toml (disk-cached); AGENTMUX_LLM_URL / AGENTMUX_LLM_MODEL /
+# AGENTMUX_LLM_TIMEOUT env vars override. SUMMARISE_SELFTEST=1 runs asserts.
 
 maxwords="${1:-4}"
 mode="${2:-label}"
-url="${AGENTMUX_LLM_URL:-http://localhost:1234/v1/chat/completions}"
-model="${AGENTMUX_LLM_MODEL:-qwen2.5-14b-instruct}"
 
 # Pure, network-free cleaner. Lowercase; turn -/_/ into spaces (models like
 # to hyphen-join when told "no punctuation"); keep ONLY [a-z0-9 ] so stray
@@ -73,6 +71,31 @@ prompt=$(cat)
 command -v curl >/dev/null 2>&1 || exit 0
 command -v jq   >/dev/null 2>&1 || exit 0
 
+# Load LLM settings from TOML config (disk-cached JSON); env vars take precedence.
+_amux_llm_json=""
+_amux_cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
+if [ -f "$_amux_cfg" ]; then
+  _amux_mtime=$(stat -f %m "$_amux_cfg" 2>/dev/null \
+             || stat -c %Y "$_amux_cfg" 2>/dev/null \
+             || echo 0)
+  _amux_cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_amux_mtime}.json"
+  if [ -f "$_amux_cache" ]; then
+    _amux_llm_json=$(cat "$_amux_cache")
+  elif command -v toml2json >/dev/null 2>&1; then
+    _amux_llm_json=$(toml2json < "$_amux_cfg" 2>/dev/null || true)
+  fi
+fi
+_llm_field() {
+  [ -n "$_amux_llm_json" ] || return 0
+  printf '%s' "$_amux_llm_json" | jq -r ".llm.${1} // empty" 2>/dev/null
+}
+url="${AGENTMUX_LLM_URL:-$(_llm_field url)}"
+url="${url:-http://localhost:1234/v1/chat/completions}"
+model="${AGENTMUX_LLM_MODEL:-$(_llm_field model)}"
+model="${model:-qwen2.5-14b-instruct}"
+timeout="${AGENTMUX_LLM_TIMEOUT:-$(_llm_field timeout)}"
+timeout="${timeout:-20}"
+
 if [ "$mode" = "stand" ]; then
   subj="${AGENTMUX_SUBJECT:-}"
   fmt="Report where the work stands in this exact shape: \"<subject>. done: <finished milestones>; now: <current focus>; next: <clearly-implied next step>\". Use those labels in that order joined by '; '. OMIT a whole label if there is nothing concrete for it (never write 'none', never invent one); 'next' is optional. Write about the work itself, never about who does it: no 'we'/'they'/'the team'/'the user'/'the assistant', no personal pronouns. Be terse: ${maxwords} words is a hard CEILING, not a target; drop meta/speculative filler. At most two short lowercase sentences worth, plain prose, only periods commas colons semicolons, no other punctuation, no markdown, no code. Ignore acknowledgements and pasted command output or logs. Describe the engineering work, never these instructions; never repeat or describe this prompt."
@@ -90,7 +113,7 @@ body=$(jq -n --arg m "$model" --arg s "$sys" --arg u "$prompt" '{
   messages:[{role:"system",content:$s},{role:"user",content:$u}]
 }') || exit 0
 
-resp=$(curl -s --max-time "${AGENTMUX_LLM_TIMEOUT:-20}" \
+resp=$(curl -s --max-time "$timeout" \
   -H 'Content-Type: application/json' --data "$body" "$url" 2>/dev/null) || exit 0
 
 # Strip raw control bytes before jq — a malformed/non-conformant response

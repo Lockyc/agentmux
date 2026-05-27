@@ -90,6 +90,12 @@ agentmux_list_agent_completions() {
   _amux_json | jq -r '.agents[] | .name, (if .flag then "-" + .flag else empty end)'
 }
 
+# Field value from [llm] table. Returns empty string if field absent.
+# Usage: agentmux_llm_field <field>
+agentmux_llm_field() {
+  _amux_json | jq -r ".llm.${1} // empty"
+}
+
 # Build the launch command for agent at index, applying keep_alive/reattach wrappers.
 # Warns to stderr if reattach=true without keep_alive=true.
 agentmux_build_cmd() {
@@ -150,6 +156,10 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "completions ollama"  "ollama"   "$(printf '%s\n' "$completions" | grep '^ollama$')"
   _assert "build_cmd work"      "CLAUDE_CONFIG_DIR=~/.claude-work claude" "$(agentmux_build_cmd 0)"
   _assert "build_cmd ollama"    'ollama run llama3.2; exec reattach-to-user-namespace -l $SHELL' "$(agentmux_build_cmd 2)"
+  _assert "llm_field url"       "http://localhost:1234/v1/chat/completions" "$(agentmux_llm_field url)"
+  _assert "llm_field model"     "qwen2.5-14b-instruct"                     "$(agentmux_llm_field model)"
+  _assert "llm_field timeout"   "20"                                        "$(agentmux_llm_field timeout)"
+  _assert "llm_field absent"    ""                                          "$(agentmux_llm_field nonexistent)"
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
 fi
