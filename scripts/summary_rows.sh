@@ -80,6 +80,12 @@ case "$row" in 1|2|3) ;; *) exit 0 ;; esac
 case "$width" in ''|*[!0-9]*) width=120 ;; esac
 [ "$width" -lt 20 ] && width=120
 f="/tmp/agentmux-status-${pane}.txt"
-[ -s "$f" ] || exit 0
-content=$(tr '\n' ' ' < "$f")
+df="/tmp/agentmux-diag-${pane}.txt"
+if [ -s "$f" ]; then
+  content=$(tr '\n' ' ' < "$f")
+elif [ -s "$df" ]; then
+  content=$(tr '\n' ' ' < "$df")
+else
+  exit 0
+fi
 _render "$content" "$row" "$width"
