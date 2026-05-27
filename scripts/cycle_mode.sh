@@ -5,6 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
 source "$SCRIPT_DIR/agentmux-config.sh"
+source "$SCRIPT_DIR/agent_window_style.sh"
 
 SESSION_ID="$1"
 [ -z "$SESSION_ID" ] && { echo "usage: cycle_mode.sh <session_id>" >&2; exit 1; }
@@ -15,4 +16,5 @@ CURRENT=$(tmux show-options -v -t "$SESSION_ID" "@agent-mode" 2>/dev/null)
 NEXT=$(agentmux_next_agent "$CURRENT")
 
 tmux set-option -t "$SESSION_ID" "@agent-mode" "$NEXT"
+agentmux_set_window_style "$NEXT"
 tmux refresh-client -S

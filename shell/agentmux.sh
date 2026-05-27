@@ -20,7 +20,7 @@ _amux_attach() {
   local name="$1"
   # Use switch-client if our TTY is already a tmux pane (check via list-panes,
   # not $TMUX which is inherited into subprocesses and gives false positives).
-  if tmux list-panes -a -F '#{pane_tty}' 2>/dev/null | grep -qF "$(tty 2>/dev/null)"; then
+  if tmux list-panes -a -F '#{pane_tty}' 2>/dev/null | grep -qxF "$(tty 2>/dev/null)"; then
     tmux switch-client -t "$name"
   else
     tmux attach-session -t "$name"

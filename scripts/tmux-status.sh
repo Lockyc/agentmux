@@ -206,7 +206,7 @@ if [ "$2" = "--notify" ]; then
 
   mkdir "$lockdir" 2>/dev/null || exit 0
 
-  osascript -e "display notification \"$3\" with title \"Claude Code\" subtitle \"$project\" sound name \"Submarine\"" 2>/dev/null
+  MSG="$3" PROJ="$project" osascript -e 'display notification (system attribute "MSG") with title "Claude Code" subtitle (system attribute "PROJ") sound name "Submarine"' 2>/dev/null
 fi
 
 exit 0

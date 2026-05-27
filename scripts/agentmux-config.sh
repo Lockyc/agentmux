@@ -85,11 +85,6 @@ agentmux_next_agent() {
   agentmux_agent_field "$next_idx" name
 }
 
-# Newline-separated list of all agent names.
-agentmux_list_agents() {
-  _amux_json | jq -r '.agents[].name'
-}
-
 # Newline-separated list of agent names and -<flag> shortcuts for shell completions.
 agentmux_list_agent_completions() {
   _amux_json | jq -r '.agents[] | .name, (if .flag then "-" + .flag else empty end)'
