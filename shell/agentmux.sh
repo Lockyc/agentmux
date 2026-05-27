@@ -54,6 +54,11 @@ amux() {
 
   if [ $# -gt 0 ]; then
     case "$1" in
+      --version)
+        local v; v=$(cat "$HOME/.agentmux/VERSION" 2>/dev/null | tr -d '[:space:]')
+        echo "agentmux ${v:-unknown}"
+        return 0
+        ;;
       -*)
         local flag="${1#-}"
         local fidx

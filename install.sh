@@ -7,7 +7,8 @@ set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.agentmux"
 
-echo "Installing agentmux to $INSTALL_DIR ..."
+VERSION="$(cat "$REPO_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+echo "Installing agentmux${VERSION:+ v$VERSION} to $INSTALL_DIR ..."
 
 mkdir -p "$INSTALL_DIR/scripts" "$INSTALL_DIR/shell" "$INSTALL_DIR/tmux"
 
@@ -25,6 +26,9 @@ src="$REPO_DIR/shell/agentmux.sh"; dest="$INSTALL_DIR/shell/agentmux.sh"
 # Copy tmux snippet
 src="$REPO_DIR/tmux/agentmux.conf"; dest="$INSTALL_DIR/tmux/agentmux.conf"
 [ "$src" -ef "$dest" ] || cp "$src" "$dest"
+
+# Copy VERSION
+[ -f "$REPO_DIR/VERSION" ] && cp "$REPO_DIR/VERSION" "$INSTALL_DIR/VERSION"
 
 # Create default config if none exists
 if [ ! -f "$INSTALL_DIR/agents.toml" ]; then
