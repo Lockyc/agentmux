@@ -7,14 +7,15 @@
 #       only, for the session subject); "stand" = a short lowercase
 #       done/now/next line (output written to /tmp/agentmux-status-<pane>.txt
 #       by the caller; displayed by summary_rows.sh).
-# Backend: local LM Studio OpenAI endpoint, a small NON-reasoning instruct
-# model (no key, no cost). Test overrides: LMSTUDIO_URL, LMSTUDIO_MODEL,
-# LMSTUDIO_TIMEOUT, SUMMARISE_SELFTEST=1 (run pure-cleaner asserts).
+# Backend: any OpenAI-compatible local endpoint (LM Studio, Ollama, etc.), a
+# small NON-reasoning instruct model (no key, no cost). Test overrides:
+# AGENTMUX_LLM_URL, AGENTMUX_LLM_MODEL, AGENTMUX_LLM_TIMEOUT,
+# SUMMARISE_SELFTEST=1 (run pure-cleaner asserts).
 
 maxwords="${1:-4}"
 mode="${2:-label}"
-url="${LMSTUDIO_URL:-http://localhost:1234/v1/chat/completions}"
-model="${LMSTUDIO_MODEL:-qwen2.5-14b-instruct}"
+url="${AGENTMUX_LLM_URL:-http://localhost:1234/v1/chat/completions}"
+model="${AGENTMUX_LLM_MODEL:-qwen2.5-14b-instruct}"
 
 # Pure, network-free cleaner. Lowercase; turn -/_/ into spaces (models like
 # to hyphen-join when told "no punctuation"); keep ONLY [a-z0-9 ] so stray
@@ -89,7 +90,7 @@ body=$(jq -n --arg m "$model" --arg s "$sys" --arg u "$prompt" '{
   messages:[{role:"system",content:$s},{role:"user",content:$u}]
 }') || exit 0
 
-resp=$(curl -s --max-time "${LMSTUDIO_TIMEOUT:-20}" \
+resp=$(curl -s --max-time "${AGENTMUX_LLM_TIMEOUT:-20}" \
   -H 'Content-Type: application/json' --data "$body" "$url" 2>/dev/null) || exit 0
 
 # Strip raw control bytes before jq — a malformed/non-conformant response
