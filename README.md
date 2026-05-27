@@ -16,8 +16,8 @@ Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; session
 ## Install
 
 ```bash
-git clone https://github.com/lockyc/agentmux ~/agentmux
-cd ~/agentmux
+git clone https://github.com/lockyc/agentmux
+cd agentmux
 bash install.sh
 ```
 
