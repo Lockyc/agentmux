@@ -62,7 +62,7 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 
 ## AI tab states (Claude Code)
 
-`tmux-status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:
+`claude-status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:
 
 | Emoji | State |
 |---|---|
@@ -73,17 +73,17 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 | ✅ | Done (unseen) |
 | 👀 | Done (window active/seen) |
 
-**Setup:** `install.sh` copies `tmux-status.sh` (and its helpers `claude_ctx.sh`, `claude_digest.sh`) to `~/.agentmux/scripts/` automatically. Wire them in `~/.claude/settings.json`:
+**Setup:** `install.sh` copies `claude-status.sh` (and its helpers `claude_ctx.sh`, `claude_digest.sh`) to `~/.agentmux/scripts/` automatically. Wire them in `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh start" }] }],
-    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh working" }] }],
-    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh working" }] }],
-    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh notify" }] }],
-    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh permission --notify 'Claude is waiting for permission'" }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh done --notify 'Claude has finished working'" }] }]
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh start" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh working" }] }],
+    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh working" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh notify" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh permission --notify 'Claude is waiting for permission'" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh done --notify 'Claude has finished working'" }] }]
   }
 }
 ```

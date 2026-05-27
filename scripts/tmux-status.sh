@@ -40,7 +40,7 @@ case "$state" in
 esac
 
 pane_key=$(echo "$TMUX_PANE" | tr -d '%')
-agent_name="${AGENTMUX_AGENT_NAME:-claude}"
+agent_name="${AGENTMUX_AGENT_NAME:-agent}"
 longfile="/tmp/agentmux-status-${pane_key}.txt"
 diagfile="/tmp/agentmux-diag-${pane_key}.txt"
 subjectfile="/tmp/${agent_name}-subject-${pane_key}.txt"
@@ -110,8 +110,8 @@ tmux rename-window -t "$TMUX_PANE" "$render $label"
 # with Claude. Up to 3 LM calls (subject-derive OR shift-candidate, then stand);
 # detached + per-pane lock so latency is invisible.
 SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
-CTX="${AGENTMUX_CTX_BIN:-$SCRIPT_DIR/claude_ctx.sh}"
-DIG="${AGENTMUX_DIGEST_BIN:-$SCRIPT_DIR/claude_digest.sh}"
+CTX="${AGENTMUX_CTX_BIN:-}"
+DIG="${AGENTMUX_DIGEST_BIN:-}"
 if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] && [ -x "$DIG" ]; then
   pfile=$(mktemp /tmp/agentmux-raw-XXXXXX 2>/dev/null) || pfile=""
   if [ -n "$pfile" ]; then

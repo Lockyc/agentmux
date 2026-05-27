@@ -20,7 +20,7 @@ POSIX sh throughout (shebang `#!/bin/sh`), except `agentmux.sh` and a few instal
 
 `~/.agentmux/scripts`, `~/.agentmux/shell`, and `~/.agentmux/tmux` are directory-level symlinks to the repo. Changes to scripts are live immediately — no install step needed during development.
 
-The Claude Code hook path is `~/.agentmux/scripts/tmux-status.sh`. Scripts do **not** need to be copied to `~/.claude/hooks/`.
+The Claude Code hook path is `~/.agentmux/scripts/claude-status.sh`. Scripts do **not** need to be copied to `~/.claude/hooks/`.
 
 ## Versioning
 

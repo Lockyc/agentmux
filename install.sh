@@ -54,12 +54,12 @@ echo ""
 echo "Optional — Claude Code AI tab states + summary status lines:"
 echo "  Wire the hooks in ~/.claude/settings.json (see README for full snippet):"
 echo ""
-echo '  "SessionStart":      tmux-status.sh start'
-echo '  "UserPromptSubmit":  tmux-status.sh working'
-echo '  "PostToolUse":       tmux-status.sh working'
-echo '  "Notification":      tmux-status.sh notify'
-echo '  "PermissionRequest": tmux-status.sh permission'
-echo '  "Stop":              tmux-status.sh done'
+echo '  "SessionStart":      claude-status.sh start'
+echo '  "UserPromptSubmit":  claude-status.sh working'
+echo '  "PostToolUse":       claude-status.sh working'
+echo '  "Notification":      claude-status.sh notify'
+echo '  "PermissionRequest": claude-status.sh permission'
+echo '  "Stop":              claude-status.sh done'
 echo ""
-echo "  Hook command path: ~/.agentmux/scripts/tmux-status.sh <state>"
+echo "  Hook command path: ~/.agentmux/scripts/claude-status.sh <state>"
 echo "  Also requires LM Studio running at localhost:1234 for AI summaries."
