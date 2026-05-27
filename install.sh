@@ -11,11 +11,8 @@ echo "Installing agentmux to $INSTALL_DIR ..."
 
 mkdir -p "$INSTALL_DIR/scripts" "$INSTALL_DIR/shell" "$INSTALL_DIR/tmux"
 
-# Copy scripts (exclude claude_*.sh and tmux-status.sh — those live in ~/.claude/hooks/)
+# Copy all scripts
 for f in "$REPO_DIR"/scripts/*.sh; do
-  case "$(basename "$f")" in
-    claude_*.sh|tmux-status.sh) continue ;;
-  esac
   dest="$INSTALL_DIR/scripts/$(basename "$f")"
   [ "$f" -ef "$dest" ] || cp "$f" "$dest"
 done
@@ -51,11 +48,14 @@ echo "  which toml2json || brew install go-toml"
 echo "  which jq        || brew install jq"
 echo ""
 echo "Optional — Claude Code AI tab states + summary status lines:"
-echo "  Copy hook scripts to ~/.claude/hooks/ and wire them in ~/.claude/settings.json."
-echo "  See README for the full settings.json snippet."
+echo "  Wire the hooks in ~/.claude/settings.json (see README for full snippet):"
 echo ""
-echo "  mkdir -p ~/.claude/hooks"
-echo "  cp $REPO_DIR/scripts/tmux-status.sh $REPO_DIR/scripts/claude_ctx.sh $REPO_DIR/scripts/claude_digest.sh ~/.claude/hooks/"
-echo "  chmod +x ~/.claude/hooks/tmux-status.sh ~/.claude/hooks/claude_ctx.sh ~/.claude/hooks/claude_digest.sh"
+echo '  "SessionStart":      tmux-status.sh start'
+echo '  "UserPromptSubmit":  tmux-status.sh working'
+echo '  "PostToolUse":       tmux-status.sh working'
+echo '  "Notification":      tmux-status.sh notify'
+echo '  "PermissionRequest": tmux-status.sh permission'
+echo '  "Stop":              tmux-status.sh done'
 echo ""
+echo "  Hook command path: ~/.agentmux/scripts/tmux-status.sh <state>"
 echo "  Also requires LM Studio running at localhost:1234 for AI summaries."

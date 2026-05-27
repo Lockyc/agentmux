@@ -73,24 +73,17 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 | ✅ | Done (unseen) |
 | 👀 | Done (window active/seen) |
 
-**Setup:** copy the hook scripts to `~/.claude/hooks/`:
-
-```bash
-cp scripts/tmux-status.sh scripts/claude_ctx.sh scripts/claude_digest.sh ~/.claude/hooks/
-chmod +x ~/.claude/hooks/tmux-status.sh ~/.claude/hooks/claude_ctx.sh ~/.claude/hooks/claude_digest.sh
-```
-
-Wire them in `~/.claude/settings.json`:
+**Setup:** `install.sh` copies `tmux-status.sh` (and its helpers `claude_ctx.sh`, `claude_digest.sh`) to `~/.agentmux/scripts/` automatically. Wire them in `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh start" }] }],
-    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh working" }] }],
-    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh working" }] }],
-    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh notify" }] }],
-    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh permission --notify 'Claude is waiting for permission'" }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh done --notify 'Claude has finished working'" }] }]
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh start" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh working" }] }],
+    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh working" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh notify" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh permission --notify 'Claude is waiting for permission'" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/tmux-status.sh done --notify 'Claude has finished working'" }] }]
   }
 }
 ```
@@ -104,11 +97,11 @@ The 3-row status bar shows a rolling `done / now / next` summary of the active s
 **Requirements:**
 - LM Studio running at `localhost:1234` with a small non-reasoning instruct model loaded (e.g. `qwen2.5-14b-instruct`)
 - `agentmux.conf` sourced in `~/.tmux.conf`
-- Claude Code hooks wired (above) — the `⚡` hook triggers the summariser
+- Claude Code hooks wired (above) — the `working` hook triggers the summariser
 
 The 3 extra status rows only appear for sessions started with `amux` (sets `@autoagent=1`). Sessions started with `tm` keep a single status line.
 
-**Pipeline** (runs detached on every `⚡` hook):
+**Pipeline** (runs detached on every `working` hook):
 1. `claude_ctx.sh` — extracts recent prose turns from the Claude Code transcript
 2. `claude_digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
 3. `summarise.sh stand` — sends the digest to LM Studio; receives `"<subject>. done: …; now: …; next: …"`
