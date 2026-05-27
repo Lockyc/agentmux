@@ -12,12 +12,25 @@ echo "Installing agentmux${VERSION:+ v$VERSION} to $INSTALL_DIR ..."
 
 mkdir -p "$INSTALL_DIR/scripts" "$INSTALL_DIR/shell" "$INSTALL_DIR/tmux"
 
-# Copy all scripts
+# Copy top-level scripts
 for f in "$REPO_DIR"/scripts/*.sh; do
   dest="$INSTALL_DIR/scripts/$(basename "$f")"
   [ "$f" -ef "$dest" ] || cp "$f" "$dest"
 done
 chmod +x "$INSTALL_DIR/scripts/"*.sh
+
+# Copy agent-specific script subdirectories (scripts/claude/, scripts/gemini/, …)
+for dir in "$REPO_DIR"/scripts/*/; do
+  [ -d "$dir" ] || continue
+  sub=$(basename "$dir")
+  mkdir -p "$INSTALL_DIR/scripts/$sub"
+  for f in "$dir"*.sh; do
+    [ -f "$f" ] || continue
+    dest="$INSTALL_DIR/scripts/$sub/$(basename "$f")"
+    [ "$f" -ef "$dest" ] || cp "$f" "$dest"
+  done
+  chmod +x "$INSTALL_DIR/scripts/$sub/"*.sh 2>/dev/null || true
+done
 
 # Copy shell functions
 src="$REPO_DIR/shell/agentmux.sh"; dest="$INSTALL_DIR/shell/agentmux.sh"
@@ -54,12 +67,12 @@ echo ""
 echo "Optional — Claude Code AI tab states + summary status lines:"
 echo "  Wire the hooks in ~/.claude/settings.json (see README for full snippet):"
 echo ""
-echo '  "SessionStart":      claude-status.sh start'
-echo '  "UserPromptSubmit":  claude-status.sh working'
-echo '  "PostToolUse":       claude-status.sh working'
-echo '  "Notification":      claude-status.sh notify'
-echo '  "PermissionRequest": claude-status.sh permission'
-echo '  "Stop":              claude-status.sh done'
+echo '  "SessionStart":      claude/status.sh start'
+echo '  "UserPromptSubmit":  claude/status.sh working'
+echo '  "PostToolUse":       claude/status.sh working'
+echo '  "Notification":      claude/status.sh notify'
+echo '  "PermissionRequest": claude/status.sh permission'
+echo '  "Stop":              claude/status.sh done'
 echo ""
-echo "  Hook command path: ~/.agentmux/scripts/claude-status.sh <state>"
+echo "  Hook command path: ~/.agentmux/scripts/claude/status.sh <state>"
 echo "  Also requires LM Studio running at localhost:1234 for AI summaries."

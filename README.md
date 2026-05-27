@@ -62,7 +62,7 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 
 ## AI tab states (Claude Code)
 
-`claude-status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:
+`claude/status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:
 
 | Emoji | State |
 |---|---|
@@ -73,17 +73,17 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 | ✅ | Done (unseen) |
 | 👀 | Done (window active/seen) |
 
-**Setup:** `install.sh` copies `claude-status.sh` (and its helpers `claude_ctx.sh`, `claude_digest.sh`) to `~/.agentmux/scripts/` automatically. Wire them in `~/.claude/settings.json`:
+**Setup:** `install.sh` copies the `scripts/claude/` directory to `~/.agentmux/scripts/claude/` automatically. Wire the hooks in `~/.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh start" }] }],
-    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh working" }] }],
-    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh working" }] }],
-    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh notify" }] }],
-    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh permission --notify 'Claude is waiting for permission'" }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude-status.sh done --notify 'Claude has finished working'" }] }]
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh start" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh working" }] }],
+    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh working" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh notify" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh permission --notify 'Claude is waiting for permission'" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh done --notify 'Claude has finished working'" }] }]
   }
 }
 ```
@@ -102,18 +102,18 @@ The 3-row status bar shows a rolling `done / now / next` summary of the active s
 The 3 extra status rows only appear for sessions started with `amux` (sets `@autoagent=1`). Sessions started with `tm` keep a single status line.
 
 **Pipeline** (runs detached on every `working` hook):
-1. `claude_ctx.sh` — extracts recent prose turns from the Claude Code transcript
-2. `claude_digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
-3. `summarise.sh stand` — sends the digest to LM Studio; receives `"<subject>. done: …; now: …; next: …"`
+1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
+2. `claude/digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
+3. `summarise.sh stand` — sends the digest to a local OpenAI-compatible endpoint; receives `"<subject>. done: …; now: …; next: …"`
 4. Result written to `/tmp/agentmux-status-<pane_key>.txt`
 5. `summary_rows.sh` (called by tmux `status-format[1-3]`) splits that into three display rows
 
-Override the LM Studio endpoint or model with environment variables:
+Override the endpoint or model with environment variables (defaults shown match LM Studio; Ollama would use `http://localhost:11434/v1/chat/completions`):
 
 ```bash
-export LMSTUDIO_URL=http://localhost:1234/v1/chat/completions
-export LMSTUDIO_MODEL=qwen2.5-14b-instruct
-export LMSTUDIO_TIMEOUT=20   # seconds
+export AGENTMUX_LLM_URL=http://localhost:1234/v1/chat/completions
+export AGENTMUX_LLM_MODEL=qwen2.5-14b-instruct
+export AGENTMUX_LLM_TIMEOUT=20   # seconds
 ```
 
 **Non-Claude agents:** any agent can participate by writing to `/tmp/agentmux-status-<pane_key>.txt` directly (where `pane_key=$(echo $TMUX_PANE | tr -d '%')`). The format is a single line: `<subject>. done: <text>; now: <text>; next: <text>` — any of the `done`/`now`/`next` labels may be omitted.

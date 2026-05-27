@@ -1,6 +1,6 @@
 #!/bin/sh
 # Usage: tmux-status.sh <state> [--notify <message>]
-# Shared status-hook core — called by each agent's hook glue (e.g. claude-status.sh).
+# Shared status-hook core — called by each agent's hook glue (e.g. claude/status.sh).
 # Agent identity and transcript adapters must be set by the caller:
 #   AGENTMUX_AGENT_NAME  agent label used in tab and temp-file names (default: agent)
 #   AGENTMUX_CTX_BIN     path to transcript context extractor (no default)
