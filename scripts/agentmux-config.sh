@@ -124,7 +124,9 @@ agentmux_build_cmd() {
 
 # Self-test: AGENTMUX_CONFIG_SELFTEST=1 bash scripts/agentmux-config.sh
 if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
-  # Run against the example config so assertions are config-independent.
+  # First phase asserts against the shipped example config (pinned values);
+  # second phase (line ~170 onward) uses a synthetic config to cover every
+  # keep_alive/reattach branch independent of what the example ships with.
   _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"
   _amux_json_cache=""

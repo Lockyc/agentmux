@@ -16,5 +16,9 @@ CURRENT=$(tmux show-options -v -t "$SESSION_ID" "@agent-mode" 2>/dev/null)
 NEXT=$(agentmux_next_agent "$CURRENT")
 
 tmux set-option -t "$SESSION_ID" "@agent-mode" "$NEXT"
+# By design, repaints only the current window's status-bar style: each window
+# stays locked to whatever agent it was launched with (set by launch_agent.sh /
+# amux on creation). @agent-mode is the session-wide setting that controls
+# which agent the *next* prefix-c window will spawn.
 agentmux_set_window_style "$NEXT"
 tmux refresh-client -S

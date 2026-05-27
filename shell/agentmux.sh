@@ -59,6 +59,24 @@ amux() {
         echo "agentmux ${v:-unknown}"
         return 0
         ;;
+      -h|--help)
+        cat <<'EOF'
+amux [(-<flag> | <agent_name>)] [session_name]
+  Creates or attaches a tmux session managed by agentmux.
+
+  -<flag>        agent matching `flag` in agents.toml (e.g. -w for flag="w")
+  <agent_name>   agent by name (e.g. "work")
+  (none)         first agent in agents.toml
+  session_name   defaults to basename of $PWD (dots → underscores)
+
+  --version      print version
+  -h, --help     this help
+
+Related:
+  tm [session_name]   plain tmux session, no agent auto-launch
+EOF
+        return 0
+        ;;
       -*)
         local flag="${1#-}"
         local fidx

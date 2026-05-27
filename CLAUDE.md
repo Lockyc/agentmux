@@ -4,7 +4,12 @@ Configurable tmux agent launcher. Shell scripts only — no Python, Node, or oth
 
 ## Stack
 
-POSIX sh throughout (shebang `#!/bin/sh`), except `agentmux.sh` and a few install-time scripts which use bash. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
+Shell scripts only — split between bash and POSIX sh by what each script needs:
+
+- **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `relaunch.sh`).
+- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `llm-config.sh`, `tmux-status.sh`, `update_colors.sh`, `window_seen.sh`, `claude/{status,ctx,digest}.sh`.
+
+When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
 
 ## Layout
 
@@ -33,7 +38,9 @@ Bump `VERSION` (semver) when making a meaningful change. `amux --version` reads 
 Several scripts have built-in selftests — run before changing them:
 
 ```bash
-SUMMARISE_SELFTEST=1 scripts/summarise.sh
-SUMMARY_ROWS_SELFTEST=1 scripts/summary_rows.sh
-CLAUDE_DIGEST_SELFTEST=1 scripts/claude/digest.sh
+SUMMARISE_SELFTEST=1      scripts/summarise.sh
+SUMMARY_ROWS_SELFTEST=1   scripts/summary_rows.sh
+CLAUDE_DIGEST_SELFTEST=1  scripts/claude/digest.sh
+AGENTMUX_CONFIG_SELFTEST=1 bash scripts/agentmux-config.sh
+AGENTMUX_STYLE_SELFTEST=1  bash scripts/agent_window_style.sh
 ```

@@ -204,7 +204,9 @@ if [ "$2" = "--notify" ]; then
 
   if [ -d "$lockdir" ]; then
     now=$(date +%s)
-    last=$(stat -f %m "$lockdir" 2>/dev/null || echo 0)
+    last=$(stat -f %m "$lockdir" 2>/dev/null \
+        || stat -c %Y "$lockdir" 2>/dev/null \
+        || echo 0)
     if [ "$((now - last))" -lt "$cooldown" ]; then
       exit 0
     fi

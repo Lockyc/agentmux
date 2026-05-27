@@ -83,6 +83,13 @@ An adapter is a thin shim that:
 
 The shared core is hook-schema-agnostic — it consumes only those env vars, never stdin. Hook-payload parsing belongs in the adapter because every agent has a different schema.
 
+Two optional overrides let an adapter swap in custom helpers; defaults work for everyone:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `AGENTMUX_TAB_LABEL_BIN` | `~/.agentmux/scripts/tab_label.sh` | Resolves the tab-label suffix from `@window-agent`. Override to render labels differently. |
+| `AGENTMUX_SUMMARISE_BIN` | `~/.agentmux/scripts/summarise.sh` | LLM-summary entry point. Override to point at a different summariser. |
+
 **Contracts for `ctx.sh` and `digest.sh`** (both read the transcript path as `$1`):
 
 - `ctx.sh <transcript> <max_msgs> [percap] [head|tail]` — prints prose-only turns joined by ` / `; used to derive the stable subject and to anchor recent activity. Filters out tool noise and pasted dumps.
