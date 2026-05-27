@@ -1,18 +1,20 @@
 #!/bin/sh
 # Usage: tmux-status.sh <state> [--notify <message>]
-# Called by Claude Code hooks in settings.json. Two jobs:
+# Shared status-hook core — called by each agent's hook glue (e.g. Claude Code
+# settings.json). Agent identity is set via AGENTMUX_AGENT_NAME (default: claude);
+# transcript adapters via AGENTMUX_CTX_BIN / AGENTMUX_DIGEST_BIN. Two jobs:
 #  1. Tab label = "<emoji> <agent>" — a STABLE, state-only tab.
 #     State tokens: start working permission notify done
 #     Emojis:       🤖     ⚡       🔐         📣     ✅  (👀 derived internally)
 #  2. AI summary: stable subject + done/now/next trajectory, re-derived on
-#     every working hook from claude_digest.sh + summarise.sh stand mode.
+#     every working hook from AGENTMUX_DIGEST_BIN + summarise.sh stand mode.
 #
-# /tmp/agentmux-status-<pane>.txt  done/now/next summary (status lines 1-3; each working hook)
-# /tmp/agentmux-diag-<pane>.txt    pipeline diagnostic shown when no summary yet
-# /tmp/claude-subject-<pane>.txt   stable subject label (derived once, re-anchored on shift)
-# /tmp/claude-substart-<pane>.txt  subject-start line offset (scope B; written on re-anchor)
-# /tmp/claude-sum-<pane>.lock.d    summariser overlap lock
-# start state removes all of the above. Needs jq, claude_ctx.sh, claude_digest.sh,
+# /tmp/agentmux-status-<pane>.txt       done/now/next summary (status lines 1-3; each working hook)
+# /tmp/agentmux-diag-<pane>.txt         pipeline diagnostic shown when no summary yet
+# /tmp/<agent_name>-subject-<pane>.txt  stable subject label (derived once, re-anchored on shift)
+# /tmp/<agent_name>-substart-<pane>.txt subject-start line offset (scope B; written on re-anchor)
+# /tmp/agentmux-sum-<pane>.lock.d       summariser overlap lock
+# start state removes all of the above. Needs jq, AGENTMUX_CTX_BIN, AGENTMUX_DIGEST_BIN,
 # summarise.sh, and LM Studio at localhost:1234; without it diag shows "lm studio: unreachable".
 
 [ -z "$TMUX" ] && exit 0
@@ -108,10 +110,10 @@ tmux rename-window -t "$TMUX_PANE" "$render $label"
 # with Claude. Up to 3 LM calls (subject-derive OR shift-candidate, then stand);
 # detached + per-pane lock so latency is invisible.
 SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
-CTX="${CLAUDE_CTX_BIN:-$SCRIPT_DIR/claude_ctx.sh}"
-DIG="${CLAUDE_DIGEST_BIN:-$SCRIPT_DIR/claude_digest.sh}"
+CTX="${AGENTMUX_CTX_BIN:-$SCRIPT_DIR/claude_ctx.sh}"
+DIG="${AGENTMUX_DIGEST_BIN:-$SCRIPT_DIR/claude_digest.sh}"
 if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] && [ -x "$DIG" ]; then
-  pfile=$(mktemp /tmp/claude-raw-XXXXXX 2>/dev/null) || pfile=""
+  pfile=$(mktemp /tmp/agentmux-raw-XXXXXX 2>/dev/null) || pfile=""
   if [ -n "$pfile" ]; then
     printf '%s' "$prompt" > "$pfile"
     nohup sh -c '
