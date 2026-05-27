@@ -137,7 +137,7 @@ The 3-row status bar shows a rolling `done / now / next` summary of the active s
 - `agentmux.conf` sourced in `~/.tmux.conf`
 - Claude Code hooks wired (above) — the `working` hook triggers the summariser
 
-The 3 extra status rows only appear for sessions started with `amux` (sets `@autoagent=1`). Plain tmux sessions keep a single status line.
+The 3 extra status rows are always visible (set globally by `agentmux.conf`); they're blank for sessions without agent activity.
 
 **Pipeline** (runs detached on every `working` hook):
 1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
