@@ -38,12 +38,13 @@ case "$state" in
 esac
 
 pane_key=$(echo "$TMUX_PANE" | tr -d '%')
+agent_name="${AGENTMUX_AGENT_NAME:-claude}"
 longfile="/tmp/agentmux-status-${pane_key}.txt"
 diagfile="/tmp/agentmux-diag-${pane_key}.txt"
-subjectfile="/tmp/claude-subject-${pane_key}.txt"
-substartfile="/tmp/claude-substart-${pane_key}.txt"
+subjectfile="/tmp/${agent_name}-subject-${pane_key}.txt"
+substartfile="/tmp/${agent_name}-substart-${pane_key}.txt"
 TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
-label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" claude 2>/dev/null || echo "claude")
+label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
 project=$(tmux display-message -p "#{session_name}" 2>/dev/null)
 [ -z "$project" ] && project=$(basename "$PWD" 2>/dev/null)
 [ -z "$project" ] && project="$label"
@@ -62,7 +63,7 @@ esac
 
 if [ "$emoji" = "🤖" ]; then
   rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" 2>/dev/null
-  rmdir "/tmp/claude-sum-${pane_key}.lock.d" 2>/dev/null
+  rmdir "/tmp/agentmux-sum-${pane_key}.lock.d" 2>/dev/null
 fi
 
 # Read the hook payload ONLY for working — that's the only state that needs the
@@ -121,7 +122,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
       elif [ -n "$cur" ]; then blob="$cur"
       else blob="$recent"; fi
       [ -n "$blob" ] || exit 0
-      lock="/tmp/claude-sum-${pane}.lock.d"
+      lock="/tmp/agentmux-sum-${pane}.lock.d"
       mkdir "$lock" 2>/dev/null || exit 0
 
       subj=$(cat "$sf" 2>/dev/null)
@@ -192,7 +193,7 @@ fi
 if [ "$2" = "--notify" ]; then
   # Dedupe across hook types (done + notify fire ~simultaneously at end of turn).
   # mkdir is atomic — only one concurrent hook process wins the claim per cooldown window.
-  lockdir="/tmp/claude-notify-${pane_key}.d"
+  lockdir="/tmp/${agent_name}-notify-${pane_key}.d"
   cooldown=5
 
   if [ -d "$lockdir" ]; then
@@ -206,7 +207,7 @@ if [ "$2" = "--notify" ]; then
 
   mkdir "$lockdir" 2>/dev/null || exit 0
 
-  MSG="$3" PROJ="$project" osascript -e 'display notification (system attribute "MSG") with title "Claude Code" subtitle (system attribute "PROJ") sound name "Submarine"' 2>/dev/null
+  MSG="$3" PROJ="$project" AGENT="$agent_name" osascript -e 'display notification (system attribute "MSG") with title (system attribute "AGENT") subtitle (system attribute "PROJ") sound name "Submarine"' 2>/dev/null
 fi
 
 exit 0
