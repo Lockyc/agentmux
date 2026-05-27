@@ -1,22 +1,19 @@
 #!/bin/sh
-# Usage: tmux-status.sh <emoji> [--notify <message>]
+# Usage: tmux-status.sh <state> [--notify <message>]
 # Called by Claude Code hooks in settings.json. Two jobs:
-#  1. Tab label = "<emoji> claude" — a STABLE, state-only tab. The emoji is
-#     the Claude state (🤖 start ⚡ working 📣 waiting 🔐 perm ✅ done
-#     👀 seen); the text is just "claude". Deliberately not an LM summary —
-#     the tab is the at-a-glance state; the *what* lives on status line 2.
-#  2. Long summary on the dedicated 2nd status line (status-format[1] →
-#     claude_long.sh): a stable subject + done/now/next trajectory line,
-#     re-derived on every ⚡ from /tmp/claude-long-<pane>.txt (built by
-#     claude_digest.sh + claude_summarise.sh stand mode).
+#  1. Tab label = "<emoji> <agent>" — a STABLE, state-only tab.
+#     State tokens: start working permission notify done
+#     Emojis:       🤖     ⚡       🔐         📣     ✅  (👀 derived internally)
+#  2. AI summary: stable subject + done/now/next trajectory, re-derived on
+#     every working hook from claude_digest.sh + summarise.sh stand mode.
 #
-# /tmp/agentmux-status-<pane>.txt  done/now/next summary (status lines 1-3; each ⚡)
+# /tmp/agentmux-status-<pane>.txt  done/now/next summary (status lines 1-3; each working hook)
 # /tmp/agentmux-diag-<pane>.txt    pipeline diagnostic shown when no summary yet
 # /tmp/claude-subject-<pane>.txt   stable subject label (derived once, re-anchored on shift)
 # /tmp/claude-substart-<pane>.txt  subject-start line offset (scope B; written on re-anchor)
 # /tmp/claude-sum-<pane>.lock.d    summariser overlap lock
-# SessionStart (🤖) removes them. Needs jq, claude_ctx.sh, claude_digest.sh, summarise.sh,
-# and LM Studio at localhost:1234; without LM Studio diag shows "lm studio: unreachable".
+# start state removes all of the above. Needs jq, claude_ctx.sh, claude_digest.sh,
+# summarise.sh, and LM Studio at localhost:1234; without it diag shows "lm studio: unreachable".
 
 [ -z "$TMUX" ] && exit 0
 
@@ -29,7 +26,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # detached (never blocks the turn). stderr left alone (debugging).
 exec >/dev/null
 
-emoji="$1"
+# Map semantic state token → display emoji. Unknown tokens are ignored.
+state="$1"
+case "$state" in
+  start)      emoji="🤖" ;;
+  working)    emoji="⚡" ;;
+  permission) emoji="🔐" ;;
+  notify)     emoji="📣" ;;
+  done)       emoji="✅" ;;
+  *)          exit 0 ;;
+esac
+
 pane_key=$(echo "$TMUX_PANE" | tr -d '%')
 longfile="/tmp/agentmux-status-${pane_key}.txt"
 diagfile="/tmp/agentmux-diag-${pane_key}.txt"
@@ -58,10 +65,10 @@ if [ "$emoji" = "🤖" ]; then
   rmdir "/tmp/claude-sum-${pane_key}.lock.d" 2>/dev/null
 fi
 
-# Read the hook payload ONLY for ⚡ — that's the only state that needs the
+# Read the hook payload ONLY for working — that's the only state that needs the
 # prompt + transcript_path (the long-summary job). Reading stdin for the
 # other states would `cat`-block forever whenever the caller doesn't send
-# and close a payload (only ⚡ is piped one), hanging the hook.
+# and close a payload (only working is piped one), hanging the hook.
 prompt=""
 transcript=""
 if [ "$emoji" = "⚡" ] && [ ! -t 0 ] && command -v jq >/dev/null 2>&1; then
@@ -70,21 +77,19 @@ if [ "$emoji" = "⚡" ] && [ ! -t 0 ] && command -v jq >/dev/null 2>&1; then
   transcript=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)
 fi
 
-# Precedence: 📣 (Notification = Claude idle/waiting for input) fires AFTER a
-# turn ends if you don't respond promptly, and would otherwise overwrite the
-# ✅/👀 done-tracking — the "tick sometimes isn't set" symptom. A done or
-# blocked window already means "your move", so 📣 must not clobber ✅/👀/🔐.
-# It still overwrites 🤖/⚡. Also makes the Stop(✅)-vs-Notification(📣)
-# end-of-turn race order-independent.
+# Precedence: notify fires AFTER a turn ends if you don't respond promptly, and
+# would otherwise overwrite the done/seen/permission tracking. A done or blocked
+# window already means "your move", so notify must not clobber those states.
+# It still overwrites start/working. Also makes done-vs-notify race order-independent.
 if [ "$emoji" = "📣" ]; then
   case "$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)" in
     "✅ "*|"👀 "*|"🔐 "*) exit 0 ;;
   esac
 fi
 
-# ✅ means "done, you haven't looked". If you're already sitting on this
+# done means "finished, you haven't looked". If you're already sitting on this
 # window (active window of an attached session) it's been seen the moment it
-# finished — emit 👀 directly; after-select-window/claude_seen.sh covers the
+# finished — emit 👀 directly; after-select-window/window_seen.sh covers the
 # "switch to it later" case.
 render="$emoji"
 if [ "$emoji" = "✅" ]; then
@@ -94,9 +99,9 @@ fi
 
 tmux rename-window -t "$TMUX_PANE" "$render $label"
 
-# ⚡ → 2-row summary: a stable SUBJECT (derived once from early turns,
+# working → AI summary: a stable SUBJECT (derived once from early turns,
 # re-anchored when work shifts topic) + done/now/next from claude_digest.sh
-# piped into claude_summarise.sh stand mode. Detached: never blocks the hook
+# piped into summarise.sh stand mode. Detached: never blocks the hook
 # (cosmetic-hook contract); the foreground already did exec >/dev/null and will
 # exit 0. Spawned nohup ... >/dev/null 2>&1 </dev/null & so it shares no fd
 # with Claude. Up to 3 LM calls (subject-derive OR shift-candidate, then stand);
@@ -138,7 +143,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
         # Subject set: if recent work shares no content word (>3 chars) with
         # it, the work moved on. AUGMENT (append) the new aspect instead of
         # replacing, so the original anchor noun survives drift. Punctuation
-        # is fine here: the subject is only ever LM context (CLAUDE_SUBJECT),
+        # is fine here: the subject is only ever LM context (AGENTMUX_SUBJECT),
         # never rendered as a tmux label.
         cand=$(printf "%s" "$blob" | "$sum" 6 label)
         if [ -n "$cand" ]; then
@@ -185,7 +190,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
 fi
 
 if [ "$2" = "--notify" ]; then
-  # Dedupe across hook types (Stop + Notification fire ~simultaneously at end of turn).
+  # Dedupe across hook types (done + notify fire ~simultaneously at end of turn).
   # mkdir is atomic — only one concurrent hook process wins the claim per cooldown window.
   lockdir="/tmp/claude-notify-${pane_key}.d"
   cooldown=5

@@ -85,12 +85,12 @@ Wire them in `~/.claude/settings.json`:
 ```json
 {
   "hooks": {
-    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh 🤖" }] }],
-    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh ⚡" }] }],
-    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh ⚡" }] }],
-    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh 📣" }] }],
-    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh 🔐 --notify 'Claude is waiting for permission'" }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh ✅ --notify 'Claude has finished working'" }] }]
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh start" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh working" }] }],
+    "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh working" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh notify" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh permission --notify 'Claude is waiting for permission'" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/.claude/hooks/tmux-status.sh done --notify 'Claude has finished working'" }] }]
   }
 }
 ```
