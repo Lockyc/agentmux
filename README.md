@@ -10,12 +10,14 @@ Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; session
 - `toml2json`: `brew install go-toml`
 - `jq`: `brew install jq`
 - LM Studio on `localhost:1234` (optional — for AI summary status lines)
+- `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in agents.toml)
+- `osascript` (optional, macOS — only for `--notify` desktop alerts in the Claude Code hooks)
 
 ## Install
 
 ```bash
-git clone https://github.com/lockyc/agentmux ~/Developer/github.com/lockyc/agentmux
-cd ~/Developer/github.com/lockyc/agentmux
+git clone https://github.com/lockyc/agentmux ~/agentmux
+cd ~/agentmux
 bash install.sh
 ```
 
@@ -103,6 +105,8 @@ The 3-row status bar shows a rolling `done / now / next` summary of the active s
 - LM Studio running at `localhost:1234` with a small non-reasoning instruct model loaded (e.g. `qwen2.5-14b-instruct`)
 - `agentmux.conf` sourced in `~/.tmux.conf`
 - Claude Code hooks wired (above) — the `⚡` hook triggers the summariser
+
+The 3 extra status rows only appear for sessions started with `amux` (sets `@autoagent=1`). Sessions started with `tm` keep a single status line.
 
 **Pipeline** (runs detached on every `⚡` hook):
 1. `claude_ctx.sh` — extracts recent prose turns from the Claude Code transcript

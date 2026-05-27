@@ -100,18 +100,6 @@ tm() {
   _amux_attach "$name"
 }
 
-# Personal wrappers — kept for direct invocation outside amux sessions.
-# These also self-correct the window tab colour when called inside tmux.
-claude-work() {
-  agentmux_set_window_style work
-  CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude "$@"
-}
-
-claude-personal() {
-  agentmux_set_window_style personal
-  CLAUDE_CONFIG_DIR="$HOME/.claude-personal" claude "$@"
-}
-
 # Zsh completion: amux <tab> completes agent names and -<flag> shortcuts.
 if [ -n "${ZSH_VERSION:-}" ]; then
   _amux_zsh_complete() {
