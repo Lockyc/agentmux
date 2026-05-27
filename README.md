@@ -4,16 +4,19 @@ Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; session
 
 ![agentmux overview](docs/overview.png)
 
-## Prerequisites
-
-- tmux
-- `toml2json`: `brew install go-toml`
-- `jq`: `brew install jq`
-- A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
-- `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in agents.toml)
-- `osascript` (optional, macOS — only for `--notify` desktop alerts in the Claude Code hooks)
-
 ## Install
+
+### Claude Code (interactive — recommended)
+
+Clone the repo, open it in Claude Code, and run:
+
+```
+/agentmux:install
+```
+
+The command checks dependencies, runs the installer, and interactively wires your shell config, `~/.tmux.conf`, and Claude Code hooks. It then self-installs to `~/.claude/commands/` so `/agentmux:install` is available globally for future updates from any directory.
+
+### Manual
 
 ```bash
 git clone https://github.com/lockyc/agentmux
@@ -51,6 +54,15 @@ tmux source ~/.tmux.conf         # or start a new tmux server
 ```bash
 amux
 ```
+
+## Prerequisites
+
+- tmux
+- `toml2json`: `brew install go-toml`
+- `jq`: `brew install jq`
+- A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
+- `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in agents.toml)
+- `osascript` (optional, macOS — only for `--notify` desktop alerts in the Claude Code hooks)
 
 ## Usage
 
