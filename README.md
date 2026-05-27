@@ -35,6 +35,8 @@ Edit `~/.agentmux/agents.toml` to define your agents, then add to your shell con
 | `prefix-m` | Cycle `@agent-mode` through defined agents |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
 
+When `amux` creates a session it sets `@autoagent=1` on it and names it after `basename $PWD` (dots → underscores). That flag is what gates the coloured status bar, AI summary rows, and tab-state emojis — plain tmux sessions without it are left unstyled. Pass an explicit name with `amux <agent> <name>` to override the default.
+
 ## Adding an agent
 
 Add a new `[[agents]]` block to `~/.agentmux/agents.toml`:
@@ -137,7 +139,7 @@ The 3-row status bar shows a rolling `done / now / next` summary of the active s
 - `agentmux.conf` sourced in `~/.tmux.conf`
 - Claude Code hooks wired (above) — the `working` hook triggers the summariser
 
-The coloured status bar and 3 extra summary rows only appear for sessions started with `amux` (`@autoagent=1`). Plain tmux sessions are left unstyled with a single status line.
+The coloured status bar and 3 extra summary rows only appear in `amux` sessions (`@autoagent=1`). Plain tmux sessions are left unstyled with a single status line.
 
 **Pipeline** (runs detached on every `working` hook):
 1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
@@ -159,5 +161,3 @@ export AGENTMUX_LLM_TIMEOUT=20   # seconds
 ## Session colours
 
 Each session gets a colour derived deterministically from its name — same directory, same colour, on every machine. The summary rows use a matching shade of the same hue. Colours update automatically on attach; no config needed.
-
-Session names default to `basename $PWD` (dots → underscores). Pass an explicit name with `amux <agent> <name>` to pin a colour regardless of working directory.
