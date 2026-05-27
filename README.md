@@ -2,6 +2,8 @@
 
 Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix-m` cycles through the list.
 
+![agentmux overview](docs/overview.png)
+
 ## Prerequisites
 
 - tmux
