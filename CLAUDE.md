@@ -10,7 +10,9 @@ POSIX sh throughout (shebang `#!/bin/sh`), except `agentmux.sh` and a few instal
 
 | Path | Purpose |
 |---|---|
-| `scripts/` | All runtime scripts, including Claude Code hook scripts |
+| `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
+| `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`) |
+| `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | Shell functions sourced by the user (`amux`, `tm`) |
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
 | `config/agents.toml.example` | Example agent config |
