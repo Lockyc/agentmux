@@ -52,6 +52,13 @@ grep -qs "agentmux" ~/.tmux.conf        && echo "tmux:wired"    || echo "tmux:mi
 grep -qs "agentmux" ~/.claude/settings.json && echo "hooks:wired" || echo "hooks:missing"
 ```
 
+Also probe for running local LLM endpoints:
+
+```bash
+curl -sf --max-time 2 http://localhost:1234/v1/models  -o /dev/null && echo "lmstudio:running" || echo "lmstudio:not_running"
+curl -sf --max-time 2 http://localhost:11434/v1/models -o /dev/null && echo "ollama:running"   || echo "ollama:not_running"
+```
+
 ### 4. Run core install
 
 ```bash
@@ -60,17 +67,18 @@ bash "$REPO_DIR/install.sh"
 
 If this fails, show the full output and stop.
 
-### 5. Ask what additional wiring to apply
+### 5. Ask what to set up
 
 Use AskUserQuestion with a **multi-select** question:
 
-**"What should I wire up for you?"**
+**"What should I set up for you?"**
 
-Options — mark as "Recommended" those not already detected as wired:
+Mark as "Recommended" those not already detected as wired:
 
 - **Shell config** — appends `source ~/.agentmux/shell/agentmux.sh` to `~/.zshrc` (or `~/.bashrc`)
 - **tmux config** — appends `source-file ~/.agentmux/tmux/agentmux.conf` to `~/.tmux.conf`
-- **Claude Code hooks** — wires tab-state emojis and AI summary status lines into `~/.claude/settings.json`
+- **Claude Code hooks** — wires tab-state emojis and AI summary triggers into `~/.claude/settings.json`
+- **AI summary status lines** — configures the local LLM endpoint that powers the live `done / now / next` status bar
 
 ### 6. Wire shell config (if selected)
 
@@ -98,7 +106,7 @@ Report whether the line was already present or newly added.
 
 The six hooks to wire:
 
-```json
+```
 "SessionStart":      [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh start" }] }]
 "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh working" }] }]
 "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "~/.agentmux/scripts/claude/status.sh working" }] }]
@@ -110,19 +118,59 @@ The six hooks to wire:
 **Merge rules — never remove or overwrite hooks belonging to other tools:**
 
 1. Read `~/.claude/settings.json` (treat as `{}` if the file does not exist).
-2. For each of the six event names above, check whether any entry in the current array for that event already contains `agentmux` in its `command` string. Skip the event if already wired.
+2. For each of the six event names, check whether any entry in the current array already contains `agentmux` in its `command`. Skip that event if already wired.
 3. Append our entry to each un-wired event array (create the array if the key is absent).
-4. Write the merged JSON back with `jq`:
+4. Write the merged result back with a single `jq` pipeline:
 
 ```bash
-# Example for one event — repeat pattern for all six
-jq '.hooks.SessionStart += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh start"}]}]' \
+jq '.hooks.SessionStart += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh start"}]}]
+  | .hooks.UserPromptSubmit += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh working"}]}]
+  | .hooks.PostToolUse += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh working"}]}]
+  | .hooks.Notification += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh notify"}]}]
+  | .hooks.PermissionRequest += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh permission --notify '\''Claude is waiting for permission'\''"}]}]
+  | .hooks.Stop += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh done --notify '\''Claude has finished working'\''"}]}]' \
   ~/.claude/settings.json > /tmp/settings-merged.json && mv /tmp/settings-merged.json ~/.claude/settings.json
 ```
 
-Use a single `jq` pipeline that adds only the missing events in one pass. If `~/.claude/settings.json` does not exist, seed it with `echo '{}' | jq ...` rather than writing raw JSON.
+Omit events that are already wired. If `~/.claude/settings.json` does not exist, seed with `echo '{"hooks":{}}' | jq ...`.
 
-### 9. Self-install this command
+### 9. Configure AI summary status lines (if selected)
+
+AI summaries require a local OpenAI-compatible endpoint — any `/v1/chat/completions` server works (LM Studio, Ollama, llama.cpp, etc.). The status bar shows a rolling `done / now / next` summary of the active Claude session, updated automatically on each tool use.
+
+**9a. Ask which provider**
+
+Use AskUserQuestion (single-select):
+
+**"Which local LLM are you using for AI summaries?"**
+
+Use the probe results from step 3 to add "(detected — running)" next to options that responded:
+
+- **LM Studio** — endpoint: `http://localhost:1234/v1/chat/completions`
+- **Ollama** — endpoint: `http://localhost:11434/v1/chat/completions`
+- **Other / custom endpoint** — I'll enter the URL (user can type via the Other option)
+- **Skip for now** — I'll configure this later in `~/.agentmux/agents.toml`
+
+**9b. Ask for model name**
+
+If a provider was selected (not Skip):
+
+Use AskUserQuestion (single-select):
+
+**"Which model do you want to use for summaries? (small, fast instruct models work best)"**
+
+Options tailored to the provider:
+- For **LM Studio**: `qwen2.5-7b-instruct`, `qwen2.5-14b-instruct`, `mistral-7b-instruct`, Other (enter yours)
+- For **Ollama**: `qwen2.5:7b`, `qwen2.5:14b`, `llama3.1:8b`, Other (enter yours)
+- For **Custom**: `qwen2.5-14b-instruct`, Other (enter yours)
+
+**9c. Write config**
+
+Read `~/.agentmux/agents.toml`. Update the `[llm]` section — replace `url` and `model` with the chosen values (keep `timeout = 20` unless a custom timeout was specified). Write the file back.
+
+If the `[llm]` section is absent (unlikely — `install.sh` creates it from the example), append it.
+
+### 10. Self-install this command
 
 So `/agentmux:install` is available globally in future Claude Code sessions:
 
@@ -132,17 +180,25 @@ mkdir -p ~/.claude/commands/agentmux
 
 Read `$REPO_DIR/.claude/commands/agentmux/install.md` and write it verbatim to `~/.claude/commands/agentmux/install.md`.
 
-### 10. Summary
+### 11. Summary
 
-Print a concise summary: what was installed, what was already present, what was skipped. Include applicable reload commands:
+Print a summary in three sections:
 
+**Installed**
+- agentmux vX.X.X → `~/.agentmux/` ✓
+- List each wired item (shell config / tmux config / hooks / LLM) with its target file and status (wired / already present / skipped)
+
+**Reload**
+Only include commands that are actually relevant:
 ```bash
 source ~/.zshrc            # if shell config was wired
 tmux source ~/.tmux.conf   # if tmux config was wired (or start a new tmux server)
 ```
+Restart Claude Code if hooks were wired — hooks take effect on the next session start.
 
-Remind the user to:
-- Edit `~/.agentmux/agents.toml` to define their agents (created from the example by `install.sh`)
-- Run `amux` to launch their first session
-- Restart Claude Code if hooks were wired — hooks take effect on the next session start
-- The `--notify` flags in `PermissionRequest`/`Stop` trigger macOS desktop alerts via `osascript`; remove them if unwanted
+**Next steps**
+- Edit `~/.agentmux/agents.toml` to define your agents — this is where you set names, colours, commands, and key bindings
+- Run `amux` to launch your first session
+- If AI summaries were configured: the status bar populates automatically once Claude Code hooks are active and a session is running
+- If AI summaries were skipped: configure later by setting `url` and `model` under `[llm]` in `~/.agentmux/agents.toml`
+- The `--notify` flags in the `PermissionRequest` and `Stop` hooks trigger macOS desktop alerts via `osascript` — remove them from `~/.claude/settings.json` if unwanted
