@@ -73,7 +73,6 @@ amux [(-<flag> | <agent_name>)] [session_name]
   -h, --help     this help
 
 Related:
-  tm [session_name]   plain tmux session, no agent auto-launch
 EOF
         return 0
         ;;
@@ -118,13 +117,6 @@ EOF
   fi
 
   tmux set-option -t "$name" "@autoagent" "1"
-  _amux_attach "$name"
-}
-
-# tm [session_name] — plain tmux session, no agent auto-launch
-tm() {
-  local name="${1:-$(_amux_default_session_name)}"
-  tmux has-session -t "$name" 2>/dev/null || tmux new-session -d -s "$name" -c "$PWD"
   _amux_attach "$name"
 }
 

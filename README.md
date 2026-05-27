@@ -31,7 +31,6 @@ Edit `~/.agentmux/agents.toml` to define your agents, then add to your shell con
 | `amux -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
 | `amux <name>` | New/attach session, agent by name |
 | `amux <name> <session>` | New/attach named session with specified agent |
-| `tm [name]` | Plain tmux session, no agent |
 | `prefix-c` | New tab, auto-launches current `@agent-mode` agent |
 | `prefix-m` | Cycle `@agent-mode` through defined agents |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
@@ -138,7 +137,7 @@ The 3-row status bar shows a rolling `done / now / next` summary of the active s
 - `agentmux.conf` sourced in `~/.tmux.conf`
 - Claude Code hooks wired (above) — the `working` hook triggers the summariser
 
-The 3 extra status rows only appear for sessions started with `amux` (sets `@autoagent=1`). Sessions started with `tm` keep a single status line.
+The 3 extra status rows only appear for sessions started with `amux` (sets `@autoagent=1`). Plain tmux sessions keep a single status line.
 
 **Pipeline** (runs detached on every `working` hook):
 1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
