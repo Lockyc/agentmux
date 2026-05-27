@@ -85,16 +85,17 @@ if [ -f "$_amux_cfg" ]; then
     _amux_llm_json=$(toml2json < "$_amux_cfg" 2>/dev/null || true)
   fi
 fi
-_llm_field() {
-  [ -n "$_amux_llm_json" ] || return 0
-  printf '%s' "$_amux_llm_json" | jq -r ".llm.${1} // empty" 2>/dev/null
-}
-url="${AGENTMUX_LLM_URL:-$(_llm_field url)}"
-url="${url:-http://localhost:1234/v1/chat/completions}"
-model="${AGENTMUX_LLM_MODEL:-$(_llm_field model)}"
-model="${model:-qwen2.5-14b-instruct}"
-timeout="${AGENTMUX_LLM_TIMEOUT:-$(_llm_field timeout)}"
-timeout="${timeout:-20}"
+if [ -n "$_amux_llm_json" ]; then
+  _llm_out=$(printf '%s' "$_amux_llm_json" \
+    | jq -r '.llm.url // empty, .llm.model // empty, .llm.timeout // empty' 2>/dev/null)
+  _llm_url=$(printf '%s\n' "$_llm_out"   | sed -n '1p')
+  _llm_model=$(printf '%s\n' "$_llm_out" | sed -n '2p')
+  _llm_timeout=$(printf '%s\n' "$_llm_out" | sed -n '3p')
+fi
+url="${AGENTMUX_LLM_URL:-${_llm_url:-http://localhost:1234/v1/chat/completions}}"
+model="${AGENTMUX_LLM_MODEL:-${_llm_model:-qwen2.5-14b-instruct}}"
+timeout="${AGENTMUX_LLM_TIMEOUT:-${_llm_timeout:-20}}"
+case "$timeout" in ''|*[!0-9.]*) timeout=20 ;; esac
 
 if [ "$mode" = "stand" ]; then
   subj="${AGENTMUX_SUBJECT:-}"

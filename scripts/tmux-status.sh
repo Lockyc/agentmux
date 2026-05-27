@@ -18,7 +18,7 @@
 # /tmp/<agent_name>-substart-<pane>.txt subject-start line offset (scope B; written on re-anchor)
 # /tmp/agentmux-sum-<pane>.lock.d       summariser overlap lock
 # start state removes all of the above. Needs jq, AGENTMUX_CTX_BIN, AGENTMUX_DIGEST_BIN,
-# summarise.sh, and LM Studio at localhost:1234; without it diag shows "lm studio: unreachable".
+# summarise.sh, and a reachable LLM endpoint; without it diag shows "llm: unreachable".
 
 [ -z "$TMUX" ] && exit 0
 
@@ -181,10 +181,11 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
         rm -f "$df" 2>/dev/null
       else
         if command -v curl >/dev/null 2>&1; then
-          if curl -s --max-time 3 "http://localhost:1234/v1/models" >/dev/null 2>&1; then
+          _llm_url="${AGENTMUX_LLM_URL:-http://localhost:1234/v1/chat/completions}"
+          if curl -s --max-time 3 "$_llm_url" >/dev/null 2>&1; then
             printf "context: building..." > "$df"
           else
-            printf "lm studio: unreachable" > "$df"
+            printf "llm: unreachable" > "$df"
           fi
         fi
       fi
@@ -192,6 +193,9 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
     ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" \
       >/dev/null 2>&1 </dev/null &
   fi
+elif [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ]; then
+  [ -x "$CTX" ] || printf 'ctx: AGENTMUX_CTX_BIN not set\n' > "$diagfile"
+  [ -x "$DIG" ] || printf 'digest: AGENTMUX_DIGEST_BIN not set\n' > "$diagfile"
 fi
 
 if [ "$2" = "--notify" ]; then

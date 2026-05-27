@@ -29,7 +29,7 @@ for dir in "$REPO_DIR"/scripts/*/; do
     dest="$INSTALL_DIR/scripts/$sub/$(basename "$f")"
     [ "$f" -ef "$dest" ] || cp "$f" "$dest"
   done
-  chmod +x "$INSTALL_DIR/scripts/$sub/"*.sh 2>/dev/null || true
+  for _f in "$INSTALL_DIR/scripts/$sub/"*.sh; do [ -f "$_f" ] && chmod +x "$_f"; done
 done
 
 # Copy shell functions
@@ -75,4 +75,5 @@ echo '  "PermissionRequest": claude/status.sh permission'
 echo '  "Stop":              claude/status.sh done'
 echo ""
 echo "  Hook command path: ~/.agentmux/scripts/claude/status.sh <state>"
-echo "  Also requires LM Studio running at localhost:1234 for AI summaries."
+echo "  Also requires a local OpenAI-compatible endpoint for AI summaries."
+echo "  Default: LM Studio at localhost:1234. Set AGENTMUX_LLM_URL to use Ollama etc."
