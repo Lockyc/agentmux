@@ -177,8 +177,10 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
       df="/tmp/agentmux-diag-${pane}.txt"
       p=$(printf "%s" "$digest" | AGENTMUX_SUBJECT="$subj" "$sum" 55 stand)
       # Defence-in-depth: strip any "done:" clause the model invented despite
-      # the prompt, when the digest has no tool-action evidence (edited/wrote/
-      # ran:). See scripts/strip_unbacked_done.sh.
+      # the prompt, when the digest has no file-mutation evidence (edited or
+      # wrote). Bash "ran:" is intentionally NOT evidence here, since read-only
+      # investigation is the failure shape this gate catches.
+      # See scripts/strip_unbacked_done.sh for the full rationale.
       [ -n "$p" ] && [ -x "$gate" ] && p=$("$gate" "$digest" "$p")
       if [ -n "$p" ]; then
         printf "%s" "$p" > "$lf"

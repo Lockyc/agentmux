@@ -29,18 +29,29 @@ _has_mutation() {
 }
 
 _strip_done() {
-  # Remove a "done:" clause from a stand-mode summary line, in place.
-  # The clause runs from "done:" (allowing optional whitespace before ':')
-  # up to and including the next ';' (which separates clauses in the
-  # stand format), or to end-of-line if it's the last clause. Trailing
-  # orphan whitespace and ';' are then trimmed; '.' is preserved so a
-  # remaining "subject." reads cleanly.
+  # Remove a "done:" CLAUSE LABEL from a stand-mode summary line, in place.
+  # Matches "done:" (with optional whitespace before the colon) only when it
+  # appears as a clause label: at start-of-line, or preceded by a sentence
+  # boundary ('.') or a clause separator (';'). This guards against false
+  # positives where "done:" appears inside another clause's content
+  # (e.g. "subject. now: rewrote done: notes" must stay intact).
+  # The matched clause runs up to the next ';' or to end-of-line. Trailing
+  # orphan whitespace and ';' are trimmed; '.' is preserved so a remaining
+  # "subject." reads cleanly.
   printf '%s' "$1" | awk '
     {
       s = $0
-      if (match(s, /done[ \t]*:/) == 0) { print s; next }
-      head = substr(s, 1, RSTART - 1)
-      tail = substr(s, RSTART + RLENGTH)
+      if (match(s, /(^|[.;])[ \t]*done[ \t]*:/) == 0) { print s; next }
+      # RSTART/RLENGTH cover the whole match including any leading boundary
+      # char. Re-locate where the literal "done" begins inside the match so
+      # that boundary char (which belongs to the preceding clause) is kept
+      # in head, while only "done:" and its value are stripped.
+      ms = substr(s, RSTART, RLENGTH)
+      do_off = index(ms, "done")
+      done_start = RSTART + do_off - 1
+      done_end = RSTART + RLENGTH
+      head = substr(s, 1, done_start - 1)
+      tail = substr(s, done_end)
       j = index(tail, ";")
       if (j > 0) {
         rest = substr(tail, j + 1)
@@ -98,6 +109,20 @@ if [ "${STRIP_UNBACKED_DONE_SELFTEST:-}" = "1" ]; then
   # _strip_done: no space after ; (still split)
   got=$(_strip_done "subject. done: foo;now: bar")
   [ "$got" = "subject. now: bar" ] || { echo "sd7 FAIL got=[$got]" >&2; fail=1; }
+
+  # _strip_done: "done:" appearing inside another clause's VALUE must NOT
+  # be treated as a clause label (regression guard for the audit finding).
+  got=$(_strip_done "subject. now: rewrote done: notes; next: ship")
+  [ "$got" = "subject. now: rewrote done: notes; next: ship" ] || { echo "sd8 FAIL (inner done: stripped) got=[$got]" >&2; fail=1; }
+
+  # _strip_done: "done:" at very start of line (no subject prefix)
+  got=$(_strip_done "done: foo; now: bar")
+  [ "$got" = "now: bar" ] || { echo "sd9 FAIL got=[$got]" >&2; fail=1; }
+
+  # _strip_done: boundary requires '.' or ';' — a word ending in "done"
+  # followed immediately by ":" is NOT a clause label (e.g. "predone:")
+  got=$(_strip_done "subject. predone: marker; now: bar")
+  [ "$got" = "subject. predone: marker; now: bar" ] || { echo "sd10 FAIL (word-suffix matched) got=[$got]" >&2; fail=1; }
 
   # End-to-end gate behaviour: simulates how the caller composes it.
   _gate() {

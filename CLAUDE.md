@@ -47,4 +47,10 @@ AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 ```
 
+`summarise.sh` also has an optional live-LM smoke test that hits the configured endpoint and asserts the prompt rules survive (third-party scope, anti-invention). Manual only — skips silently if the LM is unreachable:
+
+```bash
+SUMMARISE_SMOKE=1 scripts/summarise.sh
+```
+
 Also run `shellcheck scripts/*.sh scripts/claude/*.sh shell/*.sh install.sh` if installed — lint-only, not a runtime dep, so doesn't conflict with the toml2json + jq rule.

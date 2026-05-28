@@ -42,6 +42,45 @@ _clean_para() {
     | awk -v n="${maxwords:-30}" '{for(i=1;i<=NF&&i<=n;i++) printf (i>1?" ":"") $i}'
 }
 
+# SUMMARISE_SMOKE=1 — live-LM smoke checks for prompt regressions. Hits the
+# configured LM endpoint; skips silently (exit 0) if unreachable or deps are
+# missing. NOT run by default; intended for manual invocation after prompt
+# edits. Self-recursion is guarded by clearing SUMMARISE_SMOKE in child calls.
+if [ "${SUMMARISE_SMOKE:-}" = "1" ]; then
+  command -v curl >/dev/null 2>&1 || { echo "smoke skipped: no curl"; exit 0; }
+  command -v jq   >/dev/null 2>&1 || { echo "smoke skipped: no jq"; exit 0; }
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  . "$SCRIPT_DIR/llm-config.sh"
+  _amux_load_llm
+  curl -s --max-time 3 "$_llm_url" >/dev/null 2>&1 \
+    || { echo "smoke skipped: llm unreachable at $_llm_url"; exit 0; }
+
+  fail=0
+
+  # Third-party scope rule: input mixes a parallel-agent reference with the
+  # actual session topic. Label output must NOT anchor on the parallel agent.
+  in1="we are part way through the product migration. i have an agent working on improving the desktop electron shell right now. lets focus on tag rename and merge in ts"
+  out1=$(printf "%s" "$in1" | SUMMARISE_SMOKE= "$0" 6 label)
+  case "$out1" in
+    *electron*|*desktop*)
+      echo "smoke1 FAIL (third-party subject leaked into label): [$out1]" >&2
+      fail=1 ;;
+  esac
+
+  # Anti-invention rule: thin-signal digest must not produce stereotyped
+  # migration milestones the prompt explicitly forbids.
+  in2="planning what to do next about the migration / ran: git status / ran: git log --oneline / let us pick the next step / no concrete work has happened yet"
+  out2=$(printf "%s" "$in2" | AGENTMUX_SUBJECT="migration planning" SUMMARISE_SMOKE= "$0" 55 stand)
+  case "$out2" in
+    *"initial data transfer"*|*"environment setup"*|*"integration testing"*|*"data validation"*)
+      echo "smoke2 FAIL (stereotype leaked): [$out2]" >&2
+      fail=1 ;;
+  esac
+
+  [ "$fail" = 0 ] && echo "smoke OK"
+  exit "$fail"
+fi
+
 if [ "${SUMMARISE_SELFTEST:-}" = "1" ]; then
   fail=0
   got=$( ( maxwords=3; printf '  "Refactor The Auth-Module!!"  \n' | _clean ) )
