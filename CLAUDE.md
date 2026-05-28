@@ -7,7 +7,7 @@ Configurable tmux agent launcher. Shell scripts only — no Python, Node, or oth
 Shell scripts only — split between bash and POSIX sh by what each script needs:
 
 - **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `relaunch.sh`).
-- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `llm-config.sh`, `tmux-status.sh`, `update_colors.sh`, `window_seen.sh`, `claude/{status,ctx,digest}.sh`.
+- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `update_colors.sh`, `window_seen.sh`, `claude/{status,ctx,digest}.sh`.
 
 When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
 
@@ -38,12 +38,13 @@ Bump `VERSION` (semver) when making a meaningful change. `amux --version` reads 
 Several scripts have built-in selftests — run before changing them:
 
 ```bash
-SUMMARISE_SELFTEST=1       scripts/summarise.sh
-SUMMARY_ROWS_SELFTEST=1    scripts/summary_rows.sh
-CLAUDE_CTX_SELFTEST=1      scripts/claude/ctx.sh
-CLAUDE_DIGEST_SELFTEST=1   scripts/claude/digest.sh
-AGENTMUX_CONFIG_SELFTEST=1 bash scripts/agentmux-config.sh
-AGENTMUX_STYLE_SELFTEST=1  bash scripts/agent_window_style.sh
+SUMMARISE_SELFTEST=1         scripts/summarise.sh
+STRIP_UNBACKED_DONE_SELFTEST=1 scripts/strip_unbacked_done.sh
+SUMMARY_ROWS_SELFTEST=1      scripts/summary_rows.sh
+CLAUDE_CTX_SELFTEST=1        scripts/claude/ctx.sh
+CLAUDE_DIGEST_SELFTEST=1     scripts/claude/digest.sh
+AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
+AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 ```
 
 Also run `shellcheck scripts/*.sh scripts/claude/*.sh shell/*.sh install.sh` if installed — lint-only, not a runtime dep, so doesn't conflict with the toml2json + jq rule.

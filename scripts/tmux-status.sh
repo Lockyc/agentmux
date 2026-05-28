@@ -109,6 +109,7 @@ tmux rename-window -t "$TMUX_PANE" "$render $label"
 SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
 CTX="${AGENTMUX_CTX_BIN:-}"
 DIG="${AGENTMUX_DIGEST_BIN:-}"
+GATE="${AGENTMUX_STRIP_GATE_BIN:-$HOME/.agentmux/scripts/strip_unbacked_done.sh}"
 if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] && [ -x "$DIG" ]; then
   # Resolve the configured LLM URL (used for the diag-ping fallback inside the
   # detached subshell). env > [llm] in agents.toml > default.
@@ -118,7 +119,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
   if [ -n "$pfile" ]; then
     printf '%s' "$prompt" > "$pfile"
     nohup sh -c '
-      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}
+      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}
       cur=$(cat "$pf" 2>/dev/null); rm -f "$pf"
       recent=$("$ctx" "$tp" 6 400 tail 2>/dev/null)
       if [ -n "$recent" ] && [ -n "$cur" ]; then blob="$recent / $cur"
@@ -175,6 +176,10 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
       [ -n "$digest" ] || digest="$blob"
       df="/tmp/agentmux-diag-${pane}.txt"
       p=$(printf "%s" "$digest" | AGENTMUX_SUBJECT="$subj" "$sum" 55 stand)
+      # Defence-in-depth: strip any "done:" clause the model invented despite
+      # the prompt, when the digest has no tool-action evidence (edited/wrote/
+      # ran:). See scripts/strip_unbacked_done.sh.
+      [ -n "$p" ] && [ -x "$gate" ] && p=$("$gate" "$digest" "$p")
       if [ -n "$p" ]; then
         printf "%s" "$p" > "$lf"
         rm -f "$df" 2>/dev/null
@@ -188,7 +193,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
         fi
       fi
       rmdir "$lock" 2>/dev/null
-    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" \
+    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" \
       >/dev/null 2>&1 </dev/null &
   fi
 elif [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ]; then
