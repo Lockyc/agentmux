@@ -157,12 +157,13 @@ _amux_colours() {
 
 # amux --frame [(-<flag> | <agent>)] [session]
 # Build the right-pane command: amux on the DEFAULT socket (TMUX cleared so it
-# attach-sessions there rather than switch-client'ing the frame socket). Wrapped
-# in a re-exec loop so an inner detach/exit (e.g. a habitual C-b d) re-attaches
-# instead of permanently collapsing the pane; the loop ends only when the frame
-# session itself is killed (frame-prefix Q).
+# attach-sessions there rather than switch-client'ing the frame socket), via the
+# hidden `--frame-attach` mode. That mode runs the re-exec loop in bash (the
+# script's shebang) — NOT here as a `while … done` shell snippet — because tmux
+# runs a pane command through the user's login shell, which may be fish and
+# cannot parse an sh/bash loop. A plain command invocation parses in any shell.
 _amux_frame_right_cmd() { # <self> <agent> <session>
-  printf 'while :; do env -u TMUX %s %s %s; sleep 1; done' \
+  printf 'env -u TMUX %s --frame-attach %s %s' \
     "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")"
 }
 
@@ -245,6 +246,15 @@ amux() {
         shift
         _amux_frame "$@"
         return $?
+        ;;
+      --frame-attach)
+        # Hidden: the right-pane process of a frame. Loops a normal amux attach so
+        # an inner detach/exit (e.g. a habitual prefix-d) re-attaches instead of
+        # leaving a dead pane. The loop lives here in bash — not in the tmux pane
+        # command — because tmux runs that command through the user's login shell,
+        # which may be fish and cannot parse a `while … done` sh loop.
+        shift
+        while :; do amux "$@"; sleep 1; done
         ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
@@ -352,10 +362,11 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "frame guard message" "ok" "$_got"
   _assert "frame guard exit"    "1"  "$_frc"
 
-  # _amux_frame_right_cmd: re-exec loop wrapping a TMUX-cleared amux invocation.
+  # _amux_frame_right_cmd: a plain command (no shell-loop syntax) so the user's
+  # login shell — possibly fish — can run it; the loop lives in --frame-attach.
   _rc=$(_amux_frame_right_cmd /opt/amux work proj)
   _assert "frame right_cmd shape" \
-    "while :; do env -u TMUX '/opt/amux' 'work' 'proj'; sleep 1; done" "$_rc"
+    "env -u TMUX '/opt/amux' --frame-attach 'work' 'proj'" "$_rc"
 
   # --colours render lists curated names; the line helper emits a paste field.
   cols=$(amux --colours 2>/dev/null)
