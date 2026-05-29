@@ -10,7 +10,7 @@ INSTALL_DIR="$HOME/.agentmux"
 VERSION="$(cat "$REPO_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
 echo "Installing agentmux${VERSION:+ v$VERSION} to $INSTALL_DIR ..."
 
-mkdir -p "$INSTALL_DIR/scripts" "$INSTALL_DIR/shell" "$INSTALL_DIR/tmux"
+mkdir -p "$INSTALL_DIR/scripts" "$INSTALL_DIR/shell" "$INSTALL_DIR/tmux" "$INSTALL_DIR/bin"
 
 # Copy top-level scripts
 for f in "$REPO_DIR"/scripts/*.sh; do
@@ -32,13 +32,20 @@ for dir in "$REPO_DIR"/scripts/*/; do
   for _f in "$INSTALL_DIR/scripts/$sub/"*.sh; do [ -f "$_f" ] && chmod +x "$_f"; done
 done
 
-# Copy shell functions
-src="$REPO_DIR/shell/agentmux.sh"; dest="$INSTALL_DIR/shell/agentmux.sh"
-[ "$src" -ef "$dest" ] || cp "$src" "$dest"
+# Copy shell integration files (bash/zsh + fish)
+for sh in agentmux.sh agentmux.fish; do
+  src="$REPO_DIR/shell/$sh"; dest="$INSTALL_DIR/shell/$sh"
+  [ -f "$src" ] && { [ "$src" -ef "$dest" ] || cp "$src" "$dest"; }
+done
 
 # Copy tmux snippet
 src="$REPO_DIR/tmux/agentmux.conf"; dest="$INSTALL_DIR/tmux/agentmux.conf"
 [ "$src" -ef "$dest" ] || cp "$src" "$dest"
+
+# Copy the amux executable
+src="$REPO_DIR/bin/amux"; dest="$INSTALL_DIR/bin/amux"
+[ "$src" -ef "$dest" ] || cp "$src" "$dest"
+chmod +x "$INSTALL_DIR/bin/amux"
 
 # Copy VERSION
 [ -f "$REPO_DIR/VERSION" ] && cp "$REPO_DIR/VERSION" "$INSTALL_DIR/VERSION"
@@ -52,9 +59,13 @@ else
 fi
 
 echo ""
-echo "Done. Add the following to your shell config (~/.zshrc or ~/.bashrc):"
+echo "Done. Add the following to your shell config:"
 echo ""
-echo "  source ~/.agentmux/shell/agentmux.sh"
+echo "  bash/zsh (~/.zshrc or ~/.bashrc):"
+echo "    source ~/.agentmux/shell/agentmux.sh"
+echo ""
+echo "  fish (~/.config/fish/config.fish):"
+echo "    source ~/.agentmux/shell/agentmux.fish"
 echo ""
 echo "Add the following to your ~/.tmux.conf:"
 echo ""
