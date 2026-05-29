@@ -52,6 +52,10 @@ Updating an installed clone: `amux --update` (= `git -C ~/.agentmux pull --ff-on
 
 The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do **not** need to be copied to `~/.claude/hooks/`.
 
+## Branches
+
+`dev` is the working branch — do day-to-day work here, and default to it. `main` is the release branch: merge `dev` into `main` to cut a release. Don't commit directly to `main`.
+
 ## Versioning
 
 Bump `VERSION` (semver) when making a meaningful change. For clone installs,
