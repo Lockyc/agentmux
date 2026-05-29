@@ -50,5 +50,6 @@ name = "opencode"
 flag = "o"
 cmd = "opencode"
 # Escape hatch: full raw tmux styles override `colour` for total control.
+# Set them as a pair — `colour` is only auto-derived when BOTH are absent.
 colour_inactive = "fg=black,bg=colour54"
 colour_active = "fg=black,bg=colour99,bold"
