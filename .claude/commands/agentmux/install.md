@@ -261,5 +261,5 @@ Restart Claude Code if hooks were wired — hooks take effect on the next sessio
 - If AI summaries were skipped: configure later by setting `url` and `model` under `[llm]` in `~/.agentmux/agents.toml`
 - The `--notify` flags in the `PermissionRequest` and `Stop` hooks trigger macOS desktop alerts via `osascript` — remove them from `~/.claude/settings.json` if unwanted
 - Update agentmux any time with `amux --update` (it's a git clone now — a plain `git pull`).
-- Side-terminal layout: `amux --frame [agent] [session]` opens a scratch terminal beside amux (nested tmux, no `~/.tmux.conf` changes). Set the left-pane width with `[frame] left = <percent>`; see the README for the frame's `C-a` keys.
+- Side-terminal layout: `amux --frame [agent] [session]` opens a scratch terminal beside amux (nested tmux, no `~/.tmux.conf` changes). Set the left-pane width with `[frame] left = <percent>`; see the README for the frame's prefix keys.
 - Enable a once-daily update check by setting `[update] check = true` in `~/.agentmux/agents.toml`.

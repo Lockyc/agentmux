@@ -111,15 +111,21 @@ Matching uses the logical path — `$PWD` as your shell shows it — and symlink
 `amux --frame [agent] [session]` opens a scratch terminal in the left pane
 beside amux in the right pane. The split is a nested tmux on its own socket
 (`agentmux-frame`), so amux runs completely unchanged on the right with its own
-tab bar — there is no outer status bar.
+tab bar — there is no outer status bar. (Requires tmux ≥ 3.1 for the `-l %`
+split sizing.)
 
-- The frame uses a **secondary prefix `C-a`** for its few controls (`C-a h`/`C-a l`
-  focus left/right, `C-a H`/`C-a L` resize, `C-a Q` quit the frame, `C-a d` detach).
-  amux keeps `C-b`: the frame doesn't claim it, so it reaches amux when the right pane is focused.
+- The frame uses a **secondary prefix `C-o`** for its few controls (`C-o h`/`C-o l`
+  focus left/right, `C-o H`/`C-o L` resize, `C-o Q` quit the frame, `C-o d` detach).
+  `C-o` is an inert key, so it won't shadow line editing in the panes; amux keeps
+  `C-b`, which the frame doesn't claim, so it reaches amux when the right pane is
+  focused. Change the frame prefix with `[frame] prefix` (default `C-o`; not `C-b`).
 - Set the left-pane width with `[frame] left = <percent>` (default `33`).
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
-  `amux --frame <session>`. `C-a Q` tears down the frame without touching the amux
-  session (kill that the usual way: `prefix-&` or `tmux kill-session`).
+  `amux --frame <session>`. Leave with `C-o d` (detach — both sides keep running)
+  or `C-o Q` (quit the frame; the amux session survives on its own socket — kill
+  that the usual way with `prefix-&` / `tmux kill-session`).
+- The right pane re-attaches the agent automatically, so an inner `C-b d` just
+  bounces you back in; use `C-o d` / `C-o Q` to actually leave the frame.
 
 ## Adding an agent
 
