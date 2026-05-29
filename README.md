@@ -108,14 +108,14 @@ Matching uses the logical path — `$PWD` as your shell shows it — and symlink
 
 ### Side-terminal layout (`--frame`)
 
-`amux --frame [agent] [session]` opens a fixed scratch terminal in the left pane
+`amux --frame [agent] [session]` opens a scratch terminal in the left pane
 beside amux in the right pane. The split is a nested tmux on its own socket
 (`agentmux-frame`), so amux runs completely unchanged on the right with its own
 tab bar — there is no outer status bar.
 
 - The frame uses a **secondary prefix `C-a`** for its few controls (`C-a h`/`C-a l`
   focus left/right, `C-a H`/`C-a L` resize, `C-a Q` quit the frame, `C-a d` detach).
-  amux keeps `C-b`, which passes straight through to the right pane.
+  amux keeps `C-b`: the frame doesn't claim it, so it reaches amux when the right pane is focused.
 - Set the left-pane width with `[frame] left = <percent>` (default `33`).
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
   `amux --frame <session>`. `C-a Q` tears down the frame without touching the amux
