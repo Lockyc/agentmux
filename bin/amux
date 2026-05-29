@@ -35,6 +35,23 @@ _amux_attach() {
   fi
 }
 
+# Update an installed clone in place. Dev/symlink installs are not clones and
+# are updated via the source checkout instead.
+_amux_update() {
+  local dir="$1"
+  if [ -d "$dir/.git" ]; then
+    if ! git -C "$dir" pull --ff-only; then
+      echo "agentmux: update failed — resolve manually in $dir (run: git -C $dir status)" >&2
+      return 1
+    fi
+    local v; v=$(tr -d '[:space:]' < "$dir/VERSION" 2>/dev/null)
+    echo "agentmux updated to ${v:-unknown}"
+  else
+    echo "agentmux: $dir is not a git clone (dev/symlink install) — 'git pull' your source checkout instead" >&2
+    return 1
+  fi
+}
+
 _amux_launch_window0() {
   local session="$1" agent="$2"
   local idx cmd
@@ -67,6 +84,10 @@ amux() {
         echo "agentmux ${v:-unknown}"
         return 0
         ;;
+      --update)
+        _amux_update "$HOME/.agentmux"
+        return $?
+        ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
         agentmux_list_agent_completions
@@ -82,6 +103,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   (none)         first agent in agents.toml
   session_name   defaults to basename of $PWD (dots → underscores)
 
+  --update       update to the latest agentmux (git pull)
   --version      print version
   --help         this help
 EOF
@@ -116,6 +138,10 @@ EOF
   # already strips . from the PWD basename; mirror that for explicit names.
   session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
   [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
+
+  # Opt-in daily check for a newer agentmux (self-gates on [update] check;
+  # notice is instant, the network refresh is backgrounded — never blocks launch).
+  [ -x "$AGENTMUX_SCRIPTS/version_check.sh" ] && "$AGENTMUX_SCRIPTS/version_check.sh" || true
 
   local name="$session_arg"
 
@@ -165,6 +191,18 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   ver=$(amux --version)
   case "$ver" in "agentmux "*) _got="ok" ;; *) _got="bad" ;; esac
   _assert "version prefix" "ok" "$_got"
+
+  # --help advertises --update.
+  case "$help" in *"--update"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help advertises --update" "present" "$_got"
+
+  # _amux_update on a non-clone dir explains the dev case and fails non-zero.
+  _td=$(mktemp -d)
+  _out=$(_amux_update "$_td" 2>&1); _rc=$?
+  case "$_out" in *"is not a git clone"*) _got="ok" ;; *) _got="bad:$_out" ;; esac
+  _assert "update non-clone message" "ok" "$_got"
+  _assert "update non-clone exit"    "1"  "$_rc"
+  rmdir "$_td"
 
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
