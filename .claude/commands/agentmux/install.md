@@ -85,7 +85,7 @@ Mark as "Recommended" those not already detected as wired. Also mark **AI summar
 
 Wire every shell the user actually uses — determine targets from `$SHELL` and which config files exist. A user on fish may also keep a bash/zsh rc; wire each that applies.
 
-**bash/zsh** — use `~/.zshrc` if it exists, otherwise `~/.bashrc`. If `source ~/.agentmux/shell/agentmux.sh` is not already present, append:
+**bash/zsh** — only if the user uses bash/zsh (`$SHELL` ends in `bash`/`zsh`, or a `~/.zshrc`/`~/.bashrc` already exists — do **not** create one for a fish-only user). Use `~/.zshrc` if it exists, otherwise `~/.bashrc`. If `source ~/.agentmux/shell/agentmux.sh` is not already present, append:
 
 ```
 # agentmux
