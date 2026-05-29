@@ -23,6 +23,7 @@ source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 # tmux config dir (sibling of scripts/) and the dedicated socket for --frame.
 AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
 AGENTMUX_FRAME_SOCKET="${AGENTMUX_FRAME_SOCKET:-agentmux-frame}"
+AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
 
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -168,6 +169,15 @@ _amux_frame_right_cmd() { # <self> <agent> <session>
     "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")"
 }
 
+# Build the left-pane command: a dedicated, persistent scratch-terminal tmux on
+# its own socket (TMUX cleared so it doesn't nest into the frame socket). Plain
+# invocation — no shell loop — so any login shell incl. fish can run it;
+# persistence is handled inside term.conf (respawn hook), not here.
+_amux_frame_left_cmd() { # <term-socket> <term-conf> <term-session>
+  printf 'env -u TMUX tmux -L %s -f %s new-session -A -s %s -c %s' \
+    "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")" "$(_amux_shquote "$PWD")"
+}
+
 # Outer "frame": a bare $SHELL in the left pane, amux in the right pane, as a
 # nested tmux on a dedicated socket. Must be run from a plain terminal.
 _amux_frame() {
@@ -175,9 +185,12 @@ _amux_frame() {
     echo "amux: --frame must be run from a plain terminal, not inside tmux" >&2
     return 1
   fi
-  local frame_conf="$AGENTMUX_TMUX/frame.conf"
+  local frame_conf="$AGENTMUX_TMUX/frame.conf" term_conf="$AGENTMUX_TMUX/term.conf"
   if [ ! -f "$frame_conf" ]; then
     echo "amux: frame config not found at $frame_conf" >&2; return 1
+  fi
+  if [ ! -f "$term_conf" ]; then
+    echo "amux: term config not found at $term_conf" >&2; return 1
   fi
 
   local target agent session
@@ -198,19 +211,20 @@ _amux_frame() {
   fi
 
   if ! tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
-    local left right self right_cmd fprefix
+    local left right self right_cmd left_cmd fprefix
     left=$(_amux_frame_width)
     right=$((100 - left))
     # Absolute path to this launcher, for the right-pane invocation.
     self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    left_cmd=$(_amux_frame_left_cmd "$AGENTMUX_TERM_SOCKET" "$term_conf" "${session}-term")
     right_cmd=$(_amux_frame_right_cmd "$self" "$agent" "$session")
-    tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD"
+    # Left pane = persistent scratch terminal (own socket); right pane = amux.
+    tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD" "$left_cmd"
     # Optional per-user frame prefix override ([frame] prefix); default is in frame.conf.
     fprefix=$(agentmux_frame_field prefix)
     [ -n "$fprefix" ] && tmux -L "$sock" set -g prefix "$fprefix"
-    # Left pane = bare $SHELL; right pane = amux. `-l` sizes the new (right) pane,
-    # so the left lands at $left% (`-l N%` needs tmux >= 3.1). split-window -h
-    # leaves the new right/agent pane focused — the pane we want on launch.
+    # `-l` sizes the new (right) pane, so the left lands at $left% (`-l N%` needs
+    # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
     tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" "$right_cmd"
   fi
   tmux -L "$sock" attach-session -t "$fsess"
@@ -222,16 +236,20 @@ _amux_frames() {
   tmux -L "$AGENTMUX_FRAME_SOCKET" list-sessions 2>/dev/null || echo "amux: no active frames"
 }
 
-# Kill a frame wrapper from the base terminal (default: the current dir's). Only
-# touches the frame socket — the agent session on the default socket is left
-# running (kill it separately with `tmux kill-session -t <session>`).
+# Kill a frame from the base terminal (default: the current dir's). Tears down the
+# wrapper (frame socket) AND its scratch terminal (term socket); the agent session
+# on the default socket is left running (kill it separately with
+# `tmux kill-session -t <session>`).
 _amux_frame_kill() {
-  local session
-  if [ $# -gt 0 ]; then session=$(printf '%s' "$1" | tr '.:' '__'); else session=$(_amux_default_session_name); fi
-  local fsess; case "$session" in *-frame) fsess="$session" ;; *) fsess="${session}-frame" ;; esac
-  local sock="$AGENTMUX_FRAME_SOCKET"
-  if tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
-    tmux -L "$sock" kill-session -t "$fsess" && echo "killed frame '$fsess' (agent session, if any, still runs)"
+  local arg base
+  if [ $# -gt 0 ]; then arg=$(printf '%s' "$1" | tr '.:' '__'); else arg=$(_amux_default_session_name); fi
+  case "$arg" in *-frame) base="${arg%-frame}" ;; *) base="$arg" ;; esac
+  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
+  local fsess="${base}-frame" tsess="${base}-term"
+  if tmux -L "$fsock" has-session -t "$fsess" 2>/dev/null; then
+    tmux -L "$fsock" kill-session -t "$fsess" 2>/dev/null
+    tmux -L "$tsock" kill-session -t "$tsess" 2>/dev/null   # its scratch terminal
+    echo "killed frame '$fsess' + terminal '$tsess' (agent session, if any, still runs)"
   else
     echo "amux: no frame '$fsess' (try: amux --frames)" >&2; return 1
   fi
@@ -390,6 +408,12 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # and parseable by any login shell incl. fish).
   _rc=$(_amux_frame_right_cmd /opt/amux work proj)
   _assert "frame right_cmd shape" "env -u TMUX '/opt/amux' 'work' 'proj'" "$_rc"
+
+  # _amux_frame_left_cmd: plain attach to the dedicated term socket (trailing
+  # `-c <PWD>` varies, so assert the stable prefix).
+  _lc=$(_amux_frame_left_cmd agentmux-term /c/term.conf proj-term)
+  case "$_lc" in "env -u TMUX tmux -L 'agentmux-term' -f '/c/term.conf' new-session -A -s 'proj-term' -c '"*) _got=ok ;; *) _got="bad:$_lc" ;; esac
+  _assert "frame left_cmd shape" "ok" "$_got"
 
   # --help advertises the frame management commands.
   case "$help" in *"--frames"*) _got=present ;; *) _got=absent ;; esac

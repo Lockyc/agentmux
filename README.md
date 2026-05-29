@@ -86,7 +86,7 @@ amux
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 | `amux --frames` | List active `--frame` wrappers (they live on a separate tmux socket) |
-| `amux --frame-kill [session]` | Kill a frame wrapper (default: current dir's); the agent keeps running |
+| `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
 
 Set `[update] check = true` in `~/.agentmux/agents.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
@@ -110,34 +110,36 @@ Matching uses the logical path — `$PWD` as your shell shows it — and symlink
 
 ### Side-terminal layout (`--frame`)
 
-`amux --frame [agent] [session]` opens a scratch terminal in the left pane
-beside amux in the right pane. The split is a nested tmux on its own socket
-(`agentmux-frame`, in a session named `<session>-frame` to keep it distinct from
-the amux session it wraps), so amux runs completely unchanged on the right with
-its own tab bar — there is no outer status bar. (Requires tmux ≥ 3.1 for the
-`-l %` split sizing.)
+`amux --frame [agent] [session]` puts a persistent scratch terminal in the left
+pane beside amux in the right. It's a nested tmux on its own socket
+(`agentmux-frame`, session `<session>-frame`), so amux runs completely unchanged
+on the right. There are **three status bars**: a thin full-width outer bar (the
+frame, showing the project + clock), and a per-pane bar under each side — the left
+terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
 
-- The frame uses a **secondary prefix `C-f`** ("f" for frame) for its few controls
-  (`C-f h`/`C-f l` focus left/right, `C-f H`/`C-f L` resize, `C-f Q` quit the frame,
-  `C-f d` detach). amux keeps `C-b`, which the frame doesn't claim, so it reaches
-  amux when the right pane is focused. Change the frame prefix with `[frame] prefix`
-  (default `C-f`; anything but `C-b`).
+- The **left pane is its own dedicated tmux** on a separate `agentmux-term` socket
+  (config `tmux/term.conf`): its own tab bar, and it **never dies** — exit the
+  shell and it respawns. It's a bare tmux (not your `~/.tmux.conf`), kept isolated
+  on purpose.
+- **Prefixes:** the frame uses `C-f` ("f" for frame — `C-f h`/`l` focus, `C-f H`/`L`
+  resize, `C-f Q` quit, `C-f d` detach), overridable via `[frame] prefix`. Both
+  inner tmuxes use `C-b`, which the frame passes through to whichever pane is
+  focused: left → the terminal's tabs, right → amux.
 - Set the left-pane width with `[frame] left = <percent>` (default `33`).
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
-  `amux --frame <session>` (if the right pane was closed, it's rebuilt).
-- **Two sessions, two sockets.** `--frame` involves a session named `<session>`
-  (your agent, on the **default** socket — what plain `tmux ls` shows) and a
-  wrapper `<session>-frame` (on the separate `agentmux-frame` socket — invisible
-  to a base-terminal `tmux ls`, which only talks to the default socket). The frame
-  is the *outer* layer in the nesting sense, but it lives on its own socket so its
-  stripped config never bleeds into your normal tmux — which is also why your base
-  terminal doesn't list it.
-- **Managing it all from the base terminal:**
-  - Leave the frame from inside: `C-f d` (detach, both kept) or `C-f Q` (quit the
+  `amux --frame <session>` (a closed pane is rebuilt).
+- **Three sessions across three sockets.** `<session>` — your agent, on the
+  **default** socket (what plain `tmux ls` shows). `<session>-frame` — the wrapper,
+  on `agentmux-frame`. `<session>-term` — the left terminal, on `agentmux-term`.
+  The frame is the *outer* layer in the nesting sense, but each lives on its own
+  socket so their stripped configs never bleed into your normal tmux — which is
+  also why a base-terminal `tmux ls` (default socket) only shows the agent.
+- **Managing it from the base terminal:**
+  - Leave the frame from inside: `C-f d` (detach, all kept) or `C-f Q` (quit the
     wrapper; the agent survives, reattach later).
   - `amux --frames` — list active frames (no need to remember the socket).
-  - `amux --frame-kill [session]` — kill a frame wrapper (default: current dir's);
-    the agent session keeps running.
+  - `amux --frame-kill [session]` — tear down a frame: both the wrapper and its
+    left terminal (default: current dir's). The agent session keeps running.
   - `tmux kill-session -t <session>` — kill the **agent** like any amux session;
     the frame's right pane then just closes (it won't respawn).
 
