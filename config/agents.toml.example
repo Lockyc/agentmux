@@ -27,6 +27,10 @@ timeout = 20
 # `amux --frame` layout: a bare scratch terminal in the left pane beside amux in
 # the right pane (its own nested tmux). `left` is the left-pane width, percent.
 left = 33
+# Secondary prefix for the frame's own controls (focus/resize/quit). Defaults to
+# C-o — an inert key that won't shadow line editing in the panes. Override here
+# (anything but C-b, which amux uses), e.g.:
+# prefix = "C-Space"
 
 [[agents]]
 name = "personal"

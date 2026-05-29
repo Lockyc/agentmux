@@ -156,6 +156,16 @@ _amux_colours() {
 }
 
 # amux --frame [(-<flag> | <agent>)] [session]
+# Build the right-pane command: amux on the DEFAULT socket (TMUX cleared so it
+# attach-sessions there rather than switch-client'ing the frame socket). Wrapped
+# in a re-exec loop so an inner detach/exit (e.g. a habitual C-b d) re-attaches
+# instead of permanently collapsing the pane; the loop ends only when the frame
+# session itself is killed (frame-prefix Q).
+_amux_frame_right_cmd() { # <self> <agent> <session>
+  printf 'while :; do env -u TMUX %s %s %s; sleep 1; done' \
+    "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")"
+}
+
 # Outer "frame": a bare $SHELL in the left pane, amux in the right pane, as a
 # nested tmux on a dedicated socket. Must be run from a plain terminal.
 _amux_frame() {
@@ -175,16 +185,20 @@ _amux_frame() {
 
   local sock="$AGENTMUX_FRAME_SOCKET"
   if ! tmux -L "$sock" has-session -t "$session" 2>/dev/null; then
-    local left right self right_cmd
+    local left right self right_cmd fprefix
     left=$(_amux_frame_width)
     right=$((100 - left))
     # Absolute path to this launcher, for the right-pane invocation.
     self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-    # Right pane: amux on the DEFAULT socket (TMUX unset → attach-session there).
-    right_cmd="env -u TMUX $(_amux_shquote "$self") $(_amux_shquote "$agent") $(_amux_shquote "$session")"
+    right_cmd=$(_amux_frame_right_cmd "$self" "$agent" "$session")
     tmux -L "$sock" -f "$frame_conf" new-session -d -s "$session" -c "$PWD"
+    # Optional per-user frame prefix override ([frame] prefix); default is in frame.conf.
+    fprefix=$(agentmux_frame_field prefix)
+    [ -n "$fprefix" ] && tmux -L "$sock" set -g prefix "$fprefix"
+    # Left pane = bare $SHELL; right pane = amux. `-l` sizes the new (right) pane,
+    # so the left lands at $left% (`-l N%` needs tmux >= 3.1). split-window -h
+    # leaves the new right/agent pane focused — the pane we want on launch.
     tmux -L "$sock" split-window -h -t "$session" -l "${right}%" -c "$PWD" "$right_cmd"
-    tmux -L "$sock" select-pane -t "$session" -R
   fi
   tmux -L "$sock" attach-session -t "$session"
 }
@@ -326,6 +340,11 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$_fout" in *"must be run from a plain terminal"*) _got=ok ;; *) _got="bad:$_fout" ;; esac
   _assert "frame guard message" "ok" "$_got"
   _assert "frame guard exit"    "1"  "$_frc"
+
+  # _amux_frame_right_cmd: re-exec loop wrapping a TMUX-cleared amux invocation.
+  _rc=$(_amux_frame_right_cmd /opt/amux work proj)
+  _assert "frame right_cmd shape" \
+    "while :; do env -u TMUX '/opt/amux' 'work' 'proj'; sleep 1; done" "$_rc"
 
   # --colours render lists curated names; the line helper emits a paste field.
   cols=$(amux --colours 2>/dev/null)
