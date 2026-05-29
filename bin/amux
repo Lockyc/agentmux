@@ -20,6 +20,50 @@ fi
 source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
 source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 
+# tmux config dir (sibling of scripts/) and the dedicated socket for --frame.
+AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
+AGENTMUX_FRAME_SOCKET="${AGENTMUX_FRAME_SOCKET:-agentmux-frame}"
+
+# Single-quote a string for safe interpolation into an `sh -c` command line.
+_amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# Resolve the left-pane width for --frame: [frame] left (percent), default 33,
+# clamped to 10..90. Non-numeric or absent → default.
+_amux_frame_width() {
+  local w; w=$(agentmux_frame_field left)
+  case "$w" in ''|*[!0-9]*) w=33 ;; esac
+  [ "$w" -lt 10 ] && w=10
+  [ "$w" -gt 90 ] && w=90
+  printf '%s' "$w"
+}
+
+# Resolve (agent, session) from amux positional args: [(-flag | name)] [session].
+# Echoes agent on line 1, session on line 2. Mirrors amux()'s own precedence:
+# flag → name → dir-routing → first agent; session defaults to sanitised $PWD.
+_amux_resolve_target() {
+  local agent_name=""
+  if [ $# -gt 0 ]; then
+    case "$1" in
+      -*)
+        local flag="${1#-}" fidx
+        fidx=$(agentmux_find_by_flag "$flag")
+        if [ "$fidx" = "-1" ]; then
+          echo "agentmux: unknown flag -$flag" >&2; return 1
+        fi
+        agent_name=$(agentmux_agent_field "$fidx" name); shift ;;
+    esac
+  fi
+  if [ $# -gt 0 ] && [ -z "$agent_name" ]; then
+    local nidx; nidx=$(agentmux_find_by_name "$1")
+    if [ "$nidx" != "-1" ]; then agent_name="$1"; shift; fi
+  fi
+  local session_arg="${1:-$(_amux_default_session_name)}"
+  session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
+  [ -z "$agent_name" ] && agent_name=$(agentmux_agent_for_dir "$PWD")
+  [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
+  printf '%s\n%s\n' "$agent_name" "$session_arg"
+}
+
 _amux_default_session_name() {
   basename "$PWD" | tr . _
 }
@@ -158,36 +202,13 @@ amux [(-<flag> | <agent_name>)] [session_name]
 EOF
         return 0
         ;;
-      -*)
-        local flag="${1#-}"
-        local fidx
-        fidx=$(agentmux_find_by_flag "$flag")
-        if [ "$fidx" != "-1" ]; then
-          agent_name=$(agentmux_agent_field "$fidx" name)
-        else
-          echo "agentmux: unknown flag -$flag" >&2; return 1
-        fi
-        shift
-        ;;
     esac
   fi
 
-  if [ $# -gt 0 ] && [ -z "$agent_name" ]; then
-    local nidx
-    nidx=$(agentmux_find_by_name "$1")
-    if [ "$nidx" != "-1" ]; then
-      agent_name="$1"; shift
-    fi
-  fi
-
-  session_arg="${1:-$(_amux_default_session_name)}"
-  # tmux uses . and : as target separators (`session.win.pane`, `session:win`);
-  # an unsanitised name (any path the default doesn't cover, e.g. user-supplied
-  # `mysite.com`) breaks `tmux has-session -t` and friends. _amux_default_session_name
-  # already strips . from the PWD basename; mirror that for explicit names.
-  session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
-  [ -z "$agent_name" ] && agent_name=$(agentmux_agent_for_dir "$PWD")
-  [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
+  local _amux_target
+  _amux_target=$(_amux_resolve_target "$@") || return 1
+  agent_name=$(printf '%s' "$_amux_target" | sed -n 1p)
+  session_arg=$(printf '%s' "$_amux_target" | sed -n 2p)
 
   # Opt-in daily check for a newer agentmux (self-gates on [update] check;
   # notice is instant, the network refresh is backgrounded — never blocks launch).
@@ -212,6 +233,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"
   _amux_json_cache=""
+  # Isolate the disk cache so synthetic configs don't collide with real or
+  # each other (same-second mtime → same cache key on fast machines).
+  _selftest_cache=$(mktemp -d); export XDG_CACHE_HOME="$_selftest_cache"
   pass=0; fail=0
   _assert() {
     local desc="$1" expected="$2" actual="$3"
@@ -258,6 +282,41 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$line" in *'colour = "teal"'*) _got=ok ;; *) _got=bad ;; esac
   _assert "colour line paste field" "ok" "$_got"
 
+  # _amux_shquote wraps and escapes embedded single quotes.
+  _assert "shquote plain"  "'work'"      "$(_amux_shquote work)"
+  _assert "shquote squote" "'a'\\''b'"   "$(_amux_shquote "a'b")"
+
+  # _amux_frame_width: example config sets [frame] left = 33.
+  _assert "frame_width default" "33" "$(_amux_frame_width)"
+
+  # _amux_frame_width clamps from synthetic configs. Clear the (isolated) disk
+  # cache between rewrites — same-second mtime would otherwise alias the cache.
+  _fw=$(mktemp /tmp/amux-frame-XXXXXX.toml)
+  printf '[frame]\nleft = 5\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_width clamp low"  "10" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
+  printf '[frame]\nleft = 200\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_width clamp high" "90" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
+  printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_width no-frame"   "33" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
+  rm -f "$_fw"
+  AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"; _amux_json_cache=""
+
+  # _amux_resolve_target: flag/name/session precedence (explicit session = deterministic).
+  _rt=$(_amux_resolve_target -w proj)
+  _assert "resolve -w agent"   "work" "$(printf '%s' "$_rt" | sed -n 1p)"
+  _assert "resolve -w session" "proj" "$(printf '%s' "$_rt" | sed -n 2p)"
+  _rt=$(_amux_resolve_target work proj)
+  _assert "resolve name agent" "work" "$(printf '%s' "$_rt" | sed -n 1p)"
+  _rt=$(_amux_resolve_target -w 'a.b:c')
+  _assert "resolve sanitises session" "a_b_c" "$(printf '%s' "$_rt" | sed -n 2p)"
+  _err=$(_amux_resolve_target -Z 2>&1 >/dev/null); _rc=$?
+  case "$_err" in *"unknown flag -Z"*) _got=ok ;; *) _got="bad:$_err" ;; esac
+  _assert "resolve unknown flag msg"  "ok" "$_got"
+  _assert "resolve unknown flag exit" "1"  "$_rc"
+
   # _amux_update on a non-clone dir explains the dev case and fails non-zero.
   _td=$(mktemp -d)
   _out=$(_amux_update "$_td" 2>&1); _rc=$?
@@ -266,6 +325,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "update non-clone exit"    "1"  "$_rc"
   rmdir "$_td"
 
+  rm -rf "$_selftest_cache"
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
   exit $?
