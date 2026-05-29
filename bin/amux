@@ -255,7 +255,10 @@ _amux_frames() {
 # `tmux kill-session -t <session>`).
 _amux_frame_kill() {
   local arg base
-  if [ $# -gt 0 ]; then arg=$(printf '%s' "$1" | tr '.:' '__'); else arg=$(_amux_default_session_name); fi
+  if [ $# -gt 0 ]; then arg="$1"; else arg=$(_amux_default_session_name); fi
+  # Sanitise both paths the same way the frame was named (_amux_resolve_target
+  # maps . and : → _); the no-arg default basename can still carry a colon.
+  arg=$(printf '%s' "$arg" | tr '.:' '__')
   case "$arg" in *-frame) base="${arg%-frame}" ;; *) base="$arg" ;; esac
   local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
   local fsess="${base}-frame" tsess="${base}-term"
@@ -441,6 +444,16 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$_fk" in *"no frame '__nope__-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
   _assert "frame-kill missing msg"  "ok" "$_got"
   _assert "frame-kill missing exit" "1"  "$_fkrc"
+  # --frame-kill explicit arg sanitises . and : (matches how the frame is named).
+  _fk=$(amux --frame-kill 'a.b:c' 2>&1)
+  case "$_fk" in *"no frame 'a_b_c-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
+  _assert "frame-kill sanitises arg" "ok" "$_got"
+  # --frame-kill no-arg default also sanitises the PWD basename's colon (the bug:
+  # the default path used to skip : so it computed a name the frame never had).
+  _ckdir="$_selftest_cache/has:colon"; mkdir -p "$_ckdir"
+  _fk=$(cd "$_ckdir" && amux --frame-kill 2>&1)
+  case "$_fk" in *"no frame 'has_colon-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
+  _assert "frame-kill default sanitises colon" "ok" "$_got"
 
   # --colours render lists curated names; the line helper emits a paste field.
   cols=$(amux --colours 2>/dev/null)
