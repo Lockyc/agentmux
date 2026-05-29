@@ -16,14 +16,16 @@
 session="${1:-$(tmux display-message -p '#S')}"
 
 # bg fg — one pair per line. Keep backgrounds saturated, not near-black.
+# Must stay >=2 cube-distance from every agent tab base (colours.sh
+# _colour_palette), or an inactive window tab blends into the bar. colour60
+# (vs slate) and colour99 (vs blue/purple) are deliberately omitted for that
+# reason; the "tab bases clear of bar palette" selftest in colours.sh enforces it.
 palette='24 231
 30 231
 25 231
 31 231
 28 231
-60 231
 90 231
-99 231
 127 231
 132 231
 130 231

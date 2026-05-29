@@ -160,6 +160,28 @@ if [ "${COLOURS_SELFTEST:-}" = "1" ]; then
     | sed 's/.*bg=colour//; s/,bold//'; done | sort | uniq -d | tr '\n' ' '; }
   _assert "active bgs unique"   "" "$(_adups 2)"
   _assert "inactive bgs unique" "" "$(_adups 1)"
+  # Cross-palette guard: every inactive tab base must stay >=2 cube-distance from
+  # every status-bar colour (update_colors.sh), else a tab blends into the bar.
+  # Test-only read of the sibling script — the runtime stays dependency-free.
+  bars=$(sed -n "/palette='/,/'\$/p" "$(dirname "$0")/update_colors.sh" \
+         | sed "s/.*palette='//; s/'\$//" | awk '{print $1}')
+  _bar_mindist() { # min squared cube-distance from base $1 to any bar colour
+    br=$((($1-16)/36%6)); bg=$((($1-16)/6%6)); bb=$((($1-16)%6)); m=999
+    for s in $bars; do
+      d=$(( (br-($s-16)/36%6)*(br-($s-16)/36%6) \
+          + (bg-($s-16)/6%6)*(bg-($s-16)/6%6) \
+          + (bb-($s-16)%6)*(bb-($s-16)%6) ))
+      [ "$d" -lt "$m" ] && m=$d
+    done
+    echo "$m"
+  }
+  worst=999; worstn=""
+  for nm in $(colour_names); do
+    d=$(_bar_mindist "$(_colour_resolve "$nm")")
+    [ "$d" -lt "$worst" ] && { worst=$d; worstn=$nm; }
+  done
+  [ "$worst" -ge 2 ] && near="ok" || near="CLASH:$worstn(d=$worst)"
+  _assert "tab bases clear of bar palette" "ok" "$near"
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]; exit $?
 fi
