@@ -4,10 +4,11 @@ Configurable tmux agent launcher. Shell scripts only — no Python, Node, or oth
 
 ## Stack
 
-Shell scripts only — split between bash and POSIX sh by what each script needs:
+Shell scripts only — split between bash, POSIX sh, and (for the fish integration) fish, by what each script needs:
 
-- **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `relaunch.sh`).
+- **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `bin/amux`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `relaunch.sh`).
 - **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `update_colors.sh`, `window_seen.sh`, `claude/{status,ctx,digest}.sh`.
+- **fish** (`shell/agentmux.fish`) — the fish-shell integration only. It is a thin wrapper around `bin/amux` plus a `complete` line; it never sources bash libs (fish can't). All real logic stays in `bin/amux`.
 
 When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
 
@@ -15,17 +16,19 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 
 | Path | Purpose |
 |---|---|
+| `bin/amux` | The `amux` launcher — standalone bash, single source of truth for amux logic |
 | `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`) |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
-| `shell/agentmux.sh` | Shell functions sourced by the user (`amux`) |
+| `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
+| `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
 | `config/agents.toml.example` | Example agent config |
 | `VERSION` | Semver version string |
 
 ## Local dev setup
 
-`~/.agentmux/scripts`, `~/.agentmux/shell`, and `~/.agentmux/tmux` are directory-level symlinks to the repo. Changes to scripts are live immediately — no install step needed during development.
+`~/.agentmux/scripts`, `~/.agentmux/shell`, `~/.agentmux/tmux`, and `~/.agentmux/bin` are directory-level symlinks to the repo. Changes to scripts are live immediately — no install step needed during development.
 
 The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do **not** need to be copied to `~/.claude/hooks/`.
 
