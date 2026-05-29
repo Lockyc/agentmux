@@ -38,8 +38,9 @@ _amux_frame_width() {
 }
 
 # Resolve (agent, session) from amux positional args: [(-flag | name)] [session].
-# Echoes agent on line 1, session on line 2. Mirrors amux()'s own precedence:
-# flag → name → dir-routing → first agent; session defaults to sanitised $PWD.
+# Echoes agent on line 1, session on line 2 (neither can contain a newline:
+# agent names are TOML keys, sessions are sanitised). Mirrors amux()'s own
+# precedence: flag → name → dir-routing → first agent; session defaults to $PWD.
 _amux_resolve_target() {
   local agent_name=""
   if [ $# -gt 0 ]; then
@@ -58,6 +59,8 @@ _amux_resolve_target() {
     if [ "$nidx" != "-1" ]; then agent_name="$1"; shift; fi
   fi
   local session_arg="${1:-$(_amux_default_session_name)}"
+  # tmux uses . and : as target separators (`session.win.pane`, `session:win`);
+  # an unsanitised name breaks `tmux has-session -t` and friends, so map both to _.
   session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
   [ -z "$agent_name" ] && agent_name=$(agentmux_agent_for_dir "$PWD")
   [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
