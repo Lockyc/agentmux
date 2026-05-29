@@ -54,7 +54,7 @@ The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do 
 
 ## Branches
 
-`dev` is the working branch — do day-to-day work here, and default to it. `main` is the release branch: merge `dev` into `main` to cut a release. Don't commit directly to `main`.
+`dev` is the working branch — do day-to-day work here, and default to it. `main` is the release branch: merge `dev` into `main` to cut a release. Don't commit directly to `main`. Cutting a release means publishing it: after merging to `main`, push `main` to `origin` (this is the one push that isn't "backup only" — it's how a release ships, so do it as part of the release rather than waiting to be asked).
 
 ## Versioning
 
