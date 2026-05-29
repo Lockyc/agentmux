@@ -23,6 +23,8 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
+| `tmux/frame.conf` | `amux --frame` outer wrapper config (own socket; no `~/.tmux.conf`) |
+| `tmux/term.conf` | `amux --frame` left scratch terminal config (own socket; persistent) |
 | `config/agents.toml.example` | Example agent config |
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
