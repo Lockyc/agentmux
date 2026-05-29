@@ -48,6 +48,7 @@ CLAUDE_CTX_SELFTEST=1        scripts/claude/ctx.sh
 CLAUDE_DIGEST_SELFTEST=1     scripts/claude/digest.sh
 AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
+AMUX_SELFTEST=1              bash bin/amux
 ```
 
 `summarise.sh` also has an optional live-LM smoke test that hits the configured endpoint and asserts the prompt rules survive (third-party scope, anti-invention). Manual only — skips silently if the LM is unreachable:
@@ -56,4 +57,22 @@ AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 SUMMARISE_SMOKE=1 scripts/summarise.sh
 ```
 
-Also run `shellcheck scripts/*.sh scripts/claude/*.sh shell/*.sh install.sh` if installed — lint-only, not a runtime dep, so doesn't conflict with the toml2json + jq rule.
+## Linting
+
+`shellcheck` is the linter (install with `brew install shellcheck`). It's lint-only, not a runtime dep, so it doesn't conflict with the toml2json + jq rule — but it's expected to be run before landing shell changes, not treated as optional:
+
+```bash
+shellcheck scripts/*.sh scripts/claude/*.sh shell/agentmux.sh bin/amux install.sh
+fish -n shell/agentmux.fish   # fish can't be shellcheck'd; this is its syntax check
+```
+
+Known-benign findings (do **not** chase these to zero — they're inherent to the patterns, not regressions):
+
+- **SC1091** "Not following: …" — dynamic `source "$SCRIPT_DIR/…"` paths shellcheck can't resolve statically.
+- **SC2154** `_llm_url`/`_llm_model`/`_llm_timeout` "referenced but not assigned" — set by `_amux_load_llm` inside `llm-config.sh`; shellcheck doesn't trace function-set globals across a sourced file.
+
+Real findings (anything else, especially error-level) must be fixed or, for a genuine false positive, suppressed with a commented `# shellcheck disable=<code>` on that line (see the zsh `(@f)` line in `shell/agentmux.sh`). A clean run filters to actionable severity:
+
+```bash
+shellcheck --severity=warning scripts/*.sh scripts/claude/*.sh shell/agentmux.sh bin/amux install.sh
+```

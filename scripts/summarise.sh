@@ -60,7 +60,7 @@ if [ "${SUMMARISE_SMOKE:-}" = "1" ]; then
   # Third-party scope rule: input mixes a parallel-agent reference with the
   # actual session topic. Label output must NOT anchor on the parallel agent.
   in1="we are part way through the product migration. i have an agent working on improving the desktop electron shell right now. lets focus on tag rename and merge in ts"
-  out1=$(printf "%s" "$in1" | SUMMARISE_SMOKE= "$0" 6 label)
+  out1=$(printf "%s" "$in1" | SUMMARISE_SMOKE='' "$0" 6 label)
   case "$out1" in
     *electron*|*desktop*)
       echo "smoke1 FAIL (third-party subject leaked into label): [$out1]" >&2
@@ -70,7 +70,7 @@ if [ "${SUMMARISE_SMOKE:-}" = "1" ]; then
   # Anti-invention rule: thin-signal digest must not produce stereotyped
   # migration milestones the prompt explicitly forbids.
   in2="planning what to do next about the migration / ran: git status / ran: git log --oneline / let us pick the next step / no concrete work has happened yet"
-  out2=$(printf "%s" "$in2" | AGENTMUX_SUBJECT="migration planning" SUMMARISE_SMOKE= "$0" 55 stand)
+  out2=$(printf "%s" "$in2" | AGENTMUX_SUBJECT="migration planning" SUMMARISE_SMOKE='' "$0" 55 stand)
   case "$out2" in
     *"initial data transfer"*|*"environment setup"*|*"integration testing"*|*"data validation"*)
       echo "smoke2 FAIL (stereotype leaked): [$out2]" >&2

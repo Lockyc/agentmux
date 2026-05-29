@@ -17,6 +17,8 @@ if [ -n "${ZSH_VERSION:-}" ]; then
   _amux_zsh_complete() {
     if (( CURRENT == 2 )); then
       local -a _amux_comps
+      # zsh-only block; shellcheck parses it as bash and misreads the (@f) flag.
+      # shellcheck disable=SC2296
       _amux_comps=("${(@f)$("$AGENTMUX_BIN" --complete 2>/dev/null)}")
       compadd -- "${_amux_comps[@]}"
     fi
