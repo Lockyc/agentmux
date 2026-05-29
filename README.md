@@ -32,9 +32,16 @@ which toml2json || brew install go-toml
 which jq        || brew install jq
 ```
 
-**2. Add to your shell config** (`~/.zshrc` or `~/.bashrc`):
+**2. Add to your shell config:**
+
+bash/zsh (`~/.zshrc` or `~/.bashrc`):
 ```bash
 source ~/.agentmux/shell/agentmux.sh
+```
+
+fish (`~/.config/fish/config.fish`):
+```fish
+source ~/.agentmux/shell/agentmux.fish
 ```
 
 **3. Add to your `~/.tmux.conf`:**
