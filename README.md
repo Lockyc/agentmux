@@ -84,6 +84,7 @@ amux
 | `prefix-m` | Cycle `@agent-mode` through defined agents (agentmux sessions only) |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
+| `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 
 Set `[update] check = true` in `~/.agentmux/agents.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
@@ -104,6 +105,21 @@ dirs = ["~/work", "~/clients"]
 A pattern matches when `$PWD` is that directory or any subdirectory of it (`~/work` covers `~/work/acme/api`). `~` expands to `$HOME`. When more than one agent matches, the longest (most specific) path wins, so you can nest a specific rule inside a broader one. If nothing matches, `amux` falls back to the first agent in the list. An explicit `-<flag>` or `<agent_name>` argument always overrides directory routing.
 
 Matching uses the logical path — `$PWD` as your shell shows it — and symlinks are **not** resolved. Write patterns the way you actually `cd` into the directory (e.g. via the symlink path, not its target).
+
+### Side-terminal layout (`--frame`)
+
+`amux --frame [agent] [session]` opens a fixed scratch terminal in the left pane
+beside amux in the right pane. The split is a nested tmux on its own socket
+(`agentmux-frame`), so amux runs completely unchanged on the right with its own
+tab bar — there is no outer status bar.
+
+- The frame uses a **secondary prefix `C-a`** for its few controls (`C-a h`/`C-a l`
+  focus left/right, `C-a H`/`C-a L` resize, `C-a Q` quit the frame, `C-a d` detach).
+  amux keeps `C-b`, which passes straight through to the right pane.
+- Set the left-pane width with `[frame] left = <percent>` (default `33`).
+- Run it from a plain terminal, not from inside tmux. Reattach with the same
+  `amux --frame <session>`. `C-a Q` tears down the frame without touching the amux
+  session (kill that the usual way: `prefix-&` or `tmux kill-session`).
 
 ## Adding an agent
 
