@@ -148,6 +148,32 @@ Both must print nothing and exit 0 on any error — the shared core treats them 
 
 To add e.g. a Gemini CLI adapter: create `scripts/gemini/{status,ctx,digest}.sh` following the Claude versions, wire your agent's hook system to call `~/.agentmux/scripts/gemini/status.sh <state>` with `state` ∈ `start|working|notify|permission|done`, and `install.sh` will pick the directory up automatically.
 
+## Shell support
+
+`amux` works in **bash**, **zsh**, and **fish**. All of the launcher logic lives in a single standalone bash executable — `bin/amux`, the one source of truth — and each interactive shell just sources a thin wrapper that defines the `amux` command and wires tab-completion. The launcher runs as a subprocess, so **bash must be installed**, but it does not have to be your interactive shell.
+
+| Shell | `amux` command | Tab-completion | Integration file | Source from |
+|---|---|---|---|---|
+| bash | ✓ | — | `shell/agentmux.sh` | `~/.bashrc` |
+| zsh | ✓ | ✓ | `shell/agentmux.sh` | `~/.zshrc` |
+| fish | ✓ | ✓ | `shell/agentmux.fish` | `~/.config/fish/config.fish` |
+
+Where completion is wired, it's backed by `amux --complete` — which prints the agent names and `-<flag>` shortcuts, one per line — and offered for the first argument only. (bash gets the command without completion; nothing stops you adding a `complete` script for it.)
+
+### Adding another shell
+
+To support a shell that isn't listed (e.g. nushell, elvish, xonsh):
+
+1. Create `shell/agentmux.<shell>` — a thin wrapper, in that shell's own syntax, that:
+   - resolves the launcher path (default `~/.agentmux/bin/amux`, overridable via the `AGENTMUX_BIN` env var) and defines an `amux` command forwarding all arguments to it;
+   - optionally registers a first-argument completion populated from `<launcher> --complete`.
+
+   `shell/agentmux.sh` (bash/zsh) and `shell/agentmux.fish` (fish) are the reference implementations — both are only a few lines.
+2. Update **both** installers so the file ships and gets wired: `install.sh` (copy it + print its source line) and `.claude/commands/agentmux/install.md` (detection + wiring). They must stay in sync.
+3. Source `~/.agentmux/shell/agentmux.<shell>` from your shell's startup config.
+
+No other agentmux code needs to change — `bin/amux` and every `scripts/` helper are shell-agnostic subprocesses.
+
 ## AI tab states (Claude Code)
 
 `claude/status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:
