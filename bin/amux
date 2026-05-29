@@ -20,10 +20,13 @@ fi
 source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
 source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 
-# tmux config dir (sibling of scripts/) and the dedicated socket for --frame.
+# tmux config dir (sibling of scripts/) and the dedicated sockets for --frame.
+# AGENTMUX_TERM_SOCKET is exported so the frame server inherits it: frame.conf's
+# C-f Q binding reads it back (via the shell, `${AGENTMUX_TERM_SOCKET:-…}`) to kill
+# the paired terminal on the right socket even when it's been overridden here.
 AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
 AGENTMUX_FRAME_SOCKET="${AGENTMUX_FRAME_SOCKET:-agentmux-frame}"
-AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
+export AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
 
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
