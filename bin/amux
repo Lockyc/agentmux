@@ -81,7 +81,8 @@ _amux_colour_pick() {
     echo "Pick an agent:" >&2
     for a in "${anames[@]}"; do echo "  $i) $a" >&2; i=$((i + 1)); done
     printf 'agent #> ' >&2; local choice; read -r choice
-    agent="${anames[$((choice - 1))]:-}"
+    case "$choice" in ''|*[!0-9]*) choice=0 ;; esac
+    [ "$choice" -ge 1 ] && agent="${anames[$((choice - 1))]:-}"
   fi
   [ -z "$agent" ] && { echo "amux: no agent selected" >&2; return 1; }
 
@@ -89,7 +90,9 @@ _amux_colour_pick() {
   local -a cnames=(); local cn
   while IFS= read -r cn; do cnames+=("$cn"); done < <("$AGENTMUX_SCRIPTS/colours.sh" names)
   printf 'colour #> ' >&2; local cc; read -r cc
-  local picked="${cnames[$((cc - 1))]:-}"
+  case "$cc" in ''|*[!0-9]*) cc=0 ;; esac
+  local picked=""
+  [ "$cc" -ge 1 ] && picked="${cnames[$((cc - 1))]:-}"
   [ -z "$picked" ] && { echo "amux: no colour selected" >&2; return 1; }
   _amux_colour_line "$agent" "$picked"
 }
@@ -101,7 +104,7 @@ _amux_colours() {
     names) "$AGENTMUX_SCRIPTS/colours.sh" names ;;
     pick)  shift; _amux_colour_pick "$@" ;;
     ''|render) "$AGENTMUX_SCRIPTS/colours.sh" render ;;
-    *) echo "usage: amux --colours [grid|pick [agent]]" >&2; return 1 ;;
+    *) echo "usage: amux --colours [grid|names|pick [agent]]" >&2; return 1 ;;
   esac
 }
 
