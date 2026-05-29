@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# amux — agentmux session launcher (standalone executable).
+# The single source of truth for amux logic; shell integration files
+# (shell/agentmux.sh, shell/agentmux.fish) are thin wrappers around this.
+#
+# Required env: AGENTMUX_CONFIG  (default: ~/.agentmux/agents.toml)
+#               AGENTMUX_SCRIPTS (default: <dir of this script>/../scripts)
+
+AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
+AGENTMUX_SCRIPTS="${AGENTMUX_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" 2>/dev/null && pwd)}"
+
+# BASH_SOURCE is not symlink-resolved: the default above assumes bin/ and
+# scripts/ are siblings (the install + dev layout). Fail fast with a readable
+# message rather than a confusing "source: No such file" if it can't be found.
+if [ ! -d "$AGENTMUX_SCRIPTS" ]; then
+  echo "agentmux: cannot locate scripts dir (set AGENTMUX_SCRIPTS)" >&2
+  exit 1
+fi
+
+source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
+source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
+
+_amux_default_session_name() {
+  basename "$PWD" | tr . _
+}
+
+_amux_attach() {
+  local name="$1"
+  # Use switch-client if our TTY is already a tmux pane (check via list-panes,
+  # not $TMUX which is inherited into subprocesses and gives false positives).
+  if tmux list-panes -a -F '#{pane_tty}' 2>/dev/null | grep -qxF "$(tty 2>/dev/null)"; then
+    tmux switch-client -t "$name"
+  else
+    tmux attach-session -t "$name"
+  fi
+}
+
+_amux_launch_window0() {
+  local session="$1" agent="$2"
+  local idx cmd
+
+  idx=$(agentmux_find_by_name "$agent")
+  [ "$idx" = "-1" ] && return 1
+
+  cmd=$(agentmux_build_cmd "$idx")
+
+  tmux rename-window -t "$session:0" "$agent"
+  agentmux_set_window_style "$agent" "$session:0"
+  tmux send-keys -t "$session:0" "$cmd" Enter
+}
+
+# amux [(-<flag> | <agent_name>)] [session_name]
+#
+# Creates or attaches a tmux session managed by agentmux.
+# Agent selection (in precedence order):
+#   -<flag>        flag defined in agents.toml (e.g. -w for flag="w")
+#   <agent_name>   exact agent name (e.g. "work")
+#   (none)         first agent in config
+# Remaining arg (if any) is the session name; defaults to current dir basename.
+amux() {
+  local agent_name="" session_arg=""
+
+  if [ $# -gt 0 ]; then
+    case "$1" in
+      --version)
+        local v; v=$(cat "$HOME/.agentmux/VERSION" 2>/dev/null | tr -d '[:space:]')
+        echo "agentmux ${v:-unknown}"
+        return 0
+        ;;
+      --complete)
+        # Hidden: emit agent names + -flags for shell completion backends.
+        agentmux_list_agent_completions
+        return 0
+        ;;
+      --help)
+        cat <<'EOF'
+amux [(-<flag> | <agent_name>)] [session_name]
+  Creates or attaches a tmux session managed by agentmux.
+
+  -<flag>        agent matching `flag` in agents.toml (e.g. -w for flag="w")
+  <agent_name>   agent by name (e.g. "work")
+  (none)         first agent in agents.toml
+  session_name   defaults to basename of $PWD (dots → underscores)
+
+  --version      print version
+  --help         this help
+EOF
+        return 0
+        ;;
+      -*)
+        local flag="${1#-}"
+        local fidx
+        fidx=$(agentmux_find_by_flag "$flag")
+        if [ "$fidx" != "-1" ]; then
+          agent_name=$(agentmux_agent_field "$fidx" name)
+        else
+          echo "agentmux: unknown flag -$flag" >&2; return 1
+        fi
+        shift
+        ;;
+    esac
+  fi
+
+  if [ $# -gt 0 ] && [ -z "$agent_name" ]; then
+    local nidx
+    nidx=$(agentmux_find_by_name "$1")
+    if [ "$nidx" != "-1" ]; then
+      agent_name="$1"; shift
+    fi
+  fi
+
+  session_arg="${1:-$(_amux_default_session_name)}"
+  # tmux uses . and : as target separators (`session.win.pane`, `session:win`);
+  # an unsanitised name (any path the default doesn't cover, e.g. user-supplied
+  # `mysite.com`) breaks `tmux has-session -t` and friends. _amux_default_session_name
+  # already strips . from the PWD basename; mirror that for explicit names.
+  session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
+  [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
+
+  local name="$session_arg"
+
+  if ! tmux has-session -t "$name" 2>/dev/null; then
+    tmux new-session -d -s "$name" -c "$PWD"
+    tmux set-option -t "$name" "@agent-mode" "$agent_name"
+    _amux_launch_window0 "$name" "$agent_name"
+  else
+    tmux set-option -t "$name" "@agent-mode" "$agent_name"
+  fi
+
+  tmux set-option -t "$name" "@autoagent" "1"
+  _amux_attach "$name"
+}
+
+# Self-test: AMUX_SELFTEST=1 bash bin/amux
+if [ "${AMUX_SELFTEST:-}" = "1" ]; then
+  _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"
+  _amux_json_cache=""
+  pass=0; fail=0
+  _assert() {
+    local desc="$1" expected="$2" actual="$3"
+    if [ "$actual" = "$expected" ]; then
+      echo "PASS: $desc"; pass=$((pass+1))
+    else
+      echo "FAIL: $desc — expected '$expected' got '$actual'"; fail=$((fail+1))
+    fi
+  }
+
+  # --complete emits agent names and -flags (newline-separated).
+  completions=$(amux --complete)
+  _assert "complete has work"  "work" "$(printf '%s\n' "$completions" | grep '^work$')"
+  _assert "complete has -w"    "-w"   "$(printf '%s\n' "$completions" | grep '^-w$')"
+  _assert "complete has ollama" "ollama" "$(printf '%s\n' "$completions" | grep '^ollama$')"
+
+  # --help prints usage and does NOT contain a dangling "Related:" line or -h.
+  help=$(amux --help)
+  case "$help" in *"amux [(-<flag>"*) _got="usage" ;; *) _got="missing" ;; esac
+  _assert "help shows usage" "usage" "$_got"
+  case "$help" in *"Related:"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help no dangling Related" "absent" "$_got"
+  case "$help" in *"-h, --help"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help advertises --help only" "absent" "$_got"
+
+  # --version reads ~/.agentmux/VERSION (or 'unknown'); just assert prefix.
+  ver=$(amux --version)
+  case "$ver" in "agentmux "*) _got="ok" ;; *) _got="bad" ;; esac
+  _assert "version prefix" "ok" "$_got"
+
+  echo "---"; echo "Passed: $pass  Failed: $fail"
+  [ "$fail" -eq 0 ]
+  exit $?
+fi
+
+amux "$@"
