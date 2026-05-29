@@ -61,7 +61,7 @@ if [ "${AGENTMUX_STYLE_SELFTEST:-}" = "1" ]; then
   # Friendly `colour` base derives the inactive shade via colour_derive.
   idx=$(agentmux_find_by_name "ollama")
   _assert "ollama colour field" "orange" "$(agentmux_agent_field "$idx" colour)"
-  _assert "ollama derived inactive" "fg=colour16,bg=colour208" \
+  _assert "ollama derived inactive" "fg=colour16,bg=colour215" \
     "$(colour_derive "$(agentmux_agent_field "$idx" colour)" | sed -n 1p)"
 
   # Raw fields still take precedence and are read verbatim.

@@ -5,23 +5,25 @@
 # (render | grid | names). Pure compute + ANSI; no tmux, no source-time deps.
 
 # Curated base colours (the INACTIVE shade). name:code, one per line; this order
-# is what `render`/`names` show. Backgrounds are saturated mid cube colours; the
-# active shade and the fg are derived, never hand-set.
-_colour_palette='green:82
-lime:154
-teal:37
-cyan:44
-blue:33
-indigo:63
-purple:99
-violet:135
-magenta:169
-pink:211
-red:203
-orange:208
-amber:214
-yellow:178
-slate:60'
+# is what `render`/`names` show. The active shade and the fg are derived, never
+# hand-set. Every base is drawn from the cube sub-lattice where each channel is
+# at level 1, 3 or 5 — `_colour_lighten` collapses {0,1}->3, {2,3}->4, {4,5}->5,
+# so confining bases to {1,3,5} keeps lightening injective: distinct names can
+# never derive the same active (focused-tab) colour. The "active bgs unique"
+# selftest guards this; pick replacements from the same lattice if you edit it.
+_colour_palette='red:203
+orange:215
+yellow:227
+lime:155
+green:83
+teal:73
+cyan:87
+sky:75
+blue:63
+purple:135
+magenta:207
+pink:205
+slate:59'
 
 # name -> 256 code, or empty if not a known name.
 _colour_name_to_code() {
@@ -124,12 +126,12 @@ if [ "${COLOURS_SELFTEST:-}" = "1" ]; then
     if [ "$3" = "$2" ]; then echo "PASS: $1"; pass=$((pass + 1))
     else echo "FAIL: $1 — expected '$2' got '$3'"; fail=$((fail + 1)); fi
   }
-  _assert "resolve name"     "82" "$(_colour_resolve green)"
+  _assert "resolve name"     "83" "$(_colour_resolve green)"
   _assert "resolve colourNN" "37" "$(_colour_resolve colour37)"
   _assert "resolve NN"       "37" "$(_colour_resolve 37)"
   _assert "resolve bogus"    ""   "$(_colour_resolve nope)"
   colour_derive bogus >/dev/null 2>&1; _assert "derive bogus rc" "1" "$?"
-  _assert "derive teal inactive" "fg=colour231,bg=colour37" "$(colour_derive teal | sed -n 1p)"
+  _assert "derive teal inactive" "fg=colour16,bg=colour73" "$(colour_derive teal | sed -n 1p)"
   ac=$(colour_derive teal | sed -n 2p)
   case "$ac" in *,bold) g=ok ;; *) g=bad ;; esac
   _assert "derive active bold" "ok" "$g"
@@ -137,6 +139,12 @@ if [ "${COLOURS_SELFTEST:-}" = "1" ]; then
   _assert "derive active shape" "ok" "$g"
   _assert "fg light bg" "16"  "$(_colour_fg 231)"
   _assert "fg dark bg"  "231" "$(_colour_fg 16)"
+  # No two curated names may derive the same active (focused-tab) bg, nor the
+  # same inactive bg — that is the whole point of per-agent colours.
+  _adups() { for nm in $(colour_names); do colour_derive "$nm" | sed -n "${1}p" \
+    | sed 's/.*bg=colour//; s/,bold//'; done | sort | uniq -d | tr '\n' ' '; }
+  _assert "active bgs unique"   "" "$(_adups 2)"
+  _assert "inactive bgs unique" "" "$(_adups 1)"
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]; exit $?
 fi
