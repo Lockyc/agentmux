@@ -72,7 +72,7 @@ _amux_launch_window0() {
 # Agent selection (in precedence order):
 #   -<flag>        flag defined in agents.toml (e.g. -w for flag="w")
 #   <agent_name>   exact agent name (e.g. "work")
-#   (none)         first agent in config
+#   (none)         agent whose `dirs` matches $PWD; else first agent in config
 # Remaining arg (if any) is the session name; defaults to current dir basename.
 amux() {
   local agent_name="" session_arg=""
@@ -100,7 +100,8 @@ amux [(-<flag> | <agent_name>)] [session_name]
 
   -<flag>        agent matching `flag` in agents.toml (e.g. -w for flag="w")
   <agent_name>   agent by name (e.g. "work")
-  (none)         first agent in agents.toml
+  (none)         agent whose `dirs` matches the current directory;
+                 falls back to the first agent in agents.toml
   session_name   defaults to basename of $PWD (dots → underscores)
 
   --update       update to the latest agentmux (git pull)
@@ -137,6 +138,7 @@ EOF
   # `mysite.com`) breaks `tmux has-session -t` and friends. _amux_default_session_name
   # already strips . from the PWD basename; mirror that for explicit names.
   session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
+  [ -z "$agent_name" ] && agent_name=$(agentmux_agent_for_dir "$PWD")
   [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
 
   # Opt-in daily check for a newer agentmux (self-gates on [update] check;

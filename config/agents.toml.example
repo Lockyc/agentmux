@@ -1,8 +1,13 @@
 # agentmux agent configuration
 # Copy this file to ~/.agentmux/agents.toml and edit to suit.
-# Agents are launched in the order defined. amux with no argument defaults to the first agent.
+# Agents are launched in the order defined. A bare `amux` (no flag, no agent
+# name) picks the agent whose `dirs` matches the current directory; if none
+# match, it falls back to the first agent in the list.
 # flag:  optional single-letter shorthand for amux -<flag>
 # label: optional short display name for tmux tabs (defaults to name if omitted)
+# dirs:  optional list of directories; a bare `amux` run inside one of them (or
+#        any subdirectory) auto-selects this agent. `~` expands to $HOME. When
+#        several agents match, the longest (most specific) path wins.
 
 [update]
 # Opt-in: once-daily check for a newer agentmux on GitHub. Notify-only — when a
@@ -19,19 +24,21 @@ model   = "qwen2.5-14b-instruct"
 timeout = 20
 
 [[agents]]
-name = "work"
-flag = "w"
-cmd = "CLAUDE_CONFIG_DIR=~/.claude-work claude"
-colour_inactive = "fg=black,bg=colour30"
-colour_active = "fg=black,bg=colour37,bold"
-
-[[agents]]
 name = "personal"
 label = "pers"
 flag = "p"
 cmd = "CLAUDE_CONFIG_DIR=~/.claude-personal claude"
+dirs = ["~/personal"]
 colour_inactive = "fg=black,bg=colour82"
 colour_active = "fg=black,bg=colour154,bold"
+
+[[agents]]
+name = "work"
+flag = "w"
+cmd = "CLAUDE_CONFIG_DIR=~/.claude-work claude"
+dirs = ["~/work", "~/clients"]
+colour_inactive = "fg=black,bg=colour30"
+colour_active = "fg=black,bg=colour37,bold"
 
 [[agents]]
 name = "ollama"

@@ -76,7 +76,7 @@ amux
 
 | Command | Effect |
 |---|---|
-| `amux` | New/attach session, default agent (first in list) |
+| `amux` | New/attach session; agent auto-selected from the current directory (see below), else the first agent in the list |
 | `amux -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
 | `amux <name>` | New/attach session, agent by name |
 | `amux <name> <session>` | New/attach named session with specified agent |
@@ -89,6 +89,19 @@ Set `[update] check = true` in `~/.agentmux/agents.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
 
 Sessions are named after `basename $PWD` (dots → underscores) by default — run `amux` in your project directory and it picks up the name automatically. Pass an explicit name with `amux <agent> <name>` to override. agentmux sessions get a coloured status bar, AI summary rows, and tab-state emojis; plain tmux sessions are left unstyled.
+
+### Directory-based agent selection
+
+Give an agent a `dirs` list and a bare `amux` (no flag, no agent name) auto-selects it based on the current directory — no flag or `prefix-m` toggle needed:
+
+```toml
+[[agents]]
+name = "work"
+cmd  = "CLAUDE_CONFIG_DIR=~/.claude-work claude"
+dirs = ["~/work", "~/clients"]
+```
+
+A pattern matches when `$PWD` is that directory or any subdirectory of it (`~/work` covers `~/work/acme/api`). `~` expands to `$HOME`. When more than one agent matches, the longest (most specific) path wins, so you can nest a specific rule inside a broader one. If nothing matches, `amux` falls back to the first agent in the list. An explicit `-<flag>` or `<agent_name>` argument always overrides directory routing.
 
 ## Adding an agent
 
@@ -110,6 +123,7 @@ The new agent appears in the `prefix-m` cycle immediately (no reload needed).
 | Field | Default | Effect |
 |---|---|---|
 | `flag` | — | Single-letter shorthand for `amux -<flag>` |
+| `dirs` | — | List of directories; a bare `amux` run inside one (or any subdirectory) auto-selects this agent. `~` → `$HOME`; longest match wins. See [Directory-based agent selection](#directory-based-agent-selection) |
 | `label` | name | Short display name used in tmux tab labels (e.g. `label = "pers"` for a `name = "personal"` agent) |
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |

@@ -76,6 +76,25 @@ agentmux_find_by_flag() {
   echo "-1"
 }
 
+# Name of the agent whose `dirs` matches the given directory, or empty if none.
+# A pattern matches when <dir> equals it or is a subdirectory of it; `~` expands
+# to $HOME and trailing slashes are ignored. When several patterns match, the
+# longest (most specific) wins; ties resolve to the first agent in file order.
+# Usage: agentmux_agent_for_dir <dir>
+agentmux_agent_for_dir() {
+  _amux_json | jq -r --arg dir "$1" --arg home "$HOME" '
+    [ .agents[]
+      | .name as $name
+      | (.dirs // [])[]
+      | (gsub("^~"; $home) | rtrimstr("/")) as $pat
+      | select($dir == $pat or ($dir | startswith($pat + "/")))
+      | {name: $name, len: ($pat | length)}
+    ]
+    | (map(.len) | max) as $m
+    | map(select(.len == $m)) | first | .name // empty
+  '
+}
+
 # Name of the agent that follows the given agent name in the list (wraps around).
 # Usage: agentmux_next_agent <current_name>
 agentmux_next_agent() {
@@ -144,25 +163,31 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
     fi
   }
   _assert "agent_count"         "4"        "$(agentmux_agent_count)"
-  _assert "first_agent"         "work"     "$(agentmux_first_agent)"
-  _assert "field name[0]"       "work"     "$(agentmux_agent_field 0 name)"
-  _assert "field flag[1]"       "p"        "$(agentmux_agent_field 1 flag)"
+  _assert "first_agent"         "personal" "$(agentmux_first_agent)"
+  _assert "field name[0]"       "personal" "$(agentmux_agent_field 0 name)"
+  _assert "field flag[0]"       "p"        "$(agentmux_agent_field 0 flag)"
   _assert "field absent"        ""         "$(agentmux_agent_field 0 keep_alive)"
-  _assert "find_by_name work"   "0"        "$(agentmux_find_by_name work)"
+  _assert "find_by_name work"   "1"        "$(agentmux_find_by_name work)"
   _assert "find_by_name miss"   "-1"       "$(agentmux_find_by_name doesnotexist)"
-  _assert "find_by_flag w"      "0"        "$(agentmux_find_by_flag w)"
+  _assert "find_by_flag w"      "1"        "$(agentmux_find_by_flag w)"
   _assert "find_by_flag o"      "3"        "$(agentmux_find_by_flag o)"
   _assert "find_by_flag miss"   "-1"       "$(agentmux_find_by_flag z)"
-  _assert "next_agent work"     "personal" "$(agentmux_next_agent work)"
+  _assert "next_agent work"     "ollama"   "$(agentmux_next_agent work)"
   _assert "next_agent ollama"   "opencode" "$(agentmux_next_agent ollama)"
-  _assert "next_agent wraps"    "work"     "$(agentmux_next_agent opencode)"
-  _assert "next_agent unknown"  "work"     "$(agentmux_next_agent unknown)"
+  _assert "next_agent wraps"    "personal" "$(agentmux_next_agent opencode)"
+  _assert "next_agent unknown"  "personal" "$(agentmux_next_agent unknown)"
+  _assert "dir exact match"     "work"     "$(agentmux_agent_for_dir "$HOME/work")"
+  _assert "dir subtree match"   "work"     "$(agentmux_agent_for_dir "$HOME/work/sub/x")"
+  _assert "dir second pattern"  "work"     "$(agentmux_agent_for_dir "$HOME/clients/acme")"
+  _assert "dir other agent"     "personal" "$(agentmux_agent_for_dir "$HOME/personal/proj")"
+  _assert "dir no match"        ""         "$(agentmux_agent_for_dir "$HOME/nowhere")"
+  _assert "dir prefix not partial" "" "$(agentmux_agent_for_dir "$HOME/workspace")"
   completions=$(agentmux_list_agent_completions)
   _assert "completions work"    "work"     "$(printf '%s\n' "$completions" | grep '^work$')"
   _assert "completions -w"      "-w"       "$(printf '%s\n' "$completions" | grep '^-w$')"
   _assert "completions ollama"  "ollama"   "$(printf '%s\n' "$completions" | grep '^ollama$')"
   _assert "completions opencode" "opencode" "$(printf '%s\n' "$completions" | grep '^opencode$')"
-  _assert "build_cmd work"      "CLAUDE_CONFIG_DIR=~/.claude-work claude" "$(agentmux_build_cmd 0)"
+  _assert "build_cmd work"      "CLAUDE_CONFIG_DIR=~/.claude-work claude" "$(agentmux_build_cmd 1)"
   _assert "build_cmd ollama"    'ollama launch claude --model kimi-k2.6:cloud' "$(agentmux_build_cmd 2)"
   _assert "build_cmd opencode"  "opencode" "$(agentmux_build_cmd 3)"
   _assert "llm_field url"       "http://localhost:1234/v1/chat/completions" "$(agentmux_llm_field url)"
@@ -208,6 +233,41 @@ TOML
   # cache cleanup runs on next access anyway, but explicit is friendlier.
   _tmp_mtime=$(stat -f %m "$_tmpcfg" 2>/dev/null || stat -c %Y "$_tmpcfg" 2>/dev/null || echo 0)
   rm -f "$_tmpcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_tmp_mtime}.json"
+
+  # Self-contained coverage for agentmux_agent_for_dir's resolution rules —
+  # absolute paths (no ~) so it doesn't depend on $HOME. Covers longest-prefix
+  # precedence, subtree fallback to a broader rule, and same-length ties
+  # resolving to the first agent in file order.
+  _dircfg=$(mktemp /tmp/agentmux-dir-XXXXXX.toml) || exit 1
+  cat > "$_dircfg" <<'TOML'
+[[agents]]
+name = "broad"
+cmd = "x"
+dirs = ["/tmp/amux-route"]
+
+[[agents]]
+name = "narrow"
+cmd = "x"
+dirs = ["/tmp/amux-route/deep"]
+
+[[agents]]
+name = "tieA"
+cmd = "x"
+dirs = ["/tmp/amux-tie"]
+
+[[agents]]
+name = "tieB"
+cmd = "x"
+dirs = ["/tmp/amux-tie"]
+TOML
+  AGENTMUX_CONFIG="$_dircfg"
+  _amux_json_cache=""
+  _assert "dir longest prefix wins" "narrow" "$(agentmux_agent_for_dir /tmp/amux-route/deep/x)"
+  _assert "dir broad subtree"       "broad"  "$(agentmux_agent_for_dir /tmp/amux-route/other)"
+  _assert "dir tie first in file"   "tieA"   "$(agentmux_agent_for_dir /tmp/amux-tie/z)"
+  _assert "dir routing no match"    ""       "$(agentmux_agent_for_dir /tmp/elsewhere)"
+  _dir_mtime=$(stat -f %m "$_dircfg" 2>/dev/null || stat -c %Y "$_dircfg" 2>/dev/null || echo 0)
+  rm -f "$_dircfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_dir_mtime}.json"
 
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
