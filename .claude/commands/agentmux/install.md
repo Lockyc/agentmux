@@ -255,7 +255,7 @@ tmux source ~/.tmux.conf           # if tmux config was wired (or start a new tm
 Restart Claude Code if hooks were wired — hooks take effect on the next session start.
 
 **Next steps**
-- Edit `~/.agentmux/agents.toml` to define your agents — this is where you set names, colours, commands, key bindings, and optional `dirs` for directory-based agent selection (a bare `amux` auto-picks the agent whose `dirs` matches the current directory)
+- Edit `~/.agentmux/agents.toml` to define your agents — this is where you set names, colours, commands, key bindings, and optional `dirs` for directory-based agent selection (a bare `amux` auto-picks the agent whose `dirs` matches the current directory). Run `amux --colours` to preview the palette and copy a ready-made `colour = "name"` line; raw `colour_inactive`/`colour_active` still work as an override.
 - Run `amux` to launch your first session
 - If AI summaries were configured: the status bar populates automatically once Claude Code hooks are active and a session is running
 - If AI summaries were skipped: configure later by setting `url` and `model` under `[llm]` in `~/.agentmux/agents.toml`
