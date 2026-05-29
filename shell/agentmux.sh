@@ -1,131 +1,23 @@
 #!/usr/bin/env bash
-# agentmux.sh — shell functions for agentmux.
+# agentmux.sh — shell integration for agentmux (bash/zsh).
 # Source from ~/.zshrc or ~/.bashrc:
 #   source ~/.agentmux/shell/agentmux.sh
 #
-# Required env: AGENTMUX_CONFIG (default: ~/.agentmux/agents.toml)
-#               AGENTMUX_SCRIPTS (default: ~/.agentmux/scripts)
-
-AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
-AGENTMUX_SCRIPTS="${AGENTMUX_SCRIPTS:-$HOME/.agentmux/scripts}"
-
-source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
-source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
-
-_amux_default_session_name() {
-  basename "$PWD" | tr . _
-}
-
-_amux_attach() {
-  local name="$1"
-  # Use switch-client if our TTY is already a tmux pane (check via list-panes,
-  # not $TMUX which is inherited into subprocesses and gives false positives).
-  if tmux list-panes -a -F '#{pane_tty}' 2>/dev/null | grep -qxF "$(tty 2>/dev/null)"; then
-    tmux switch-client -t "$name"
-  else
-    tmux attach-session -t "$name"
-  fi
-}
-
-_amux_launch_window0() {
-  local session="$1" agent="$2"
-  local idx cmd
-
-  idx=$(agentmux_find_by_name "$agent")
-  [ "$idx" = "-1" ] && return 1
-
-  cmd=$(agentmux_build_cmd "$idx")
-
-  tmux rename-window -t "$session:0" "$agent"
-  agentmux_set_window_style "$agent" "$session:0"
-  tmux send-keys -t "$session:0" "$cmd" Enter
-}
-
-# amux [(-<flag> | <agent_name>)] [session_name]
+# Thin wrapper: all amux logic lives in bin/amux. This file only defines the
+# `amux` function and wires zsh tab-completion.
 #
-# Creates or attaches a tmux session managed by agentmux.
-# Agent selection (in precedence order):
-#   -<flag>        flag defined in agents.toml (e.g. -w for flag="w")
-#   <agent_name>   exact agent name (e.g. "work")
-#   (none)         first agent in config
-# Remaining arg (if any) is the session name; defaults to current dir basename.
-amux() {
-  local agent_name="" session_arg=""
+# Override the executable path: export AGENTMUX_BIN=<path>
 
-  if [ $# -gt 0 ]; then
-    case "$1" in
-      --version)
-        local v; v=$(cat "$HOME/.agentmux/VERSION" 2>/dev/null | tr -d '[:space:]')
-        echo "agentmux ${v:-unknown}"
-        return 0
-        ;;
-      -h|--help)
-        cat <<'EOF'
-amux [(-<flag> | <agent_name>)] [session_name]
-  Creates or attaches a tmux session managed by agentmux.
+AGENTMUX_BIN="${AGENTMUX_BIN:-$HOME/.agentmux/bin/amux}"
 
-  -<flag>        agent matching `flag` in agents.toml (e.g. -w for flag="w")
-  <agent_name>   agent by name (e.g. "work")
-  (none)         first agent in agents.toml
-  session_name   defaults to basename of $PWD (dots → underscores)
-
-  --version      print version
-  -h, --help     this help
-
-Related:
-EOF
-        return 0
-        ;;
-      -*)
-        local flag="${1#-}"
-        local fidx
-        fidx=$(agentmux_find_by_flag "$flag")
-        if [ "$fidx" != "-1" ]; then
-          agent_name=$(agentmux_agent_field "$fidx" name)
-        else
-          echo "agentmux: unknown flag -$flag" >&2; return 1
-        fi
-        shift
-        ;;
-    esac
-  fi
-
-  if [ $# -gt 0 ] && [ -z "$agent_name" ]; then
-    local nidx
-    nidx=$(agentmux_find_by_name "$1")
-    if [ "$nidx" != "-1" ]; then
-      agent_name="$1"; shift
-    fi
-  fi
-
-  session_arg="${1:-$(_amux_default_session_name)}"
-  # tmux uses . and : as target separators (`session.win.pane`, `session:win`);
-  # an unsanitised name (any path the default doesn't cover, e.g. user-supplied
-  # `mysite.com`) breaks `tmux has-session -t` and friends. _amux_default_session_name
-  # already strips . from the PWD basename; mirror that for explicit names.
-  session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
-  [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
-
-  local name="$session_arg"
-
-  if ! tmux has-session -t "$name" 2>/dev/null; then
-    tmux new-session -d -s "$name" -c "$PWD"
-    tmux set-option -t "$name" "@agent-mode" "$agent_name"
-    _amux_launch_window0 "$name" "$agent_name"
-  else
-    tmux set-option -t "$name" "@agent-mode" "$agent_name"
-  fi
-
-  tmux set-option -t "$name" "@autoagent" "1"
-  _amux_attach "$name"
-}
+amux() { "$AGENTMUX_BIN" "$@"; }
 
 # Zsh completion: amux <tab> completes agent names and -<flag> shortcuts.
 if [ -n "${ZSH_VERSION:-}" ]; then
   _amux_zsh_complete() {
     if (( CURRENT == 2 )); then
       local -a _amux_comps
-      _amux_comps=("${(@f)$(agentmux_list_agent_completions 2>/dev/null)}")
+      _amux_comps=("${(@f)$("$AGENTMUX_BIN" --complete 2>/dev/null)}")
       compadd -- "${_amux_comps[@]}"
     fi
   }
