@@ -155,6 +155,40 @@ _amux_colours() {
   esac
 }
 
+# amux --frame [(-<flag> | <agent>)] [session]
+# Outer "frame": a bare $SHELL in the left pane, amux in the right pane, as a
+# nested tmux on a dedicated socket. Must be run from a plain terminal.
+_amux_frame() {
+  if [ -n "${TMUX:-}" ]; then
+    echo "amux: --frame must be run from a plain terminal, not inside tmux" >&2
+    return 1
+  fi
+  local frame_conf="$AGENTMUX_TMUX/frame.conf"
+  if [ ! -f "$frame_conf" ]; then
+    echo "amux: frame config not found at $frame_conf" >&2; return 1
+  fi
+
+  local target agent session
+  target=$(_amux_resolve_target "$@") || return 1
+  agent=$(printf '%s' "$target" | sed -n 1p)
+  session=$(printf '%s' "$target" | sed -n 2p)
+
+  local sock="$AGENTMUX_FRAME_SOCKET"
+  if ! tmux -L "$sock" has-session -t "$session" 2>/dev/null; then
+    local left right self right_cmd
+    left=$(_amux_frame_width)
+    right=$((100 - left))
+    # Absolute path to this launcher, for the right-pane invocation.
+    self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    # Right pane: amux on the DEFAULT socket (TMUX unset → attach-session there).
+    right_cmd="env -u TMUX $(_amux_shquote "$self") $(_amux_shquote "$agent") $(_amux_shquote "$session")"
+    tmux -L "$sock" -f "$frame_conf" new-session -d -s "$session" -c "$PWD"
+    tmux -L "$sock" split-window -h -t "$session" -l "${right}%" -c "$PWD" "$right_cmd"
+    tmux -L "$sock" select-pane -t "$session" -R
+  fi
+  tmux -L "$sock" attach-session -t "$session"
+}
+
 # amux [(-<flag> | <agent_name>)] [session_name]
 #
 # Creates or attaches a tmux session managed by agentmux.
@@ -182,6 +216,11 @@ amux() {
         _amux_colours "$@"
         return $?
         ;;
+      --frame)
+        shift
+        _amux_frame "$@"
+        return $?
+        ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
         agentmux_list_agent_completions
@@ -200,6 +239,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
 
   --update       update to the latest agentmux (git pull)
   --colours      preview the colour palette (grid|pick subcommands)
+  --frame        open a side terminal (left) beside amux (right), nested tmux
   --version      print version
   --help         this help
 EOF
@@ -276,6 +316,16 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --help advertises --colours.
   case "$help" in *"--colours"*) _got="present" ;; *) _got="absent" ;; esac
   _assert "help advertises --colours" "present" "$_got"
+
+  # --help advertises --frame.
+  case "$help" in *"--frame"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help advertises --frame" "present" "$_got"
+
+  # --frame refuses to run inside tmux (guard returns 1 before any tmux call).
+  _fout=$(TMUX="/tmp/fake,1,0" _amux_frame work test 2>&1); _frc=$?
+  case "$_fout" in *"must be run from a plain terminal"*) _got=ok ;; *) _got="bad:$_fout" ;; esac
+  _assert "frame guard message" "ok" "$_got"
+  _assert "frame guard exit"    "1"  "$_frc"
 
   # --colours render lists curated names; the line helper emits a paste field.
   cols=$(amux --colours 2>/dev/null)
