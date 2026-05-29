@@ -18,7 +18,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`) |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
-| `shell/agentmux.sh` | Shell functions sourced by the user (`amux`, `tm`) |
+| `shell/agentmux.sh` | Shell functions sourced by the user (`amux`) |
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
 | `config/agents.toml.example` | Example agent config |
 | `VERSION` | Semver version string |
