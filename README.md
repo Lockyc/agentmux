@@ -19,10 +19,11 @@ The command checks dependencies, runs the installer, and interactively wires you
 ### Manual
 
 ```bash
-git clone https://github.com/lockyc/agentmux
-cd agentmux
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash
 ```
+
+This clones agentmux into `~/.agentmux/` (a git clone — update later with
+`amux --update`). You can also clone the repo and run `bash install.sh` directly.
 
 Then complete the setup:
 
@@ -82,6 +83,10 @@ amux
 | `prefix-c` | New tab, auto-launches current `@agent-mode` agent |
 | `prefix-m` | Cycle `@agent-mode` through defined agents (agentmux sessions only) |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
+| `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
+
+Set `[update] check = true` in `~/.agentmux/agents.toml` to enable a once-daily
+check that notifies (notify-only) when a newer agentmux is available on GitHub.
 
 Sessions are named after `basename $PWD` (dots → underscores) by default — run `amux` in your project directory and it picks up the name automatically. Pass an explicit name with `amux <agent> <name>` to override. agentmux sessions get a coloured status bar, AI summary rows, and tab-state emojis; plain tmux sessions are left unstyled.
 
@@ -169,7 +174,7 @@ To support a shell that isn't listed (e.g. nushell, elvish, xonsh):
    - optionally registers a first-argument completion populated from `<launcher> --complete`.
 
    `shell/agentmux.sh` (bash/zsh) and `shell/agentmux.fish` (fish) are the reference implementations — both are only a few lines.
-2. Update **both** installers so the file ships and gets wired: `install.sh` (copy it + print its source line) and `.claude/commands/agentmux/install.md` (detection + wiring). They must stay in sync.
+2. Update **both** installers so the file ships and gets wired: `install.sh` (it's carried by the clone; add its source line to the printed instructions) and `.claude/commands/agentmux/install.md` (detection + wiring). They must stay in sync.
 3. Source `~/.agentmux/shell/agentmux.<shell>` from your shell's startup config.
 
 No other agentmux code needs to change — `bin/amux` and every `scripts/` helper are shell-agnostic subprocesses.
@@ -187,7 +192,7 @@ No other agentmux code needs to change — `bin/amux` and every `scripts/` helpe
 | ✅ | Done (unseen) |
 | 👀 | Done (window active/seen) |
 
-**Setup:** `install.sh` copies the `scripts/claude/` directory to `~/.agentmux/scripts/claude/` automatically. Wire the hooks in `~/.claude/settings.json`:
+**Setup:** the clone includes `scripts/claude/`; wire the hooks in `~/.claude/settings.json`:
 
 ```json
 {

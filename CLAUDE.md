@@ -7,7 +7,7 @@ Configurable tmux agent launcher. Shell scripts only — no Python, Node, or oth
 Shell scripts only — split between bash, POSIX sh, and (for the fish integration) fish, by what each script needs:
 
 - **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `bin/amux`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `relaunch.sh`).
-- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `update_colors.sh`, `window_seen.sh`, `claude/{status,ctx,digest}.sh`.
+- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `update_colors.sh`, `window_seen.sh`, `version_check.sh`, `claude/{status,ctx,digest}.sh`.
 - **fish** (`shell/agentmux.fish`) — the fish-shell integration only. It is a thin wrapper around `bin/amux` plus a `complete` line; it never sources bash libs (fish can't). All real logic stays in `bin/amux`.
 
 When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
@@ -24,18 +24,27 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
 | `config/agents.toml.example` | Example agent config |
-| `install.sh` | Core installer: copies the repo into `~/.agentmux/` and prints setup instructions |
+| `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
 | `VERSION` | Semver version string |
 
 ## Install
 
-Two installers, and they must stay in sync:
+`~/.agentmux/` is a **git clone** of this repo. Two installers, kept in sync:
 
-- **`install.sh`** — the core script. Copies files into `~/.agentmux/` and *prints* the lines the user must add to their shell/tmux config. It does not edit any config files.
-- **`/agentmux:install`** (`.claude/commands/agentmux/install.md`) — a Claude-driven interactive install. It runs `install.sh`, then goes further: detects existing wiring, and *actually wires* shell config (`~/.zshrc`/`~/.bashrc` for bash/zsh, `~/.config/fish/config.fish` for fish), `~/.tmux.conf`, the Claude Code hooks in `~/.claude/settings.json`, and the `[llm]` endpoint — then self-installs the command to `~/.claude/commands/agentmux/`.
+- **`install.sh`** — clones into `~/.agentmux/` if absent, `git pull --ff-only`s an
+  existing clone, leaves a dev/symlink install untouched, and *refuses* a pre-clone
+  copy-install (pointing at `/agentmux:install` to migrate). Seeds `agents.toml` from
+  the example and prints the shell/tmux/hook wiring. Runnable locally or via
+  `curl -fsSL …/install.sh | bash`. Needs `git` (install/update only).
+- **`/agentmux:install`** (`.claude/commands/agentmux/install.md`) — interactive. Runs
+  `install.sh`, migrates an old copy-install (backup → clone → restore `agents.toml`),
+  and wires shell config, `~/.tmux.conf`, the Claude Code hooks, and `[llm]`/`[update]`.
 
-**Invariant:** whenever you change what gets installed or wired — a new shell integration, a new copied path, a new hook, a new dependency — update **both** `install.sh` (copy + printed instructions) **and** `install.md` (detection + wiring steps). They drift silently otherwise; e.g. adding fish meant touching the copy/print in `install.sh` *and* the fish detection + `config.fish` wiring in `install.md`.
+**Invariant:** whenever you change what gets installed or wired, update **both**
+`install.sh` and `install.md` — they drift silently otherwise.
+
+Updating an installed clone: `amux --update` (= `git -C ~/.agentmux pull --ff-only`).
 
 ## Local dev setup
 
@@ -45,7 +54,15 @@ The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do 
 
 ## Versioning
 
-Bump `VERSION` (semver) when making a meaningful change. `amux --version` reads `~/.agentmux/VERSION` (copied there by `install.sh`). Update `~/.agentmux/VERSION` manually during dev if you need `amux --version` to reflect a working bump.
+Bump `VERSION` (semver) when making a meaningful change. For clone installs,
+`~/.agentmux/VERSION` is the tracked file at the checked-out commit, so it's always
+correct after `amux --update`. On a **dev/symlink** box `~/.agentmux/VERSION` is the
+repo's working-tree file (via the symlinks) — update it manually if you need
+`amux --version` to reflect a working bump.
+
+The opt-in daily check (`scripts/version_check.sh`) compares the GitHub `VERSION` to
+the local one and, when newer, prints a notice suggesting `amux --update`. It is off
+by default (`[update] check`, or `AGENTMUX_VERSION_CHECK`).
 
 ## Selftests
 
@@ -60,6 +77,7 @@ CLAUDE_DIGEST_SELFTEST=1     scripts/claude/digest.sh
 AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 AMUX_SELFTEST=1              bash bin/amux
+VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
 ```
 
 `summarise.sh` also has an optional live-LM smoke test that hits the configured endpoint and asserts the prompt rules survive (third-party scope, anti-invention). Manual only — skips silently if the LM is unreachable:
