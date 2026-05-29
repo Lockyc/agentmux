@@ -115,18 +115,18 @@ the amux session it wraps), so amux runs completely unchanged on the right with
 its own tab bar — there is no outer status bar. (Requires tmux ≥ 3.1 for the
 `-l %` split sizing.)
 
-- The frame uses a **secondary prefix `C-o`** for its few controls (`C-o h`/`C-o l`
-  focus left/right, `C-o H`/`C-o L` resize, `C-o Q` quit the frame, `C-o d` detach).
-  `C-o` is an inert key, so it won't shadow line editing in the panes; amux keeps
-  `C-b`, which the frame doesn't claim, so it reaches amux when the right pane is
-  focused. Change the frame prefix with `[frame] prefix` (default `C-o`; not `C-b`).
+- The frame uses a **secondary prefix `C-f`** ("f" for frame) for its few controls
+  (`C-f h`/`C-f l` focus left/right, `C-f H`/`C-f L` resize, `C-f Q` quit the frame,
+  `C-f d` detach). amux keeps `C-b`, which the frame doesn't claim, so it reaches
+  amux when the right pane is focused. Change the frame prefix with `[frame] prefix`
+  (default `C-f`; anything but `C-b`).
 - Set the left-pane width with `[frame] left = <percent>` (default `33`).
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
-  `amux --frame <session>`. Leave with `C-o d` (detach — both sides keep running)
-  or `C-o Q` (quit the frame; the amux session survives on its own socket — kill
+  `amux --frame <session>`. Leave with `C-f d` (detach — both sides keep running)
+  or `C-f Q` (quit the frame; the amux session survives on its own socket — kill
   that the usual way with `prefix-&` / `tmux kill-session`).
 - The right pane re-attaches the agent automatically, so an inner `C-b d` just
-  bounces you back in; use `C-o d` / `C-o Q` to actually leave the frame.
+  bounces you back in; use `C-f d` / `C-f Q` to actually leave the frame.
 
 ## Adding an agent
 
