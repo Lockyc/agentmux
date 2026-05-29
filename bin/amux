@@ -28,11 +28,11 @@ AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# Resolve the left-pane width for --frame: [frame] left (percent), default 33,
+# Resolve the left-pane width for --frame: [frame] left (percent), default 20,
 # clamped to 10..90. Non-numeric or absent → default.
 _amux_frame_width() {
   local w; w=$(agentmux_frame_field left)
-  case "$w" in ''|*[!0-9]*) w=33 ;; esac
+  case "$w" in ''|*[!0-9]*) w=20 ;; esac
   [ "$w" -lt 10 ] && w=10
   [ "$w" -gt 90 ] && w=90
   printf '%s' "$w"
@@ -211,15 +211,28 @@ _amux_frame() {
   fi
 
   if ! tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
-    local left right self right_cmd left_cmd fprefix
+    local left right self right_cmd left_cmd fprefix cols lines _sz
     left=$(_amux_frame_width)
     right=$((100 - left))
     # Absolute path to this launcher, for the right-pane invocation.
     self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
     left_cmd=$(_amux_frame_left_cmd "$AGENTMUX_TERM_SOCKET" "$term_conf" "${session}-term")
     right_cmd=$(_amux_frame_right_cmd "$self" "$agent" "$session")
+    # Create the frame at the real terminal size (--frame runs in a plain
+    # terminal). tmux distributes a *resize* equally across panes, so a frame born
+    # at tmux's detached 80-col default would skew the ratio when it later attaches
+    # to a wider terminal; sizing it correctly up front keeps the left at $left%.
+    # Read the size from the controlling terminal (`stty size` → "rows cols");
+    # `tput cols` reports the terminfo default under command substitution.
+    _sz=$(stty size </dev/tty 2>/dev/null); lines=${_sz%% *}; cols=${_sz##* }
+    case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
+    case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
     # Left pane = persistent scratch terminal (own socket); right pane = amux.
-    tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD" "$left_cmd"
+    if [ "$cols" -gt 0 ] && [ "$lines" -gt 0 ]; then
+      tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD" -x "$cols" -y "$lines" "$left_cmd"
+    else
+      tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD" "$left_cmd"
+    fi
     # Optional per-user frame prefix override ([frame] prefix); default is in frame.conf.
     fprefix=$(agentmux_frame_field prefix)
     [ -n "$fprefix" ] && tmux -L "$sock" set -g prefix "$fprefix"
@@ -441,8 +454,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "shquote plain"  "'work'"      "$(_amux_shquote work)"
   _assert "shquote squote" "'a'\\''b'"   "$(_amux_shquote "a'b")"
 
-  # _amux_frame_width: example config sets [frame] left = 33.
-  _assert "frame_width default" "33" "$(_amux_frame_width)"
+  # _amux_frame_width: example config sets [frame] left = 20.
+  _assert "frame_width default" "20" "$(_amux_frame_width)"
 
   # _amux_frame_width clamps from synthetic configs. Clear the (isolated) disk
   # cache between rewrites — same-second mtime would otherwise alias the cache.
@@ -455,7 +468,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "frame_width clamp high" "90" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
   printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
-  _assert "frame_width no-frame"   "33" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
+  _assert "frame_width no-frame"   "20" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
   rm -f "$_fw"
   AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"; _amux_json_cache=""
 

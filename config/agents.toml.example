@@ -26,7 +26,7 @@ timeout = 20
 [frame]
 # `amux --frame` layout: a bare scratch terminal in the left pane beside amux in
 # the right pane (its own nested tmux). `left` is the left-pane width, percent.
-left = 33
+left = 20
 # Secondary prefix for the frame's own controls (focus/resize/quit). Defaults to
 # C-f ('f' for frame). Override here with anything but C-b (which amux uses), e.g.:
 # prefix = "C-Space"
