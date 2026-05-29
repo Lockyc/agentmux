@@ -5,6 +5,11 @@
 # Usage: agentmux_set_window_style <agent_name> [target]
 #   target: optional tmux -t value (e.g. "mysession:0"); omit for current window.
 
+# colour_derive lives here; sourced for the friendly `colour` field fallback.
+# Sourcing is a no-op CLI-wise: colours.sh only dispatches when executed directly.
+# shellcheck source=/dev/null
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/colours.sh"
+
 agentmux_set_window_style() {
   local name="$1" target="${2:-}"
   # No-op outside tmux when no explicit target (e.g. wrapper called from a plain terminal).
@@ -16,6 +21,15 @@ agentmux_set_window_style() {
 
   inactive=$(agentmux_agent_field "$idx" colour_inactive)
   active=$(agentmux_agent_field "$idx" colour_active)
+  # Raw fields win; otherwise derive both shades from the friendly `colour` base.
+  if [ -z "$inactive" ] && [ -z "$active" ]; then
+    local base derived
+    base=$(agentmux_agent_field "$idx" colour)
+    if [ -n "$base" ] && derived=$(colour_derive "$base"); then
+      inactive=$(printf '%s\n' "$derived" | sed -n 1p)
+      active=$(printf '%s\n'  "$derived" | sed -n 2p)
+    fi
+  fi
 
   local -a t=()
   [ -n "$target" ] && t=(-t "$target")
@@ -30,7 +44,9 @@ agentmux_set_window_style() {
 # Self-test: AGENTMUX_STYLE_SELFTEST=1 bash scripts/agent_window_style.sh
 if [ "${AGENTMUX_STYLE_SELFTEST:-}" = "1" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  export AGENTMUX_CONFIG="$SCRIPT_DIR/../config/agents.toml.example"
   source "$SCRIPT_DIR/agentmux-config.sh"
+  _amux_json_cache=""
 
   pass=0; fail=0
   _assert() {
@@ -42,12 +58,16 @@ if [ "${AGENTMUX_STYLE_SELFTEST:-}" = "1" ]; then
     fi
   }
 
-  idx=$(agentmux_find_by_name "work")
-  _assert "work colour_inactive" "fg=black,bg=colour30"      "$(agentmux_agent_field "$idx" colour_inactive)"
-  _assert "work colour_active"   "fg=black,bg=colour37,bold" "$(agentmux_agent_field "$idx" colour_active)"
-
+  # Friendly `colour` base derives the inactive shade via colour_derive.
   idx=$(agentmux_find_by_name "ollama")
-  _assert "ollama colour_inactive" "fg=black,bg=colour208" "$(agentmux_agent_field "$idx" colour_inactive)"
+  _assert "ollama colour field" "orange" "$(agentmux_agent_field "$idx" colour)"
+  _assert "ollama derived inactive" "fg=colour16,bg=colour208" \
+    "$(colour_derive "$(agentmux_agent_field "$idx" colour)" | sed -n 1p)"
+
+  # Raw fields still take precedence and are read verbatim.
+  idx=$(agentmux_find_by_name "opencode")
+  _assert "opencode raw inactive" "fg=black,bg=colour54"      "$(agentmux_agent_field "$idx" colour_inactive)"
+  _assert "opencode raw active"   "fg=black,bg=colour99,bold" "$(agentmux_agent_field "$idx" colour_active)"
 
   # Guard: no TMUX_PANE, no target → returns 0 without calling tmux
   TMUX_PANE="" agentmux_set_window_style "work" 2>&1

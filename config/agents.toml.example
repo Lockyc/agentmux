@@ -29,26 +29,26 @@ label = "pers"
 flag = "p"
 cmd = "CLAUDE_CONFIG_DIR=~/.claude-personal claude"
 dirs = ["~/personal"]
-colour_inactive = "fg=black,bg=colour82"
-colour_active = "fg=black,bg=colour154,bold"
+# Friendly colour: a curated name (run `amux --colours` to preview them) or a
+# 256 code like "colour82"/"82". The active/inactive shades are auto-derived.
+colour = "green"
 
 [[agents]]
 name = "work"
 flag = "w"
 cmd = "CLAUDE_CONFIG_DIR=~/.claude-work claude"
 dirs = ["~/work", "~/clients"]
-colour_inactive = "fg=black,bg=colour30"
-colour_active = "fg=black,bg=colour37,bold"
+colour = "teal"
 
 [[agents]]
 name = "ollama"
 cmd = "ollama launch claude --model kimi-k2.6:cloud"
-colour_inactive = "fg=black,bg=colour208"
-colour_active = "fg=black,bg=colour214,bold"
+colour = "orange"
 
 [[agents]]
 name = "opencode"
 flag = "o"
 cmd = "opencode"
+# Escape hatch: full raw tmux styles override `colour` for total control.
 colour_inactive = "fg=black,bg=colour54"
 colour_active = "fg=black,bg=colour99,bold"
