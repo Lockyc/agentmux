@@ -59,9 +59,16 @@ _colour_lighten() {
   fi
 }
 
-# Choose a legible fg (16 black / 231 white) for a bg code by luminance.
+# Choose a legible fg (16 black / 231 white) for a bg code. The 16..255 codes
+# have fixed RGB so we threshold their luminance; the 0..15 base-ANSI codes are
+# terminal-theme-dependent (no fixed RGB), so classify the conventionally-light
+# ones (silver/white + bright green/yellow/cyan) by index instead of computing.
 _colour_fg() {
   c="$1"
+  case "$c" in
+    7|10|11|14|15) printf '16';  return ;;
+    [0-9]|1[0-5])  printf '231'; return ;;
+  esac
   if [ "$c" -ge 16 ] && [ "$c" -le 231 ]; then
     v=$((c - 16)); b=$((v % 6)); g=$(((v / 6) % 6)); r=$(((v / 36) % 6))
     R=0; [ "$r" -gt 0 ] && R=$((55 + 40 * r))
@@ -77,6 +84,9 @@ _colour_fg() {
 }
 
 # colour_derive <base> -> two lines (inactive, then active); returns 1 if invalid.
+# fg is picked per shade, so a dark base (white text) and its lightened active
+# shade (black text) can legibly differ — don't "unify" the fg, that regresses
+# contrast on one state.
 colour_derive() {
   code=$(_colour_resolve "$1")
   case "$code" in ''|*[!0-9]*) return 1 ;; esac
@@ -139,6 +149,11 @@ if [ "${COLOURS_SELFTEST:-}" = "1" ]; then
   _assert "derive active shape" "ok" "$g"
   _assert "fg light bg" "16"  "$(_colour_fg 231)"
   _assert "fg dark bg"  "231" "$(_colour_fg 16)"
+  # base-ANSI 0..15: light indices get black fg, the rest white.
+  _assert "fg ansi white"  "16"  "$(_colour_fg 15)"
+  _assert "fg ansi silver" "16"  "$(_colour_fg 7)"
+  _assert "fg ansi black"  "231" "$(_colour_fg 0)"
+  _assert "fg ansi blue"   "231" "$(_colour_fg 4)"
   # No two curated names may derive the same active (focused-tab) bg, nor the
   # same inactive bg — that is the whole point of per-agent colours.
   _adups() { for nm in $(colour_names); do colour_derive "$nm" | sed -n "${1}p" \
