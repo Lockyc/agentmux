@@ -46,9 +46,10 @@ Detect what is already wired so question defaults are smart:
 
 ```bash
 [ -d ~/.agentmux ] && echo "installed" || echo "fresh"
-grep -qs "agentmux" ~/.zshrc            && echo "zshrc:wired"   || echo "zshrc:missing"
-grep -qs "agentmux" ~/.bashrc           && echo "bashrc:wired"  || echo "bashrc:missing"
-grep -qs "agentmux" ~/.tmux.conf        && echo "tmux:wired"    || echo "tmux:missing"
+grep -qs "agentmux" ~/.zshrc                  && echo "zshrc:wired"  || echo "zshrc:missing"
+grep -qs "agentmux" ~/.bashrc                 && echo "bashrc:wired" || echo "bashrc:missing"
+grep -qs "agentmux" ~/.config/fish/config.fish && echo "fish:wired"  || echo "fish:missing"
+grep -qs "agentmux" ~/.tmux.conf              && echo "tmux:wired"   || echo "tmux:missing"
 grep -qs "agentmux" ~/.claude/settings.json && echo "hooks:wired" || echo "hooks:missing"
 ```
 
@@ -75,21 +76,30 @@ Use AskUserQuestion with a **multi-select** question:
 
 Mark as "Recommended" those not already detected as wired. Also mark **AI summary status lines** as Recommended if either LLM endpoint was detected running in step 3.
 
-- **Shell config** — appends `source ~/.agentmux/shell/agentmux.sh` to `~/.zshrc` (or `~/.bashrc`)
+- **Shell config** — wires the agentmux source line into your shell config: `~/.zshrc`/`~/.bashrc` (bash/zsh) and/or `~/.config/fish/config.fish` (fish)
 - **tmux config** — appends `source-file ~/.agentmux/tmux/agentmux.conf` to `~/.tmux.conf`
 - **Claude Code hooks** — wires tab-state emojis and AI summary triggers into `~/.claude/settings.json`
 - **AI summary status lines** — configures the local LLM endpoint that powers the live `done / now / next` status bar
 
 ### 6. Wire shell config (if selected)
 
-Use `~/.zshrc` if it exists; otherwise `~/.bashrc`. Read the file — if `source ~/.agentmux/shell/agentmux.sh` is not already present, append:
+Wire every shell the user actually uses — determine targets from `$SHELL` and which config files exist. A user on fish may also keep a bash/zsh rc; wire each that applies.
+
+**bash/zsh** — use `~/.zshrc` if it exists, otherwise `~/.bashrc`. If `source ~/.agentmux/shell/agentmux.sh` is not already present, append:
 
 ```
 # agentmux
 source ~/.agentmux/shell/agentmux.sh
 ```
 
-Report whether the line was already present or newly added.
+**fish** — if `~/.config/fish/config.fish` exists or `$SHELL` ends in `fish`. If `agentmux.fish` is not already sourced there, append (note the `.fish` file, not `.sh`; the `test -f` guard keeps fish startup clean if agentmux is later removed):
+
+```
+# agentmux
+test -f ~/.agentmux/shell/agentmux.fish; and source ~/.agentmux/shell/agentmux.fish
+```
+
+Report, per shell wired, whether the line was already present or newly added.
 
 ### 7. Wire tmux config (if selected)
 
@@ -192,8 +202,9 @@ Read `$REPO_DIR/VERSION` to get the installed version string.
 **Reload**
 Only include commands that are actually relevant:
 ```bash
-source ~/.zshrc            # if shell config was wired
-tmux source ~/.tmux.conf   # if tmux config was wired (or start a new tmux server)
+source ~/.zshrc                    # if zsh/bash config was wired
+source ~/.config/fish/config.fish  # if fish config was wired (or start a new fish shell)
+tmux source ~/.tmux.conf           # if tmux config was wired (or start a new tmux server)
 ```
 Restart Claude Code if hooks were wired — hooks take effect on the next session start.
 

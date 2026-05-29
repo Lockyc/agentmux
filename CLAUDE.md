@@ -24,7 +24,18 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
 | `config/agents.toml.example` | Example agent config |
+| `install.sh` | Core installer: copies the repo into `~/.agentmux/` and prints setup instructions |
+| `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
 | `VERSION` | Semver version string |
+
+## Install
+
+Two installers, and they must stay in sync:
+
+- **`install.sh`** — the core script. Copies files into `~/.agentmux/` and *prints* the lines the user must add to their shell/tmux config. It does not edit any config files.
+- **`/agentmux:install`** (`.claude/commands/agentmux/install.md`) — a Claude-driven interactive install. It runs `install.sh`, then goes further: detects existing wiring, and *actually wires* shell config (`~/.zshrc`/`~/.bashrc` for bash/zsh, `~/.config/fish/config.fish` for fish), `~/.tmux.conf`, the Claude Code hooks in `~/.claude/settings.json`, and the `[llm]` endpoint — then self-installs the command to `~/.claude/commands/agentmux/`.
+
+**Invariant:** whenever you change what gets installed or wired — a new shell integration, a new copied path, a new hook, a new dependency — update **both** `install.sh` (copy + printed instructions) **and** `install.md` (detection + wiring steps). They drift silently otherwise; e.g. adding fish meant touching the copy/print in `install.sh` *and* the fish detection + `config.fish` wiring in `install.md`.
 
 ## Local dev setup
 
