@@ -66,6 +66,45 @@ _amux_launch_window0() {
   tmux send-keys -t "$session:0" "$cmd" Enter
 }
 
+# Print a paste-ready `colour =` field for an agent (testable; no I/O loop).
+_amux_colour_line() { # <agent> <name-or-code>
+  printf 'Add this under the [[agents]] block for "%s" in %s:\n\n    colour = "%s"\n' \
+    "$1" "$AGENTMUX_CONFIG" "$2"
+}
+
+# Interactive picker: choose an agent (arg or prompt) and a colour, print the line.
+_amux_colour_pick() {
+  local agent="$1"
+  if [ -z "$agent" ]; then
+    local -a anames=(); local a i=1
+    while IFS= read -r a; do anames+=("$a"); done < <(agentmux_list_agent_completions | grep -v '^-')
+    echo "Pick an agent:" >&2
+    for a in "${anames[@]}"; do echo "  $i) $a" >&2; i=$((i + 1)); done
+    printf 'agent #> ' >&2; local choice; read -r choice
+    agent="${anames[$((choice - 1))]:-}"
+  fi
+  [ -z "$agent" ] && { echo "amux: no agent selected" >&2; return 1; }
+
+  "$AGENTMUX_SCRIPTS/colours.sh" render >&2
+  local -a cnames=(); local cn
+  while IFS= read -r cn; do cnames+=("$cn"); done < <("$AGENTMUX_SCRIPTS/colours.sh" names)
+  printf 'colour #> ' >&2; local cc; read -r cc
+  local picked="${cnames[$((cc - 1))]:-}"
+  [ -z "$picked" ] && { echo "amux: no colour selected" >&2; return 1; }
+  _amux_colour_line "$agent" "$picked"
+}
+
+# Dispatch `amux --colours [grid|names|pick [agent]]` (default: render preview).
+_amux_colours() {
+  case "${1:-}" in
+    grid)  "$AGENTMUX_SCRIPTS/colours.sh" grid ;;
+    names) "$AGENTMUX_SCRIPTS/colours.sh" names ;;
+    pick)  shift; _amux_colour_pick "$@" ;;
+    ''|render) "$AGENTMUX_SCRIPTS/colours.sh" render ;;
+    *) echo "usage: amux --colours [grid|pick [agent]]" >&2; return 1 ;;
+  esac
+}
+
 # amux [(-<flag> | <agent_name>)] [session_name]
 #
 # Creates or attaches a tmux session managed by agentmux.
@@ -88,6 +127,11 @@ amux() {
         _amux_update "$HOME/.agentmux"
         return $?
         ;;
+      --colours|--colors)
+        shift
+        _amux_colours "$@"
+        return $?
+        ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
         agentmux_list_agent_completions
@@ -105,6 +149,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   session_name   defaults to basename of $PWD (dots → underscores)
 
   --update       update to the latest agentmux (git pull)
+  --colours      preview the colour palette (grid|pick subcommands)
   --version      print version
   --help         this help
 EOF
@@ -197,6 +242,18 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --help advertises --update.
   case "$help" in *"--update"*) _got="present" ;; *) _got="absent" ;; esac
   _assert "help advertises --update" "present" "$_got"
+
+  # --help advertises --colours.
+  case "$help" in *"--colours"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help advertises --colours" "present" "$_got"
+
+  # --colours render lists curated names; the line helper emits a paste field.
+  cols=$(amux --colours 2>/dev/null)
+  case "$cols" in *teal*) _got=ok ;; *) _got=bad ;; esac
+  _assert "colours render has teal" "ok" "$_got"
+  line=$(_amux_colour_line work teal)
+  case "$line" in *'colour = "teal"'*) _got=ok ;; *) _got=bad ;; esac
+  _assert "colour line paste field" "ok" "$_got"
 
   # _amux_update on a non-clone dir explains the dev case and fails non-zero.
   _td=$(mktemp -d)
