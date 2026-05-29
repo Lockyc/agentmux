@@ -45,7 +45,10 @@ If Homebrew is unavailable and deps are missing, warn the user and continue — 
 Detect what is already wired so question defaults are smart:
 
 ```bash
-[ -d ~/.agentmux ] && echo "installed" || echo "fresh"
+if [ ! -e ~/.agentmux ]; then echo "state:fresh";
+elif [ -d ~/.agentmux/.git ]; then echo "state:clone";
+elif [ -L ~/.agentmux/scripts ] || [ -L ~/.agentmux/bin ] || [ -L ~/.agentmux/shell ] || [ -L ~/.agentmux/tmux ]; then echo "state:dev-symlink";
+else echo "state:old-copy"; fi
 grep -qs "agentmux" ~/.zshrc                  && echo "zshrc:wired"  || echo "zshrc:missing"
 grep -qs "agentmux" ~/.bashrc                 && echo "bashrc:wired" || echo "bashrc:missing"
 grep -qs "agentmux" ~/.config/fish/config.fish && echo "fish:wired"  || echo "fish:missing"
@@ -60,13 +63,56 @@ curl -sf --max-time 2 http://localhost:1234/v1/models  -o /dev/null && echo "lms
 curl -sf --max-time 2 http://localhost:11434/v1/models -o /dev/null && echo "ollama:running"   || echo "ollama:not_running"
 ```
 
+### 3.5 Migrate an old copy-install (if detected)
+
+The install model is now a git clone at `~/.agentmux`. A pre-clone copy-install
+(real files, no `.git`, not symlinks) must be migrated — `install.sh` refuses to
+touch it automatically, so handle it here.
+
+Detect:
+
+```bash
+if [ -d ~/.agentmux ] && [ ! -d ~/.agentmux/.git ] && [ ! -L ~/.agentmux/scripts ] && [ ! -L ~/.agentmux/bin ] && [ ! -L ~/.agentmux/shell ] && [ ! -L ~/.agentmux/tmux ]; then echo "OLD_COPY"; else echo "OK"; fi
+```
+
+If `OLD_COPY`, use AskUserQuestion to confirm migration, explaining: "Your
+`~/.agentmux` is an older copy-install. Migrating moves it to a timestamped
+backup, clones the current version in its place, and restores your `agents.toml`.
+Proceed?"
+
+On confirmation, back it up (the core install in step 4 will then clone fresh
+because the path is gone):
+
+```bash
+TS=$(date +%Y%m%d-%H%M%S); mv ~/.agentmux ~/.agentmux.bak.$TS && echo "backed up to ~/.agentmux.bak.$TS"
+```
+
+Note the actual backup path from that output — reuse the same `~/.agentmux.bak.<timestamp>` literal in the restore step below; the `$TS` shell variable does not persist across separate command runs.
+
+Remember `~/.agentmux.bak.$TS` — after step 4 clones, restore the user's config:
+
+```bash
+[ -f ~/.agentmux.bak.$TS/agents.toml ] && cp ~/.agentmux.bak.$TS/agents.toml ~/.agentmux/agents.toml && echo "restored agents.toml"
+```
+
+Tell the user the backup remains at `~/.agentmux.bak.$TS` and they can delete it
+once they're satisfied the new install works.
+
+If the user declines migration, stop — do not run the core install (it would
+refuse anyway).
+
 ### 4. Run core install
+
+`install.sh` now manages `~/.agentmux` as a git clone: it clones if the path is
+absent (the case right after a 3.5 migration), `git pull`s an existing clone, and
+leaves a dev/symlink install untouched. It does not depend on `$REPO_DIR`.
 
 ```bash
 bash "$REPO_DIR/install.sh"
 ```
 
-If this fails, show the full output and stop.
+If a migration happened in step 3.5, restore the backed-up `agents.toml` now (see
+the restore command there). If this fails, show the full output and stop.
 
 ### 5. Ask what to set up
 
@@ -214,3 +260,5 @@ Restart Claude Code if hooks were wired — hooks take effect on the next sessio
 - If AI summaries were configured: the status bar populates automatically once Claude Code hooks are active and a session is running
 - If AI summaries were skipped: configure later by setting `url` and `model` under `[llm]` in `~/.agentmux/agents.toml`
 - The `--notify` flags in the `PermissionRequest` and `Stop` hooks trigger macOS desktop alerts via `osascript` — remove them from `~/.claude/settings.json` if unwanted
+- Update agentmux any time with `amux --update` (it's a git clone now — a plain `git pull`).
+- Enable a once-daily update check by setting `[update] check = true` in `~/.agentmux/agents.toml`.
