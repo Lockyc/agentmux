@@ -19,6 +19,9 @@ VC_LATEST="$VC_STATE_DIR/latest"
 VC_STAMP="$VC_STATE_DIR/version-check-stamp"
 VC_MAX_AGE=86400   # 24h
 
+_VC_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+. "$_VC_DIR/llm-config.sh"
+
 # Strictly-newer semver compare (numeric, dot-separated). Pure POSIX — avoids
 # `sort -V`, which BSD/macOS sort lacks. Returns 0 if REMOTE > LOCAL.
 # Usage: _vc_is_newer LOCAL REMOTE
@@ -83,16 +86,7 @@ _vc_enabled() {
     1|true|yes) return 0 ;;
     0|false|no) return 1 ;;
   esac
-  _cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
-  [ -f "$_cfg" ] || return 1
-  _mtime=$(stat -f %m "$_cfg" 2>/dev/null || stat -c %Y "$_cfg" 2>/dev/null || echo 0)
-  _cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_mtime}.json"
-  _json=""
-  if [ -f "$_cache" ]; then
-    _json=$(cat "$_cache")
-  elif command -v toml2json >/dev/null 2>&1; then
-    _json=$(toml2json < "$_cfg" 2>/dev/null || true)
-  fi
+  _json=$(_amux_config_json) || return 1
   [ -n "$_json" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   [ "$(printf '%s' "$_json" | jq -r '.update.check // false' 2>/dev/null)" = "true" ]
