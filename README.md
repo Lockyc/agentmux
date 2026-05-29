@@ -153,6 +153,8 @@ Both must print nothing and exit 0 on any error — the shared core treats them 
 
 To add e.g. a Gemini CLI adapter: create `scripts/gemini/{status,ctx,digest}.sh` following the Claude versions, wire your agent's hook system to call `~/.agentmux/scripts/gemini/status.sh <state>` with `state` ∈ `start|working|notify|permission|done`, and `install.sh` will pick the directory up automatically.
 
+**Keep custom adapters outside the shipped tree.** `~/.agentmux/` is a git clone and `amux --update` runs `git pull --ff-only`. Because adapters are referenced by absolute path — the hook command plus the `AGENTMUX_CTX_BIN`/`AGENTMUX_DIGEST_BIN` (and other `AGENTMUX_*_BIN`) overrides — they can live anywhere on your filesystem. Put your own under e.g. `~/.agentmux-local/<agent>/` and point your hook command and env-var overrides at those paths. Avoid authoring an adapter under `~/.agentmux/scripts/<name>/` using a name agentmux might later ship: if a future release adds a tracked `scripts/<name>/`, `amux --update` will refuse to proceed rather than overwrite your file, blocking updates until you relocate it.
+
 ## Shell support
 
 `amux` works in **bash**, **zsh**, and **fish**. All of the launcher logic lives in a single standalone bash executable — `bin/amux`, the one source of truth — and each interactive shell just sources a thin wrapper that defines the `amux` command and wires tab-completion. The launcher runs as a subprocess, so **bash must be installed**, but it does not have to be your interactive shell.
