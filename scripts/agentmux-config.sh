@@ -119,6 +119,12 @@ agentmux_llm_field() {
   _amux_json | jq -r ".llm.${1} // empty"
 }
 
+# Field value from [frame] table. Returns empty string if field absent.
+# Usage: agentmux_frame_field <field>
+agentmux_frame_field() {
+  _amux_json | jq -r ".frame.${1} // empty"
+}
+
 # Build the launch command for agent at index, applying keep_alive/reattach wrappers.
 # Warns to stderr if reattach=true without keep_alive=true.
 agentmux_build_cmd() {
@@ -194,6 +200,8 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "llm_field model"     "qwen2.5-14b-instruct"                     "$(agentmux_llm_field model)"
   _assert "llm_field timeout"   "20"                                        "$(agentmux_llm_field timeout)"
   _assert "llm_field absent"    ""                                          "$(agentmux_llm_field nonexistent)"
+  _assert "frame_field left"    "33"                                        "$(agentmux_frame_field left)"
+  _assert "frame_field absent"  ""                                          "$(agentmux_frame_field nonexistent)"
 
   # Self-contained coverage for agentmux_build_cmd's keep_alive/reattach
   # wrapping — exercises every branch without depending on the example

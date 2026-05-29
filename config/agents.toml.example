@@ -23,6 +23,11 @@ url     = "http://localhost:1234/v1/chat/completions"
 model   = "qwen2.5-14b-instruct"
 timeout = 20
 
+[frame]
+# `amux --frame` layout: a bare scratch terminal in the left pane beside amux in
+# the right pane (its own nested tmux). `left` is the left-pane width, percent.
+left = 33
+
 [[agents]]
 name = "personal"
 label = "pers"
