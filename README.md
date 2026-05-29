@@ -122,11 +122,15 @@ its own tab bar — there is no outer status bar. (Requires tmux ≥ 3.1 for the
   (default `C-f`; anything but `C-b`).
 - Set the left-pane width with `[frame] left = <percent>` (default `33`).
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
-  `amux --frame <session>`. Leave with `C-f d` (detach — both sides keep running)
-  or `C-f Q` (quit the frame; the amux session survives on its own socket — kill
-  that the usual way with `prefix-&` / `tmux kill-session`).
-- The right pane re-attaches the agent automatically, so an inner `C-b d` just
-  bounces you back in; use `C-f d` / `C-f Q` to actually leave the frame.
+  `amux --frame <session>` (if the right pane was closed, it's rebuilt).
+- **Two sessions, two sockets.** `--frame` involves a session named `<session>`
+  (your agent, on the default socket — what plain `tmux ls` shows) and a wrapper
+  `<session>-frame` (on the `agentmux-frame` socket — what `tmux ls` shows from
+  inside the frame). To leave the frame, `C-f d` (detach, both kept) or `C-f Q`
+  (quit the wrapper; the agent session survives, reattach later). To **kill the
+  agent**, `tmux kill-session -t <session>` like any amux session — the right
+  pane then just closes (it won't respawn the session). To remove the wrapper
+  while detached: `tmux -L agentmux-frame kill-session -t <session>-frame`.
 
 ## Adding an agent
 
