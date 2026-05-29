@@ -41,6 +41,17 @@ _amux_frame_width() {
   printf '%s' "$w"
 }
 
+# Resolve the OPTIONAL left-column vertical split for --frame: [frame]
+# left_vertical_split (percent height of the TOP sub-pane), clamped to 10..90.
+# Opt-in: unset or non-numeric → empty output (the left column stays one pane).
+_amux_frame_top_height() {
+  local h; h=$(agentmux_frame_field left_vertical_split)
+  case "$h" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$h" -lt 10 ] && h=10
+  [ "$h" -gt 90 ] && h=90
+  printf '%s' "$h"
+}
+
 # Resolve (agent, session) from amux positional args: [(-flag | name)] [session].
 # Echoes agent on line 1, session on line 2 (neither can contain a newline:
 # agent names are TOML keys, sessions are sanitised). Mirrors amux()'s own
@@ -206,11 +217,17 @@ _amux_frame() {
   # blurs the two, and a stale frame is harder to tell apart from the real one.
   local sock="$AGENTMUX_FRAME_SOCKET" fsess="${session}-frame"
 
+  # Optional left-column vertical split (empty = off). Resolved up front so the
+  # staleness check below knows the expected pane count.
+  local top; top=$(_amux_frame_top_height)
+
   # A frame that has lost its right (agent) pane is useless — reattaching it just
-  # shows a full-width terminal. Treat a <2-pane frame as stale and rebuild it.
+  # shows a full-width terminal. Treat a frame with fewer than its expected pane
+  # count (2, or 3 when the left split is enabled) as stale and rebuild it.
   if tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
-    local npanes; npanes=$(tmux -L "$sock" list-panes -t "$fsess" 2>/dev/null | wc -l | tr -d ' ')
-    [ "${npanes:-0}" -lt 2 ] && tmux -L "$sock" kill-session -t "$fsess" 2>/dev/null
+    local npanes want; want=2; [ -n "$top" ] && want=3
+    npanes=$(tmux -L "$sock" list-panes -t "$fsess" 2>/dev/null | wc -l | tr -d ' ')
+    [ "${npanes:-0}" -lt "$want" ] && tmux -L "$sock" kill-session -t "$fsess" 2>/dev/null
   fi
 
   if ! tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
@@ -236,12 +253,24 @@ _amux_frame() {
     else
       tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD" "$left_cmd"
     fi
+    # The sole pane is the left column; remember it so we can subdivide it below.
+    local left_pid agent_pid
+    left_pid=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_id}')
     # Optional per-user frame prefix override ([frame] prefix); default is in frame.conf.
     fprefix=$(agentmux_frame_field prefix)
     [ -n "$fprefix" ] && tmux -L "$sock" set -g prefix "$fprefix"
     # `-l` sizes the new (right) pane, so the left lands at $left% (`-l N%` needs
     # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
-    tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" "$right_cmd"
+    agent_pid=$(tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" -P -F '#{pane_id}' "$right_cmd")
+    # Optional vertical split of the LEFT column into top/bottom (a plain shell in
+    # the new bottom pane). Done AFTER the agent split so the agent keeps spanning
+    # full height; `-l` sizes the new (bottom) pane, so the top lands at $top%.
+    # Re-focus the agent afterwards (the -v split would otherwise leave the bottom
+    # pane active).
+    if [ -n "$top" ]; then
+      tmux -L "$sock" split-window -v -t "$left_pid" -l "$((100 - top))%" -c "$PWD"
+      tmux -L "$sock" select-pane -t "$agent_pid"
+    fi
   fi
   tmux -L "$sock" attach-session -t "$fsess"
 }
@@ -485,6 +514,18 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "frame_width no-frame"   "30" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
+
+  # _amux_frame_top_height: opt-in. Example config leaves it unset → empty (no split).
+  _assert "frame_top unset"        ""   "$(_amux_frame_top_height)"
+  printf '[frame]\nleft_vertical_split = 40\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_top value"        "40" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_height)"
+  printf '[frame]\nleft_vertical_split = 3\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_top clamp low"    "10" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_height)"
+  printf '[frame]\nleft_vertical_split = 99\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_top clamp high"   "90" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_height)"
   rm -f "$_fw"
   AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"; _amux_json_cache=""
 

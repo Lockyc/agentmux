@@ -125,7 +125,10 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   resize, `C-f Q` quit, `C-f d` detach), overridable via `[frame] prefix`. Both
   inner tmuxes use `C-b`, which the frame passes through to whichever pane is
   focused: left → the terminal's tabs, right → amux.
-- Set the left-pane width with `[frame] left = <percent>` (default `30`). Frame
+- Set the left-pane width with `[frame] left = <percent>` (default `30`).
+  Optionally split the left column top/bottom with `[frame] left_vertical_split =
+  <percent>` (the top sub-pane's height, `10`–`90`; unset = single left pane). The
+  bottom sub-pane is a plain shell — reach it with the mouse. Frame
   config applies when the frame is **created** — a persistent frame keeps its
   layout, so after changing it, tear the frame down (`C-f Q` or
   `amux --frame-kill <session>`) and relaunch. Killing only the agent session
