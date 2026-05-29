@@ -183,24 +183,35 @@ _amux_frame() {
   agent=$(printf '%s' "$target" | sed -n 1p)
   session=$(printf '%s' "$target" | sed -n 2p)
 
-  local sock="$AGENTMUX_FRAME_SOCKET"
-  if ! tmux -L "$sock" has-session -t "$session" 2>/dev/null; then
+  # The frame session lives on its own socket and is named distinctly from the
+  # amux session it wraps (which runs on the default socket): a same-named frame
+  # blurs the two, and a stale frame is harder to tell apart from the real one.
+  local sock="$AGENTMUX_FRAME_SOCKET" fsess="${session}-frame"
+
+  # A frame that has lost its right (agent) pane is useless — reattaching it just
+  # shows a full-width terminal. Treat a <2-pane frame as stale and rebuild it.
+  if tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
+    local npanes; npanes=$(tmux -L "$sock" list-panes -t "$fsess" 2>/dev/null | wc -l | tr -d ' ')
+    [ "${npanes:-0}" -lt 2 ] && tmux -L "$sock" kill-session -t "$fsess" 2>/dev/null
+  fi
+
+  if ! tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
     local left right self right_cmd fprefix
     left=$(_amux_frame_width)
     right=$((100 - left))
     # Absolute path to this launcher, for the right-pane invocation.
     self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
     right_cmd=$(_amux_frame_right_cmd "$self" "$agent" "$session")
-    tmux -L "$sock" -f "$frame_conf" new-session -d -s "$session" -c "$PWD"
+    tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD"
     # Optional per-user frame prefix override ([frame] prefix); default is in frame.conf.
     fprefix=$(agentmux_frame_field prefix)
     [ -n "$fprefix" ] && tmux -L "$sock" set -g prefix "$fprefix"
     # Left pane = bare $SHELL; right pane = amux. `-l` sizes the new (right) pane,
     # so the left lands at $left% (`-l N%` needs tmux >= 3.1). split-window -h
     # leaves the new right/agent pane focused — the pane we want on launch.
-    tmux -L "$sock" split-window -h -t "$session" -l "${right}%" -c "$PWD" "$right_cmd"
+    tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" "$right_cmd"
   fi
-  tmux -L "$sock" attach-session -t "$session"
+  tmux -L "$sock" attach-session -t "$fsess"
 }
 
 # amux [(-<flag> | <agent_name>)] [session_name]

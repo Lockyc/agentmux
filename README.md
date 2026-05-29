@@ -110,9 +110,10 @@ Matching uses the logical path — `$PWD` as your shell shows it — and symlink
 
 `amux --frame [agent] [session]` opens a scratch terminal in the left pane
 beside amux in the right pane. The split is a nested tmux on its own socket
-(`agentmux-frame`), so amux runs completely unchanged on the right with its own
-tab bar — there is no outer status bar. (Requires tmux ≥ 3.1 for the `-l %`
-split sizing.)
+(`agentmux-frame`, in a session named `<session>-frame` to keep it distinct from
+the amux session it wraps), so amux runs completely unchanged on the right with
+its own tab bar — there is no outer status bar. (Requires tmux ≥ 3.1 for the
+`-l %` split sizing.)
 
 - The frame uses a **secondary prefix `C-o`** for its few controls (`C-o h`/`C-o l`
   focus left/right, `C-o H`/`C-o L` resize, `C-o Q` quit the frame, `C-o d` detach).
