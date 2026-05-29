@@ -48,7 +48,7 @@ Updating an installed clone: `amux --update` (= `git -C ~/.agentmux pull --ff-on
 
 ## Local dev setup
 
-`~/.agentmux/scripts`, `~/.agentmux/shell`, `~/.agentmux/tmux`, and `~/.agentmux/bin` are directory-level symlinks to the repo. Changes to scripts are live immediately — no install step needed during development.
+`~/.agentmux/scripts`, `~/.agentmux/shell`, `~/.agentmux/tmux`, and `~/.agentmux/bin` are directory-level symlinks to the repo, and `~/.agentmux/VERSION` is a file-level symlink to it. Changes to scripts are live immediately — no install step needed during development. (`agents.toml` stays a real file — it's your config, not repo content.)
 
 The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do **not** need to be copied to `~/.claude/hooks/`.
 
@@ -60,9 +60,9 @@ The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do 
 
 Bump `VERSION` (semver) when making a meaningful change. For clone installs,
 `~/.agentmux/VERSION` is the tracked file at the checked-out commit, so it's always
-correct after `amux --update`. On a **dev/symlink** box `~/.agentmux/VERSION` is the
-repo's working-tree file (via the symlinks) — update it manually if you need
-`amux --version` to reflect a working bump.
+correct after `amux --update`. On a **dev/symlink** box `~/.agentmux/VERSION`
+symlinks the repo's working-tree file, so `amux --version` reflects a working bump
+the moment you edit `VERSION` — no manual copy needed.
 
 The opt-in daily check (`scripts/version_check.sh`) compares the GitHub `VERSION` to
 the local one and, when newer, prints a notice suggesting `amux --update`. It is off
