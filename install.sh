@@ -68,8 +68,8 @@ echo '  "SessionStart":      claude/status.sh start'
 echo '  "UserPromptSubmit":  claude/status.sh working'
 echo '  "PostToolUse":       claude/status.sh working'
 echo '  "Notification":      claude/status.sh notify'
-echo '  "PermissionRequest": claude/status.sh permission'
-echo '  "Stop":              claude/status.sh done'
+echo "  \"PermissionRequest\": claude/status.sh permission --notify 'Claude is waiting for permission'"
+echo "  \"Stop\":              claude/status.sh done --notify 'Claude has finished working'"
 echo ""
 echo "  Hook command path: ~/.agentmux/scripts/claude/status.sh <state>"
 echo ""
