@@ -44,6 +44,9 @@ _colour_resolve() {
 
 # Lighten a 6x6x6 cube code (16..231): raise each channel halfway to max.
 # Codes outside the cube are returned unchanged.
+# update_colors.sh inlines this same cube-lighten for its @l2bg shade (kept
+# separate so that POSIX hook adapter stays source-dependency-free); mirror any
+# change to the cube math there.
 _colour_lighten() {
   c="$1"
   if [ "$c" -ge 16 ] && [ "$c" -le 231 ]; then
@@ -79,6 +82,9 @@ _colour_fg() {
   else
     R=0; G=0; B=0
   fi
+  # Rec.601 luminance; >=140 -> black (16) text, else white (231). red (203 ->
+  # R255 G95 B95, lum 142) is the tightest base — 2 above the cut — so re-eyeball
+  # red if you ever nudge this threshold or swap red's code.
   lum=$(((299 * R + 587 * G + 114 * B) / 1000))
   [ "$lum" -ge 140 ] && printf '16' || printf '231'
 }
@@ -165,6 +171,11 @@ if [ "${COLOURS_SELFTEST:-}" = "1" ]; then
   # Test-only read of the sibling script — the runtime stays dependency-free.
   bars=$(sed -n "/palette='/,/'\$/p" "$(dirname "$0")/update_colors.sh" \
          | sed "s/.*palette='//; s/'\$//" | awk '{print $1}')
+  # If the sibling's palette block is ever reformatted this parse yields nothing,
+  # and an empty $bars makes _bar_mindist return 999 for every base — a vacuous
+  # PASS that hides the very regression this guards. Fail loudly instead.
+  case "$bars" in '') bguard=EMPTY ;; *) bguard=ok ;; esac
+  _assert "bar palette parsed (guard not vacuous)" "ok" "$bguard"
   _bar_mindist() { # min squared cube-distance from base $1 to any bar colour
     br=$((($1-16)/36%6)); bg=$((($1-16)/6%6)); bb=$((($1-16)%6)); m=999
     for s in $bars; do
@@ -186,14 +197,24 @@ if [ "${COLOURS_SELFTEST:-}" = "1" ]; then
   [ "$fail" -eq 0 ]; exit $?
 fi
 
-# CLI dispatch only when executed directly (not when sourced: $0 is the parent).
+# CLI dispatch only when executed directly. Under bash/sh a sourced file keeps $0
+# as the parent, so the basename guard alone suffices — but zsh sets $0 to the
+# sourced file (FUNCTION_ARGZERO) and would run the CLI on `source`, dumping the
+# palette into the caller. zsh marks a sourced frame with ':file' in
+# ZSH_EVAL_CONTEXT; bail then. The real CLI path executes under /bin/sh, where
+# ZSH_EVAL_CONTEXT is unset, so dispatch proceeds normally.
 case "${0##*/}" in
   colours.sh)
-    case "${1:-render}" in
-      render) colour_render ;;
-      grid)   colour_grid ;;
-      names)  colour_names ;;
-      *) echo "usage: colours.sh [render|grid|names]" >&2; exit 1 ;;
+    case "${ZSH_EVAL_CONTEXT:-}" in
+      *:file) : ;;   # sourced into zsh — stay a no-op
+      *)
+        case "${1:-render}" in
+          render) colour_render ;;
+          grid)   colour_grid ;;
+          names)  colour_names ;;
+          *) echo "usage: colours.sh [render|grid|names]" >&2; exit 1 ;;
+        esac
+        ;;
     esac
     ;;
 esac

@@ -21,6 +21,12 @@ agentmux_set_window_style() {
 
   inactive=$(agentmux_agent_field "$idx" colour_inactive)
   active=$(agentmux_agent_field "$idx" colour_active)
+  # Raw fields are a pair: derivation only kicks in when BOTH are absent, so a
+  # lone raw field silently leaves one window state unstyled AND shadows `colour`.
+  # Warn rather than fail quietly.
+  if { [ -n "$inactive" ] && [ -z "$active" ]; } || { [ -z "$inactive" ] && [ -n "$active" ]; }; then
+    echo "agentmux: agent '$name' sets only one of colour_inactive/colour_active — set both as a pair, or use 'colour' for auto-derived shades." >&2
+  fi
   # Raw fields win; otherwise derive both shades from the friendly `colour` base.
   if [ -z "$inactive" ] && [ -z "$active" ]; then
     local base derived

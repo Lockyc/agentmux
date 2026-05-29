@@ -83,6 +83,7 @@ AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 AMUX_SELFTEST=1              bash bin/amux
 VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
 COLOURS_SELFTEST=1           sh scripts/colours.sh
+UPDATE_COLORS_SELFTEST=1     sh scripts/update_colors.sh
 ```
 
 `summarise.sh` also has an optional live-LM smoke test that hits the configured endpoint and asserts the prompt rules survive (third-party scope, anti-invention). Manual only — skips silently if the LM is unreachable:
