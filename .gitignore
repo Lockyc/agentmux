@@ -1,3 +1,6 @@
 # User config (installed separately)
 *.local
 /docs/superpowers
+
+# User's live config lives at the clone root (~/.agentmux/agents.toml); never track it.
+/agents.toml
