@@ -121,8 +121,9 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   (config `tmux/term.conf`): its own tab bar, and it **never dies** — exit the
   shell and it respawns. It's a bare tmux (not your `~/.tmux.conf`), kept isolated
   on purpose.
-- **Prefixes:** the frame uses `C-f` ("f" for frame — `C-f h`/`l` focus, `C-f H`/`L`
-  resize, `C-f Q` quit, `C-f d` detach), overridable via `[frame] prefix`. Both
+- **Prefixes:** the frame uses `C-f` ("f" for frame — `C-f h`/`l` focus left/right,
+  `C-f j`/`k` move within the split left column, `C-f H`/`L` resize, `C-f Q` quit,
+  `C-f d` detach), overridable via `[frame] prefix`. Both
   inner tmuxes use `C-b`, which the frame passes through to whichever pane is
   focused: left → the terminal's tabs, right → amux.
 - Set the left-pane width with `[frame] left = <percent>` (default `30`).
