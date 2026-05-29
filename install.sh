@@ -1,65 +1,51 @@
 #!/usr/bin/env bash
-# install.sh — installs agentmux to ~/.agentmux/
-# Usage: bash install.sh
+# install.sh — installs/updates agentmux at ~/.agentmux/ as a git clone.
+# Usage:  bash install.sh
+#    or:  curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash
 
 set -e
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL="https://github.com/lockyc/agentmux"
 INSTALL_DIR="$HOME/.agentmux"
 
-VERSION="$(cat "$REPO_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
-echo "Installing agentmux${VERSION:+ v$VERSION} to $INSTALL_DIR ..."
+# A dev/symlink install has its bundle dirs symlinked to a working checkout.
+_is_symlink_dev() {
+  [ -L "$INSTALL_DIR/scripts" ] || [ -L "$INSTALL_DIR/bin" ] \
+    || [ -L "$INSTALL_DIR/shell" ] || [ -L "$INSTALL_DIR/tmux" ]
+}
 
-mkdir -p "$INSTALL_DIR/scripts" "$INSTALL_DIR/shell" "$INSTALL_DIR/tmux" "$INSTALL_DIR/bin"
+if [ ! -e "$INSTALL_DIR" ]; then
+  command -v git >/dev/null 2>&1 || { echo "agentmux: git is required to install" >&2; exit 1; }
+  echo "Cloning agentmux into $INSTALL_DIR ..."
+  git clone "$REPO_URL" "$INSTALL_DIR"
+elif [ -d "$INSTALL_DIR/.git" ]; then
+  command -v git >/dev/null 2>&1 || { echo "agentmux: git is required to update" >&2; exit 1; }
+  echo "Updating agentmux clone in $INSTALL_DIR ..."
+  git -C "$INSTALL_DIR" pull --ff-only
+elif _is_symlink_dev; then
+  echo "Detected dev/symlink install at $INSTALL_DIR — leaving it untouched."
+else
+  echo "agentmux: existing non-clone install at $INSTALL_DIR." >&2
+  echo "Run /agentmux:install to migrate it safely (backs up your current install, preserves agents.toml)." >&2
+  exit 1
+fi
 
-# Copy top-level scripts
-for f in "$REPO_DIR"/scripts/*.sh; do
-  dest="$INSTALL_DIR/scripts/$(basename "$f")"
-  [ "$f" -ef "$dest" ] || cp "$f" "$dest"
-done
-chmod +x "$INSTALL_DIR/scripts/"*.sh
+VERSION="$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION" 2>/dev/null || true)"
 
-# Copy agent-specific script subdirectories (scripts/claude/, scripts/gemini/, …)
-for dir in "$REPO_DIR"/scripts/*/; do
-  [ -d "$dir" ] || continue
-  sub=$(basename "$dir")
-  mkdir -p "$INSTALL_DIR/scripts/$sub"
-  for f in "$dir"*.sh; do
-    [ -f "$f" ] || continue
-    dest="$INSTALL_DIR/scripts/$sub/$(basename "$f")"
-    [ "$f" -ef "$dest" ] || cp "$f" "$dest"
-  done
-  for _f in "$INSTALL_DIR/scripts/$sub/"*.sh; do [ -f "$_f" ] && chmod +x "$_f"; done
-done
-
-# Copy shell integration files (bash/zsh + fish)
-for sh in agentmux.sh agentmux.fish; do
-  src="$REPO_DIR/shell/$sh"; dest="$INSTALL_DIR/shell/$sh"
-  [ -f "$src" ] && { [ "$src" -ef "$dest" ] || cp "$src" "$dest"; }
-done
-
-# Copy tmux snippet
-src="$REPO_DIR/tmux/agentmux.conf"; dest="$INSTALL_DIR/tmux/agentmux.conf"
-[ "$src" -ef "$dest" ] || cp "$src" "$dest"
-
-# Copy the amux executable
-src="$REPO_DIR/bin/amux"; dest="$INSTALL_DIR/bin/amux"
-[ "$src" -ef "$dest" ] || cp "$src" "$dest"
-chmod +x "$INSTALL_DIR/bin/amux"
-
-# Copy VERSION
-[ -f "$REPO_DIR/VERSION" ] && cp "$REPO_DIR/VERSION" "$INSTALL_DIR/VERSION"
-
-# Create default config if none exists
-if [ ! -f "$INSTALL_DIR/agents.toml" ]; then
-  cp "$REPO_DIR/config/agents.toml.example" "$INSTALL_DIR/agents.toml"
+# Seed the user's config from the example if they don't have one yet.
+if [ -f "$INSTALL_DIR/agents.toml" ]; then
+  echo "Config already exists at $INSTALL_DIR/agents.toml — not overwritten."
+elif [ -f "$INSTALL_DIR/config/agents.toml.example" ]; then
+  cp "$INSTALL_DIR/config/agents.toml.example" "$INSTALL_DIR/agents.toml"
   echo "Created default config at $INSTALL_DIR/agents.toml — edit to suit."
 else
-  echo "Config already exists at $INSTALL_DIR/agents.toml — not overwritten."
+  echo "No agents.toml.example found — create $INSTALL_DIR/agents.toml manually."
 fi
 
 echo ""
-echo "Done. Add the following to your shell config:"
+echo "agentmux${VERSION:+ v$VERSION} ready at $INSTALL_DIR."
+echo ""
+echo "Add the following to your shell config:"
 echo ""
 echo "  bash/zsh (~/.zshrc or ~/.bashrc):"
 echo "    source ~/.agentmux/shell/agentmux.sh"
@@ -90,5 +76,8 @@ echo ""
 echo "AI summary status lines require an OpenAI-compatible endpoint (LM Studio,"
 echo "Ollama, llama.cpp, etc.). Default: http://localhost:1234/v1/chat/completions."
 echo "Configure via [llm] in ~/.agentmux/agents.toml or AGENTMUX_LLM_URL."
+echo ""
+echo "Optional — enable a once-daily update check: set [update] check = true"
+echo "in ~/.agentmux/agents.toml. Update any time with: amux --update"
 echo ""
 echo "For non-Claude agents: see README 'Adding an agent integration'."
