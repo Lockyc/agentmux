@@ -85,6 +85,8 @@ amux
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
+| `amux --frames` | List active `--frame` wrappers (they live on a separate tmux socket) |
+| `amux --frame-kill [session]` | Kill a frame wrapper (default: current dir's); the agent keeps running |
 
 Set `[update] check = true` in `~/.agentmux/agents.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
@@ -124,13 +126,20 @@ its own tab bar — there is no outer status bar. (Requires tmux ≥ 3.1 for the
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
   `amux --frame <session>` (if the right pane was closed, it's rebuilt).
 - **Two sessions, two sockets.** `--frame` involves a session named `<session>`
-  (your agent, on the default socket — what plain `tmux ls` shows) and a wrapper
-  `<session>-frame` (on the `agentmux-frame` socket — what `tmux ls` shows from
-  inside the frame). To leave the frame, `C-f d` (detach, both kept) or `C-f Q`
-  (quit the wrapper; the agent session survives, reattach later). To **kill the
-  agent**, `tmux kill-session -t <session>` like any amux session — the right
-  pane then just closes (it won't respawn the session). To remove the wrapper
-  while detached: `tmux -L agentmux-frame kill-session -t <session>-frame`.
+  (your agent, on the **default** socket — what plain `tmux ls` shows) and a
+  wrapper `<session>-frame` (on the separate `agentmux-frame` socket — invisible
+  to a base-terminal `tmux ls`, which only talks to the default socket). The frame
+  is the *outer* layer in the nesting sense, but it lives on its own socket so its
+  stripped config never bleeds into your normal tmux — which is also why your base
+  terminal doesn't list it.
+- **Managing it all from the base terminal:**
+  - Leave the frame from inside: `C-f d` (detach, both kept) or `C-f Q` (quit the
+    wrapper; the agent survives, reattach later).
+  - `amux --frames` — list active frames (no need to remember the socket).
+  - `amux --frame-kill [session]` — kill a frame wrapper (default: current dir's);
+    the agent session keeps running.
+  - `tmux kill-session -t <session>` — kill the **agent** like any amux session;
+    the frame's right pane then just closes (it won't respawn).
 
 ## Adding an agent
 

@@ -216,6 +216,27 @@ _amux_frame() {
   tmux -L "$sock" attach-session -t "$fsess"
 }
 
+# List active frame wrappers (they live on their own socket, so a plain `tmux ls`
+# in the base terminal — the default socket — never shows them).
+_amux_frames() {
+  tmux -L "$AGENTMUX_FRAME_SOCKET" list-sessions 2>/dev/null || echo "amux: no active frames"
+}
+
+# Kill a frame wrapper from the base terminal (default: the current dir's). Only
+# touches the frame socket — the agent session on the default socket is left
+# running (kill it separately with `tmux kill-session -t <session>`).
+_amux_frame_kill() {
+  local session
+  if [ $# -gt 0 ]; then session=$(printf '%s' "$1" | tr '.:' '__'); else session=$(_amux_default_session_name); fi
+  local fsess; case "$session" in *-frame) fsess="$session" ;; *) fsess="${session}-frame" ;; esac
+  local sock="$AGENTMUX_FRAME_SOCKET"
+  if tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
+    tmux -L "$sock" kill-session -t "$fsess" && echo "killed frame '$fsess' (agent session, if any, still runs)"
+  else
+    echo "amux: no frame '$fsess' (try: amux --frames)" >&2; return 1
+  fi
+}
+
 # amux [(-<flag> | <agent_name>)] [session_name]
 #
 # Creates or attaches a tmux session managed by agentmux.
@@ -248,6 +269,15 @@ amux() {
         _amux_frame "$@"
         return $?
         ;;
+      --frames)
+        _amux_frames
+        return $?
+        ;;
+      --frame-kill)
+        shift
+        _amux_frame_kill "$@"
+        return $?
+        ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
         agentmux_list_agent_completions
@@ -267,6 +297,8 @@ amux [(-<flag> | <agent_name>)] [session_name]
   --update       update to the latest agentmux (git pull)
   --colours      preview the colour palette (grid|pick subcommands)
   --frame        open a side terminal (left) beside amux (right), nested tmux
+  --frames       list active frames (they live on a separate tmux socket)
+  --frame-kill   kill a frame [session] (default: current dir); agent keeps running
   --version      print version
   --help         this help
 EOF
@@ -358,6 +390,20 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # and parseable by any login shell incl. fish).
   _rc=$(_amux_frame_right_cmd /opt/amux work proj)
   _assert "frame right_cmd shape" "env -u TMUX '/opt/amux' 'work' 'proj'" "$_rc"
+
+  # --help advertises the frame management commands.
+  case "$help" in *"--frames"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --frames" "present" "$_got"
+  case "$help" in *"--frame-kill"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --frame-kill" "present" "$_got"
+
+  # --frames / --frame-kill against an isolated empty socket (no real frames touched).
+  AGENTMUX_FRAME_SOCKET="amux-selftest-$$"
+  _assert "frames empty" "amux: no active frames" "$(amux --frames 2>/dev/null)"
+  _fk=$(amux --frame-kill __nope__ 2>&1); _fkrc=$?
+  case "$_fk" in *"no frame '__nope__-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
+  _assert "frame-kill missing msg"  "ok" "$_got"
+  _assert "frame-kill missing exit" "1"  "$_fkrc"
 
   # --colours render lists curated names; the line helper emits a paste field.
   cols=$(amux --colours 2>/dev/null)
