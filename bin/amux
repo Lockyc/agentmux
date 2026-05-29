@@ -28,11 +28,11 @@ AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# Resolve the left-pane width for --frame: [frame] left (percent), default 20,
+# Resolve the left-pane width for --frame: [frame] left (percent), default 30,
 # clamped to 10..90. Non-numeric or absent → default.
 _amux_frame_width() {
   local w; w=$(agentmux_frame_field left)
-  case "$w" in ''|*[!0-9]*) w=20 ;; esac
+  case "$w" in ''|*[!0-9]*) w=30 ;; esac
   [ "$w" -lt 10 ] && w=10
   [ "$w" -gt 90 ] && w=90
   printf '%s' "$w"
@@ -454,8 +454,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "shquote plain"  "'work'"      "$(_amux_shquote work)"
   _assert "shquote squote" "'a'\\''b'"   "$(_amux_shquote "a'b")"
 
-  # _amux_frame_width: example config sets [frame] left = 20.
-  _assert "frame_width default" "20" "$(_amux_frame_width)"
+  # _amux_frame_width: example config sets [frame] left = 30.
+  _assert "frame_width default" "30" "$(_amux_frame_width)"
 
   # _amux_frame_width clamps from synthetic configs. Clear the (isolated) disk
   # cache between rewrites — same-second mtime would otherwise alias the cache.
@@ -468,7 +468,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "frame_width clamp high" "90" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
   printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
-  _assert "frame_width no-frame"   "20" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
+  _assert "frame_width no-frame"   "30" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
   rm -f "$_fw"
   AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"; _amux_json_cache=""
 

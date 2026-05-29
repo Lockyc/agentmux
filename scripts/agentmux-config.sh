@@ -200,7 +200,7 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "llm_field model"     "qwen2.5-14b-instruct"                     "$(agentmux_llm_field model)"
   _assert "llm_field timeout"   "20"                                        "$(agentmux_llm_field timeout)"
   _assert "llm_field absent"    ""                                          "$(agentmux_llm_field nonexistent)"
-  _assert "frame_field left"    "20"                                        "$(agentmux_frame_field left)"
+  _assert "frame_field left"    "30"                                        "$(agentmux_frame_field left)"
   _assert "frame_field absent"  ""                                          "$(agentmux_frame_field nonexistent)"
 
   # Self-contained coverage for agentmux_build_cmd's keep_alive/reattach
