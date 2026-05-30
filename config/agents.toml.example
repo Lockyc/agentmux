@@ -34,6 +34,15 @@ left = 30
 # (10..90). Unset = single left pane (default). The bottom sub-pane is a plain
 # shell; reach it with the mouse. e.g.:
 # left_vertical_split = 70
+# Which pane is focused when the frame starts: "agent" (right, the default) or
+# "terminal" (the left scratch column). e.g.:
+# focus = "terminal"
+# Where the frame's [amux frame] status bar sits: "bottom" (default) or "top". e.g.:
+# status_position = "top"
+# Make a bare `amux` (no --frame) open a frame by default. Off by default; a
+# bare `amux` then behaves like `amux --frame`. Use `amux --no-frame` for a
+# one-off plain launch. Ignored when amux is run inside an existing tmux. e.g.:
+# default = true
 
 [[agents]]
 name = "personal"

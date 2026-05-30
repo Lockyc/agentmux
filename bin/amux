@@ -59,6 +59,24 @@ _amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left)" 30; }
 # Opt-in: unset or non-numeric → empty output (the left column stays one pane).
 _amux_frame_top_height() { _amux_clamp_pct "$(agentmux_frame_field left_vertical_split)" ""; }
 
+# Resolve which pane the frame focuses on start: [frame] focus. "terminal" focuses
+# the left scratch column; anything else (incl. unset) focuses the agent (right).
+_amux_frame_focus() {
+  case "$(agentmux_frame_field focus)" in terminal) echo terminal ;; *) echo agent ;; esac
+}
+
+# Resolve the frame status bar position: [frame] status_position. "top" puts the
+# [amux frame] bar at the top; anything else (incl. unset) keeps it at the bottom.
+_amux_frame_status_position() {
+  case "$(agentmux_frame_field status_position)" in top) echo top ;; *) echo bottom ;; esac
+}
+
+# Whether a bare `amux` (no --frame/--no-frame) should open a frame: [frame]
+# default = true. Echoes "1" when on, "" otherwise.
+_amux_frame_default() {
+  [ "$(agentmux_frame_field default)" = "true" ] && echo 1 || echo ""
+}
+
 # Resolve (agent, session) from amux positional args: [(-flag | name)] [session].
 # Echoes agent on line 1, session on line 2 (neither can contain a newline:
 # agent names are TOML keys, sessions are sanitised). Mirrors amux()'s own
@@ -182,8 +200,11 @@ _amux_colours() {
 # this through the user's login shell — maybe fish — which couldn't parse an sh
 # loop anyway. If the agent session is detached or killed the pane just exits;
 # reattaching the frame rebuilds it (see the <2-pane staleness check above).
+# `--no-frame` is explicit: with [frame] default = true a bare amux opens a frame,
+# and this pane runs with TMUX unset, so without it the agent pane would itself
+# spawn another frame in an endless loop.
 _amux_frame_right_cmd() { # <self> <agent> <session>
-  printf 'env -u TMUX %s %s %s' \
+  printf 'env -u TMUX %s --no-frame %s %s' \
     "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")"
 }
 
@@ -224,6 +245,10 @@ _amux_frame() {
   # Optional left-column vertical split (empty = off). Resolved up front so the
   # staleness check below knows the expected pane count.
   local top; top=$(_amux_frame_top_height)
+  # Start focus (agent|terminal) and status bar position (bottom|top), [frame] config.
+  local focus status_pos
+  focus=$(_amux_frame_focus)
+  status_pos=$(_amux_frame_status_position)
 
   # A frame that has lost its right (agent) pane is useless — reattaching it just
   # shows a full-width terminal. Treat a frame with fewer than its expected pane
@@ -265,18 +290,24 @@ _amux_frame() {
     # Per-session (not -g): the frame socket can host several frames, each in its own
     # project, and a global option would let the last launch clobber the others.
     tmux -L "$sock" set -t "$fsess" @amux_project "$(basename "$PWD")"
+    # Status bar position ([frame] status_position): frame.conf relies on tmux's
+    # default (bottom); override per-session here when "top" is requested.
+    tmux -L "$sock" set -t "$fsess" status-position "$status_pos"
     # `-l` sizes the new (right) pane, so the left lands at $left% (`-l N%` needs
     # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
     agent_pid=$(tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" -P -F '#{pane_id}' "$right_cmd")
     # Optional vertical split of the LEFT column into top/bottom (a plain shell in
     # the new bottom pane). Done AFTER the agent split so the agent keeps spanning
     # full height; `-l` sizes the new (bottom) pane, so the top lands at $top%.
-    # Re-focus the agent afterwards (the -v split would otherwise leave the bottom
-    # pane active).
     if [ -n "$top" ]; then
       tmux -L "$sock" split-window -v -t "$left_pid" -l "$((100 - top))%" -c "$PWD"
-      tmux -L "$sock" select-pane -t "$agent_pid"
     fi
+    # Start focus ([frame] focus): agent (right) by default, or the left scratch
+    # column. Done last so it wins over wherever the splits left the active pane.
+    case "$focus" in
+      terminal) tmux -L "$sock" select-pane -t "$left_pid" ;;
+      *)        tmux -L "$sock" select-pane -t "$agent_pid" ;;
+    esac
   fi
   tmux -L "$sock" attach-session -t "$fsess"
 }
@@ -332,7 +363,7 @@ _amux_frame_server_kill() {
 #   (none)         agent whose `dirs` matches $PWD; else first agent in config
 # Remaining arg (if any) is the session name; defaults to current dir basename.
 amux() {
-  local agent_name="" session_arg=""
+  local agent_name="" session_arg="" no_frame=""
 
   if [ $# -gt 0 ]; then
     case "$1" in
@@ -354,6 +385,11 @@ amux() {
         shift
         _amux_frame "$@"
         return $?
+        ;;
+      --no-frame)
+        # Opt out of [frame] default for this run; fall through to a plain launch.
+        no_frame=1
+        shift
         ;;
       --frames)
         _amux_frames
@@ -387,6 +423,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   --update       update to the latest agentmux (git pull)
   --colours      preview the colour palette (grid|pick subcommands)
   --frame        open a side terminal (left) beside amux (right), nested tmux
+  --no-frame     force a plain launch (opt out of [frame] default = true)
   --frames       list active frames (they live on a separate tmux socket)
   --frame-kill   kill a frame [session] (default: current dir); agent keeps running
   --frame-server-kill  kill ALL frames + scratch terminals at once; agents keep running
@@ -396,6 +433,14 @@ EOF
         return 0
         ;;
     esac
+  fi
+
+  # [frame] default = true makes a bare amux open a frame, as if --frame were
+  # passed. Skipped when --no-frame was given, or when already inside tmux (where
+  # --frame can't run anyway — fall through to a normal in-tmux launch instead).
+  if [ -z "$no_frame" ] && [ -z "${TMUX:-}" ] && [ -n "$(_amux_frame_default)" ]; then
+    _amux_frame "$@"
+    return $?
   fi
 
   local _amux_target
@@ -471,6 +516,10 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$help" in *"--frame"*) _got="present" ;; *) _got="absent" ;; esac
   _assert "help advertises --frame" "present" "$_got"
 
+  # --help advertises --no-frame.
+  case "$help" in *"--no-frame"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help advertises --no-frame" "present" "$_got"
+
   # --frame refuses to run inside tmux (guard returns 1 before any tmux call).
   _fout=$(TMUX="/tmp/fake,1,0" _amux_frame work test 2>&1); _frc=$?
   case "$_fout" in *"must be run from a plain terminal"*) _got=ok ;; *) _got="bad:$_fout" ;; esac
@@ -480,7 +529,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # _amux_frame_right_cmd: a single plain amux attach (no loop → no resurrection,
   # and parseable by any login shell incl. fish).
   _rc=$(_amux_frame_right_cmd /opt/amux work proj)
-  _assert "frame right_cmd shape" "env -u TMUX '/opt/amux' 'work' 'proj'" "$_rc"
+  _assert "frame right_cmd shape" "env -u TMUX '/opt/amux' --no-frame 'work' 'proj'" "$_rc"
 
   # _amux_frame_left_cmd: plain attach to the dedicated term socket (trailing
   # `-c <PWD>` varies, so assert the stable prefix).
@@ -551,6 +600,22 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   printf '[frame]\nleft_vertical_split = 99\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "frame_top clamp high"   "90" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_height)"
+
+  # _amux_frame_focus / _amux_frame_status_position / _amux_frame_default: the
+  # example config sets none of these, so each falls back to its default.
+  _assert "frame_focus default"  "agent"  "$(_amux_frame_focus)"
+  _assert "frame_status default" "bottom" "$(_amux_frame_status_position)"
+  _assert "frame_default unset"  ""       "$(_amux_frame_default)"
+  printf '[frame]\nfocus = "terminal"\nstatus_position = "top"\ndefault = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_focus terminal" "terminal" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_focus)"
+  _assert "frame_status top"     "top"      "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_status_position)"
+  _assert "frame_default on"     "1"        "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_default)"
+  # Unrecognised values fall back to defaults (agent / bottom).
+  printf '[frame]\nfocus = "sideways"\nstatus_position = "middle"\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_focus bad val"  "agent"  "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_focus)"
+  _assert "frame_status bad val" "bottom" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_status_position)"
   rm -f "$_fw"
   AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"; _amux_json_cache=""
 

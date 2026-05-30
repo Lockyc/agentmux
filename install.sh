@@ -84,5 +84,7 @@ echo "Side-terminal layout: 'amux --frame [agent] [session]' opens a bare termin
 echo "in the left pane beside amux in the right (a nested tmux on its own socket)."
 echo "Set the left-pane width with [frame] left = <percent> in ~/.agentmux/agents.toml;"
 echo "optionally split the left column top/bottom with [frame] left_vertical_split = <percent>."
+echo "[frame] focus = agent|terminal picks the start pane; status_position = bottom|top"
+echo "moves the bar; default = true makes a bare 'amux' open a frame ('amux --no-frame' opts out)."
 echo ""
 echo "For non-Claude agents: see README 'Adding an agent integration'."
