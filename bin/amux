@@ -27,30 +27,37 @@ source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
 AGENTMUX_FRAME_SOCKET="${AGENTMUX_FRAME_SOCKET:-agentmux-frame}"
 export AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
+# Absolute path to this launcher (for --frame's right-pane re-invocation), resolved
+# once here from the same BASH_SOURCE the dirs above use.
+AGENTMUX_BIN="${AGENTMUX_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/$(basename "${BASH_SOURCE[0]}")}"
 
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# Sanitise a tmux session name: tmux uses . and : as target separators
+# (session.win.pane, session:win), so an unsanitised name breaks
+# `tmux has-session -t` and friends. Map both to _.
+_amux_sanitize_session() { printf '%s' "$1" | tr '.:' '__'; }
+
+# Clamp a percent to 10..90. Non-numeric/empty falls back to $2 (the default),
+# which may itself be empty — in which case the result is empty (no output).
+_amux_clamp_pct() {
+  local v="$1"
+  case "$v" in ''|*[!0-9]*) v="$2" ;; esac
+  [ -z "$v" ] && return 0
+  [ "$v" -lt 10 ] && v=10
+  [ "$v" -gt 90 ] && v=90
+  printf '%s' "$v"
+}
+
 # Resolve the left-pane width for --frame: [frame] left (percent), default 30,
 # clamped to 10..90. Non-numeric or absent → default.
-_amux_frame_width() {
-  local w; w=$(agentmux_frame_field left)
-  case "$w" in ''|*[!0-9]*) w=30 ;; esac
-  [ "$w" -lt 10 ] && w=10
-  [ "$w" -gt 90 ] && w=90
-  printf '%s' "$w"
-}
+_amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left)" 30; }
 
 # Resolve the OPTIONAL left-column vertical split for --frame: [frame]
 # left_vertical_split (percent height of the TOP sub-pane), clamped to 10..90.
 # Opt-in: unset or non-numeric → empty output (the left column stays one pane).
-_amux_frame_top_height() {
-  local h; h=$(agentmux_frame_field left_vertical_split)
-  case "$h" in ''|*[!0-9]*) return 0 ;; esac
-  [ "$h" -lt 10 ] && h=10
-  [ "$h" -gt 90 ] && h=90
-  printf '%s' "$h"
-}
+_amux_frame_top_height() { _amux_clamp_pct "$(agentmux_frame_field left_vertical_split)" ""; }
 
 # Resolve (agent, session) from amux positional args: [(-flag | name)] [session].
 # Echoes agent on line 1, session on line 2 (neither can contain a newline:
@@ -73,17 +80,14 @@ _amux_resolve_target() {
     local nidx; nidx=$(agentmux_find_by_name "$1")
     if [ "$nidx" != "-1" ]; then agent_name="$1"; shift; fi
   fi
-  local session_arg="${1:-$(_amux_default_session_name)}"
-  # tmux uses . and : as target separators (`session.win.pane`, `session:win`);
-  # an unsanitised name breaks `tmux has-session -t` and friends, so map both to _.
-  session_arg=$(printf '%s' "$session_arg" | tr '.:' '__')
+  local session_arg; session_arg=$(_amux_sanitize_session "${1:-$(_amux_default_session_name)}")
   [ -z "$agent_name" ] && agent_name=$(agentmux_agent_for_dir "$PWD")
   [ -z "$agent_name" ] && agent_name=$(agentmux_first_agent)
   printf '%s\n%s\n' "$agent_name" "$session_arg"
 }
 
 _amux_default_session_name() {
-  basename "$PWD" | tr . _
+  _amux_sanitize_session "$(basename "$PWD")"
 }
 
 _amux_attach() {
@@ -231,13 +235,12 @@ _amux_frame() {
   fi
 
   if ! tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
-    local left right self right_cmd left_cmd fprefix cols lines _sz
+    local left right right_cmd left_cmd fprefix cols lines _sz
     left=$(_amux_frame_width)
     right=$((100 - left))
-    # Absolute path to this launcher, for the right-pane invocation.
-    self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
     left_cmd=$(_amux_frame_left_cmd "$AGENTMUX_TERM_SOCKET" "$term_conf" "${session}-term")
-    right_cmd=$(_amux_frame_right_cmd "$self" "$agent" "$session")
+    # $AGENTMUX_BIN: absolute path to this launcher, for the right-pane invocation.
+    right_cmd=$(_amux_frame_right_cmd "$AGENTMUX_BIN" "$agent" "$session")
     # Create the frame at the real terminal size (--frame runs in a plain
     # terminal). tmux distributes a *resize* equally across panes, so a frame born
     # at tmux's detached 80-col default would skew the ratio when it later attaches
@@ -248,11 +251,10 @@ _amux_frame() {
     case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
     case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
     # Left pane = persistent scratch terminal (own socket); right pane = amux.
-    if [ "$cols" -gt 0 ] && [ "$lines" -gt 0 ]; then
-      tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD" -x "$cols" -y "$lines" "$left_cmd"
-    else
-      tmux -L "$sock" -f "$frame_conf" new-session -d -s "$fsess" -c "$PWD" "$left_cmd"
-    fi
+    # Pass -x/-y only when the real size was readable; otherwise let tmux default.
+    local nsargs=(new-session -d -s "$fsess" -c "$PWD")
+    [ "$cols" -gt 0 ] && [ "$lines" -gt 0 ] && nsargs+=(-x "$cols" -y "$lines")
+    tmux -L "$sock" -f "$frame_conf" "${nsargs[@]}" "$left_cmd"
     # The sole pane is the left column; remember it so we can subdivide it below.
     local left_pid agent_pid
     left_pid=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_id}')
@@ -291,10 +293,9 @@ _amux_frames() {
 # `tmux kill-session -t <session>`).
 _amux_frame_kill() {
   local arg base
-  if [ $# -gt 0 ]; then arg="$1"; else arg=$(_amux_default_session_name); fi
-  # Sanitise both paths the same way the frame was named (_amux_resolve_target
-  # maps . and : → _); the no-arg default basename can still carry a colon.
-  arg=$(printf '%s' "$arg" | tr '.:' '__')
+  # Sanitise the same way the frame was named (. and : → _) so an explicit arg or
+  # the no-arg default basename resolves to the name the frame was created under.
+  if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
   case "$arg" in *-frame) base="${arg%-frame}" ;; *) base="$arg" ;; esac
   local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
   local fsess="${base}-frame" tsess="${base}-term"
@@ -304,6 +305,21 @@ _amux_frame_kill() {
     echo "killed frame '$fsess' + terminal '$tsess' (agent session, if any, still runs)"
   else
     echo "amux: no frame '$fsess' (try: amux --frames)" >&2; return 1
+  fi
+}
+
+# Kill EVERY frame at once: tears down the whole frame server (all wrappers on the
+# frame socket) and the entire scratch-terminal server with it. Agent sessions on
+# the default socket survive. Handy to refresh all frames after a frame.conf change,
+# since a frame only reads config when (re)created.
+_amux_frame_server_kill() {
+  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
+  if tmux -L "$fsock" list-sessions >/dev/null 2>&1; then
+    tmux -L "$fsock" kill-server 2>/dev/null
+    tmux -L "$tsock" kill-server 2>/dev/null   # the paired scratch terminals
+    echo "killed all frames + scratch terminals (agent sessions, if any, still run)"
+  else
+    echo "amux: no active frames (try: amux --frames)" >&2; return 1
   fi
 }
 
@@ -348,6 +364,10 @@ amux() {
         _amux_frame_kill "$@"
         return $?
         ;;
+      --frame-server-kill)
+        _amux_frame_server_kill
+        return $?
+        ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
         agentmux_list_agent_completions
@@ -369,6 +389,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   --frame        open a side terminal (left) beside amux (right), nested tmux
   --frames       list active frames (they live on a separate tmux socket)
   --frame-kill   kill a frame [session] (default: current dir); agent keeps running
+  --frame-server-kill  kill ALL frames + scratch terminals at once; agents keep running
   --version      print version
   --help         this help
 EOF
