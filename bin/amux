@@ -259,6 +259,10 @@ _amux_frame() {
     # Optional per-user frame prefix override ([frame] prefix); default is in frame.conf.
     fprefix=$(agentmux_frame_field prefix)
     [ -n "$fprefix" ] && tmux -L "$sock" set -g prefix "$fprefix"
+    # Project label for the status-left badge ([amux frame] <projectdir>/<session>).
+    # Per-session (not -g): the frame socket can host several frames, each in its own
+    # project, and a global option would let the last launch clobber the others.
+    tmux -L "$sock" set -t "$fsess" @amux_project "$(basename "$PWD")"
     # `-l` sizes the new (right) pane, so the left lands at $left% (`-l N%` needs
     # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
     agent_pid=$(tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" -P -F '#{pane_id}' "$right_cmd")
