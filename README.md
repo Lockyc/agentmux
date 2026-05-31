@@ -78,8 +78,8 @@ amux
 |---|---|
 | `amux` | New/attach session; agent auto-selected from the current directory (see below), else the first agent in the list |
 | `amux -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
-| `amux <name>` | New/attach session, agent by name |
-| `amux <name> <session>` | New/attach named session with specified agent |
+| `amux <agent>` | New/attach session, agent by name |
+| `amux <agent> <session>` | New/attach named session with specified agent |
 | `prefix-c` | New tab, auto-launches current `@agent-mode` agent |
 | `prefix-m` | Cycle `@agent-mode` through defined agents (agentmux sessions only) |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
