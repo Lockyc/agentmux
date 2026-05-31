@@ -299,10 +299,11 @@ _amux_frame() {
     # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
     agent_pid=$(tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" -P -F '#{pane_id}' "$right_cmd")
     # Optional vertical split of the LEFT column into top/bottom (a plain shell in
-    # the new bottom pane). Done AFTER the agent split so the agent keeps spanning
-    # full height; `-l` sizes the new (bottom) pane, so the top lands at $top%.
+    # the new TOP pane). `-b` inserts the new pane ABOVE left_pid, so the scratch
+    # terminal (with its tab bar) stays at the BOTTOM. Done AFTER the agent split so
+    # the agent keeps spanning full height; `-l` sizes the new (top) pane to $top%.
     if [ -n "$top" ]; then
-      tmux -L "$sock" split-window -v -t "$left_pid" -l "$((100 - top))%" -c "$PWD"
+      tmux -L "$sock" split-window -v -b -t "$left_pid" -l "${top}%" -c "$PWD"
     fi
     # Start focus ([frame] focus): agent (right) by default, or the left scratch
     # column. Done last so it wins over wherever the splits left the active pane.

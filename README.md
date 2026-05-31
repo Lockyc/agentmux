@@ -129,7 +129,8 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
 - Set the left-pane width with `[frame] left = <percent>` (default `30`).
   Optionally split the left column top/bottom with `[frame] left_vertical_split =
   <percent>` (the top sub-pane's height, `10`–`90`; unset = single left pane). The
-  bottom sub-pane is a plain shell — reach it with the mouse. Frame
+  top sub-pane is a plain shell; the scratch terminal (with its tab bar) stays in
+  the bottom sub-pane — reach the top shell with the mouse. Frame
   config applies when the frame is **created** — a persistent frame keeps its
   layout, so after changing it, tear the frame down (`C-f Q` or
   `amux --frame-kill <session>`) and relaunch. Killing only the agent session

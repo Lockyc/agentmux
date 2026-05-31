@@ -31,8 +31,9 @@ left = 30
 # C-f ('f' for frame). Override here with anything but C-b (which amux uses), e.g.:
 # prefix = "C-Space"
 # Optionally split the left column top/bottom: percent height of the TOP sub-pane
-# (10..90). Unset = single left pane (default). The bottom sub-pane is a plain
-# shell; reach it with the mouse. e.g.:
+# (10..90). Unset = single left pane (default). The top sub-pane is a plain shell;
+# the scratch terminal (with its tab bar) stays in the bottom sub-pane. Reach the
+# top shell with the mouse. e.g.:
 # left_vertical_split = 70
 # Which pane is focused when the frame starts: "agent" (right, the default) or
 # "terminal" (the left scratch column). e.g.:
