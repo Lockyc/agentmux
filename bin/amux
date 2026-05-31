@@ -52,29 +52,29 @@ _amux_clamp_pct() {
 
 # Resolve the left-pane width for --frame: [frame] left (percent), default 30,
 # clamped to 10..90. Non-numeric or absent → default.
-_amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left)" 30; }
+_amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left "$PWD")" 30; }
 
 # Resolve the OPTIONAL left-column vertical split for --frame: [frame]
 # left_vertical_split (percent height of the TOP sub-pane), clamped to 10..90.
 # Opt-in: unset or non-numeric → empty output (the left column stays one pane).
-_amux_frame_top_height() { _amux_clamp_pct "$(agentmux_frame_field left_vertical_split)" ""; }
+_amux_frame_top_height() { _amux_clamp_pct "$(agentmux_frame_field left_vertical_split "$PWD")" ""; }
 
 # Resolve which pane the frame focuses on start: [frame] focus. "terminal" focuses
 # the left scratch column; anything else (incl. unset) focuses the agent (right).
 _amux_frame_focus() {
-  case "$(agentmux_frame_field focus)" in terminal) echo terminal ;; *) echo agent ;; esac
+  case "$(agentmux_frame_field focus "$PWD")" in terminal) echo terminal ;; *) echo agent ;; esac
 }
 
 # Resolve the frame status bar position: [frame] status_position. "top" puts the
 # [amux frame] bar at the top; anything else (incl. unset) keeps it at the bottom.
 _amux_frame_status_position() {
-  case "$(agentmux_frame_field status_position)" in top) echo top ;; *) echo bottom ;; esac
+  case "$(agentmux_frame_field status_position "$PWD")" in top) echo top ;; *) echo bottom ;; esac
 }
 
 # Whether a bare `amux` (no --frame/--no-frame) should open a frame: [frame]
 # default = true. Echoes "1" when on, "" otherwise.
 _amux_frame_default() {
-  [ "$(agentmux_frame_field default)" = "true" ] && echo 1 || echo ""
+  [ "$(agentmux_frame_field default "$PWD")" = "true" ] && echo 1 || echo ""
 }
 
 # Resolve (agent, session) from amux positional args: [(-flag | name)] [session].
@@ -282,9 +282,12 @@ _amux_frame() {
     # The sole pane is the left column; remember it so we can subdivide it below.
     local left_pid agent_pid
     left_pid=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_id}')
-    # Optional per-user frame prefix override ([frame] prefix); default is in frame.conf.
-    fprefix=$(agentmux_frame_field prefix)
-    [ -n "$fprefix" ] && tmux -L "$sock" set -g prefix "$fprefix"
+    # Optional frame prefix override ([frame] prefix); default is in frame.conf.
+    # Per-session (not -g), like @amux_project below: prefix is a session option,
+    # and the shared frame socket hosts several project frames — a global set
+    # would let the last launch clobber the others (more so now it's dir-aware).
+    fprefix=$(agentmux_frame_field prefix "$PWD")
+    [ -n "$fprefix" ] && tmux -L "$sock" set -t "$fsess" prefix "$fprefix"
     # Project label for the status-left badge ([amux frame] <projectdir>/<session>).
     # Per-session (not -g): the frame socket can host several frames, each in its own
     # project, and a global option would let the last launch clobber the others.

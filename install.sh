@@ -86,5 +86,6 @@ echo "Set the left-pane width with [frame] left = <percent> in ~/.agentmux/agent
 echo "optionally split the left column top/bottom with [frame] left_vertical_split = <percent>."
 echo "[frame] focus = agent|terminal picks the start pane; status_position = bottom|top"
 echo "moves the bar; default = true makes a bare 'amux' open a frame ('amux --no-frame' opts out)."
+echo "Any [frame] field can be overridden per-directory with [frame.dirs.\"<path>\"]."
 echo ""
 echo "For non-Claude agents: see README 'Adding an agent integration'."

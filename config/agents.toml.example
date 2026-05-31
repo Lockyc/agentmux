@@ -43,6 +43,16 @@ left = 30
 # bare `amux` then behaves like `amux --frame`. Use `amux --no-frame` for a
 # one-off plain launch. Ignored when amux is run inside an existing tmux. e.g.:
 # default = true
+#
+# Per-directory overrides: any field above can be overridden for a directory
+# (and its subdirectories) with a [frame.dirs."<path>"] block. Same matching as
+# an agent's `dirs` — `~` expands to $HOME, trailing slash ignored, the longest
+# matching path wins — and resolution is per-field: a block only overrides the
+# fields it names; everything else falls back to a shallower block, then to the
+# base [frame] values above. e.g. a taller split + terminal focus in one tree:
+# [frame.dirs."~/Developer/github.com/lockyc/agentmux"]
+# left_vertical_split = 30
+# focus = "terminal"
 
 [[agents]]
 name = "personal"

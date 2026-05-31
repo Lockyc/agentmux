@@ -119,10 +119,34 @@ agentmux_llm_field() {
   _amux_json | jq -r ".llm.${1} // empty"
 }
 
-# Field value from [frame] table. Returns empty string if field absent.
-# Usage: agentmux_frame_field <field>
+# Field value from the [frame] table, optionally directory-scoped.
+# Usage: agentmux_frame_field <field> [dir]
+#
+# With <dir>: per-field override resolution. Each [frame.dirs."<path>"] block
+# whose path matches <dir> (same rules as agentmux_agent_for_dir: ~→$HOME,
+# trailing slash ignored, equal-or-subtree match) is a candidate *for fields it
+# actually sets*; the longest matching path wins. A field no block sets falls
+# back to the base [frame].<field>. Cascade is per-field, so a deep block only
+# shadows the fields it names; the rest inherit shallower blocks or the base.
+# Without <dir> (or empty): plain base read — current behaviour, unchanged.
+#
+# Uses an explicit has()/null check rather than `//` so an override that sets a
+# field to boolean false wins over a truthy base (jq's // treats false as empty).
 agentmux_frame_field() {
-  _amux_json | jq -r ".frame.${1} // empty"
+  _amux_json | jq -r --arg f "$1" --arg dir "${2:-}" --arg home "$HOME" '
+    (.frame // {}) as $frame
+    | [ ($frame.dirs // {}) | to_entries[]
+        | (.key | gsub("^~"; $home) | rtrimstr("/")) as $pat
+        | select($dir != "" and ($dir == $pat or ($dir | startswith($pat + "/"))))
+        | select(.value | has($f))
+        | {len: ($pat | length), val: .value[$f]}
+      ] as $cands
+    | ($cands | map(.len) | max) as $m
+    | ($cands | map(select(.len == $m)) | first) as $hit
+    | if   $hit != null     then $hit.val
+      elif $frame | has($f) then $frame[$f]
+      else empty end
+  '
 }
 
 # Build the launch command for agent at index, applying keep_alive/reattach wrappers.
@@ -276,6 +300,52 @@ TOML
   _assert "dir routing no match"    ""       "$(agentmux_agent_for_dir /tmp/elsewhere)"
   _dir_mtime=$(stat -f %m "$_dircfg" 2>/dev/null || stat -c %Y "$_dircfg" 2>/dev/null || echo 0)
   rm -f "$_dircfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_dir_mtime}.json"
+
+  # Directory-scoped [frame] overrides. Same match rules as agentmux_agent_for_dir
+  # (longest path wins, subtree match, ~ expansion), but resolved per-field: a
+  # deeper block only shadows a field it actually sets, otherwise the field falls
+  # back to a shallower block, then to the base [frame] value. A ~ key exercises
+  # $HOME expansion; an explicit `false` override exercises the has()-not-// guard.
+  _frcfg=$(mktemp /tmp/agentmux-frame-XXXXXX.toml) || exit 1
+  cat > "$_frcfg" <<TOML
+[frame]
+left = 30
+left_vertical_split = 50
+focus = "agent"
+default = true
+
+[frame.dirs."/tmp/amux-frame"]
+left_vertical_split = 30
+
+[frame.dirs."/tmp/amux-frame/deep"]
+focus = "terminal"
+default = false
+
+[frame.dirs."$HOME/amux-fr-home"]
+left = 45
+TOML
+  AGENTMUX_CONFIG="$_frcfg"
+  _amux_json_cache=""
+  # No dir → plain base read (backward compatible).
+  _assert "frame base no-dir lvs"   "50" "$(agentmux_frame_field left_vertical_split)"
+  # Longest match wins for a field the deep block sets.
+  _assert "frame override focus"    "terminal" "$(agentmux_frame_field focus /tmp/amux-frame/deep/x)"
+  # Deep dir inherits a field the deep block doesn't set from the shallower block.
+  _assert "frame cascade lvs"       "30" "$(agentmux_frame_field left_vertical_split /tmp/amux-frame/deep/x)"
+  # A field no block sets falls back to base.
+  _assert "frame fallback left"     "30" "$(agentmux_frame_field left /tmp/amux-frame/deep/x)"
+  # Sibling subtree: deep block doesn't match, focus comes from base.
+  _assert "frame sibling focus"     "agent" "$(agentmux_frame_field focus /tmp/amux-frame/other)"
+  _assert "frame sibling lvs"       "30"    "$(agentmux_frame_field left_vertical_split /tmp/amux-frame/other)"
+  # Unmatched dir → base values throughout.
+  _assert "frame unmatched lvs"     "50" "$(agentmux_frame_field left_vertical_split /tmp/elsewhere)"
+  # Explicit `false` override must win over base `true` (not be swallowed by //).
+  _assert "frame override false"    "false" "$(agentmux_frame_field default /tmp/amux-frame/deep/x)"
+  _assert "frame base default true" "true"  "$(agentmux_frame_field default /tmp/amux-frame)"
+  # ~ key expands to $HOME and matches a subdir.
+  _assert "frame tilde key"         "45" "$(agentmux_frame_field left "$HOME/amux-fr-home/proj")"
+  _fr_mtime=$(stat -f %m "$_frcfg" 2>/dev/null || stat -c %Y "$_frcfg" 2>/dev/null || echo 0)
+  rm -f "$_frcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_fr_mtime}.json"
 
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]

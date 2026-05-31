@@ -134,6 +134,16 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   layout, so after changing it, tear the frame down (`C-f Q` or
   `amux --frame-kill <session>`) and relaunch. Killing only the agent session
   leaves the wrapper, which reattaches at the old size.
+- **Per-directory overrides.** Any `[frame]` field can be overridden for a
+  directory (and its subtree) with a `[frame.dirs."<path>"]` block — same
+  matching as an agent's `dirs` (`~` expands, longest path wins), resolved
+  per-field, falling back to the base `[frame]` values. e.g. a taller split that
+  starts focused on the terminal in one project:
+  ```toml
+  [frame.dirs."~/Developer/github.com/lockyc/agentmux"]
+  left_vertical_split = 30
+  focus = "terminal"
+  ```
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
   `amux --frame <session>` (a closed pane is rebuilt).
 - **Three sessions across three sockets.** `<session>` — your agent, on the
