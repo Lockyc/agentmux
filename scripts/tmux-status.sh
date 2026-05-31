@@ -51,7 +51,11 @@ subjectfile="/tmp/${agent_name}-subject-${pane_key}.txt"
 substartfile="/tmp/${agent_name}-substart-${pane_key}.txt"
 TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
 label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
-project=$(tmux display-message -p "#{session_name}" 2>/dev/null)
+# Target our own pane explicitly: an un-targeted display-message resolves against
+# the most recently active client, which is the wrong session when several agent
+# panes share the default socket. $TMUX_PANE is set inside the agent's pane (see
+# pane_key above), so it always points at us here.
+project=$(tmux display-message -t "$TMUX_PANE" -p "#{session_name}" 2>/dev/null)
 [ -z "$project" ] && project=$(basename "$PWD" 2>/dev/null)
 [ -z "$project" ] && project="$label"
 

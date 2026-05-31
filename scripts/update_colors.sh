@@ -162,7 +162,12 @@ reductable'
   [ "$fail" -eq 0 ]; exit $?
 fi
 
-session="${1:-$(tmux display-message -p '#S')}"
+# Triggering session, passed by the hook (#{session_name}). NOT resolved with an
+# un-targeted display-message: that picks the most recently active client, so the
+# wrong session would be cleared when several agent sessions share the socket. The
+# reconcile loop below colours every session regardless; $session only scopes the
+# demote-cleanup, which is simply skipped when no session was passed (manual runs).
+session="${1:-}"
 
 # Coloured (autoagent) sessions, sorted so the assignment is order-independent.
 names=$(tmux list-sessions -F '#{?@autoagent,#S,}' 2>/dev/null | grep . | sort)
@@ -177,6 +182,6 @@ printf '%s\n' "$names" | while IFS= read -r s; do
 done
 
 # If the triggering session is not (or no longer) autoagent, clear its overrides.
-if [ "$(tmux show-options -t "$session" -qv @autoagent 2>/dev/null)" != "1" ]; then
+if [ -n "$session" ] && [ "$(tmux show-options -t "$session" -qv @autoagent 2>/dev/null)" != "1" ]; then
   _amux_clear_colour "$session"
 fi
