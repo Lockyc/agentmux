@@ -27,6 +27,10 @@ source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
 AGENTMUX_FRAME_SOCKET="${AGENTMUX_FRAME_SOCKET:-agentmux-frame}"
 export AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
+# Agent sessions live on tmux's DEFAULT socket (no -L). This override exists only
+# so selftests can isolate the session-management commands onto a throwaway socket
+# instead of the user's real tmux; empty = default socket, as in production.
+AGENTMUX_AGENT_SOCKET="${AGENTMUX_AGENT_SOCKET:-}"
 # Absolute path to this launcher (for --frame's right-pane re-invocation), resolved
 # once here from the same BASH_SOURCE the dirs above use.
 AGENTMUX_BIN="${AGENTMUX_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/$(basename "${BASH_SOURCE[0]}")}"
@@ -38,6 +42,18 @@ _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # (session.win.pane, session:win), so an unsanitised name breaks
 # `tmux has-session -t` and friends. Map both to _.
 _amux_sanitize_session() { printf '%s' "$1" | tr '.:' '__'; }
+
+# tmux on the agent (default) socket, honouring AGENTMUX_AGENT_SOCKET for test
+# isolation. In production AGENTMUX_AGENT_SOCKET is empty → plain `tmux`.
+_amux_atmux() {
+  if [ -n "$AGENTMUX_AGENT_SOCKET" ]; then tmux -L "$AGENTMUX_AGENT_SOCKET" "$@"; else tmux "$@"; fi
+}
+
+# Newline-separated names of agentmux-managed sessions (@autoagent=1) on the agent
+# socket; empty if none. Backs --sessions, --kill-all, and --complete-sessions.
+_amux_agent_session_names() {
+  _amux_atmux list-sessions -F '#{?@autoagent,#{session_name},}' 2>/dev/null | grep .
+}
 
 # Clamp a percent to 10..90. Non-numeric/empty falls back to $2 (the default),
 # which may itself be empty — in which case the result is empty (no output).
@@ -346,7 +362,7 @@ _amux_frame_kill() {
 # frame socket) and the entire scratch-terminal server with it. Agent sessions on
 # the default socket survive. Handy to refresh all frames after a frame.conf change,
 # since a frame only reads config when (re)created.
-_amux_frame_server_kill() {
+_amux_frame_kill_all() {
   local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
   if tmux -L "$fsock" list-sessions >/dev/null 2>&1; then
     tmux -L "$fsock" kill-server 2>/dev/null
@@ -355,6 +371,86 @@ _amux_frame_server_kill() {
   else
     echo "amux: no active frames (try: amux --frames)" >&2; return 1
   fi
+}
+
+# List agentmux-managed (@autoagent) sessions on the agent socket: name, agent
+# mode, window count, attach state. The view that shows exact session names.
+_amux_sessions() {
+  local rows
+  rows=$(_amux_atmux list-sessions \
+    -F '#{?@autoagent,#{session_name}	#{@agent-mode}	#{session_windows} win	#{?session_attached,attached,detached},}' \
+    2>/dev/null | grep .)
+  if [ -n "$rows" ]; then
+    # Align the tab-separated columns with awk (already a dependency); column(1)
+    # is not POSIX and is used nowhere else, so don't pull it in just for this.
+    printf '%s\n' "$rows" | awk -F'\t' '
+      { for (i = 1; i <= NF; i++) { cell[NR, i] = $i; if (length($i) > w[i]) w[i] = length($i) }
+        if (NF > nc) nc = NF; nr = NR }
+      END { for (r = 1; r <= nr; r++) { out = ""
+              for (i = 1; i <= nc; i++) { s = cell[r, i]; out = out s
+                if (i < nc) { p = w[i] - length(s) + 2; while (p-- > 0) out = out " " } }
+              print out } }'
+  else
+    echo "amux: no agent sessions"
+  fi
+}
+
+# Kill ONE project completely: the agent session (agent socket) plus its paired
+# <base>-frame and <base>-term. Default target is the current dir's session; an
+# explicit arg is sanitised, and a trailing -frame/-term is stripped to the base.
+# Kills whichever of the three exist; errors only if none do.
+_amux_kill() {
+  local arg base
+  if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
+  case "$arg" in
+    *-frame) base="${arg%-frame}" ;;
+    *-term)  base="${arg%-term}" ;;
+    *)       base="$arg" ;;
+  esac
+  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET" parts=""
+  if _amux_atmux has-session -t "$base" 2>/dev/null; then
+    _amux_atmux kill-session -t "$base" 2>/dev/null; parts="agent '$base'"
+  fi
+  if tmux -L "$fsock" has-session -t "${base}-frame" 2>/dev/null; then
+    tmux -L "$fsock" kill-session -t "${base}-frame" 2>/dev/null
+    parts="${parts:+$parts + }frame '${base}-frame'"
+  fi
+  if tmux -L "$tsock" has-session -t "${base}-term" 2>/dev/null; then
+    tmux -L "$tsock" kill-session -t "${base}-term" 2>/dev/null
+    parts="${parts:+$parts + }terminal '${base}-term'"
+  fi
+  if [ -n "$parts" ]; then
+    echo "killed $parts"
+  else
+    echo "amux: no session '$base' (try: amux --sessions)" >&2; return 1
+  fi
+}
+
+# Kill EVERY agentmux project at once: every @autoagent session, plus all frames
+# and scratch terminals. Destroys running agents, so it confirms first. The agent
+# socket is the user's DEFAULT tmux server (it may also host non-agentmux
+# sessions), so this kills @autoagent sessions one by one — never kill-server —
+# while the frame/term sockets, which are exclusively ours, are torn down whole.
+_amux_kill_all() {
+  local names count fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET" have_frames=0
+  names=$(_amux_agent_session_names)
+  count=$(printf '%s' "$names" | grep -c . 2>/dev/null)
+  tmux -L "$fsock" list-sessions >/dev/null 2>&1 && have_frames=1
+  if [ "$count" -eq 0 ] && [ "$have_frames" -eq 0 ]; then
+    echo "amux: no agent sessions or frames (try: amux --sessions)" >&2; return 1
+  fi
+  printf 'kill %s agent session(s) + all frames/terminals? (y/N) ' "$count" >&2
+  local reply; read -r reply
+  case "$reply" in
+    [yY]|[yY][eE][sS]) ;;
+    *) echo "aborted" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$names" | while IFS= read -r s; do
+    [ -n "$s" ] && _amux_atmux kill-session -t "$s" 2>/dev/null
+  done
+  tmux -L "$fsock" kill-server 2>/dev/null
+  tmux -L "$tsock" kill-server 2>/dev/null
+  echo "killed $count agent session(s) + all frames/terminals"
 }
 
 # amux [(-<flag> | <agent_name>)] [session_name]
@@ -403,13 +499,31 @@ amux() {
         _amux_frame_kill "$@"
         return $?
         ;;
-      --frame-server-kill)
-        _amux_frame_server_kill
+      --frame-kill-all)
+        _amux_frame_kill_all
+        return $?
+        ;;
+      --sessions)
+        _amux_sessions
+        return $?
+        ;;
+      --kill)
+        shift
+        _amux_kill "$@"
+        return $?
+        ;;
+      --kill-all)
+        _amux_kill_all
         return $?
         ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
         agentmux_list_agent_completions
+        return 0
+        ;;
+      --complete-sessions)
+        # Hidden: emit live agentmux session names for --kill/--frame-kill completion.
+        _amux_agent_session_names
         return 0
         ;;
       --help)
@@ -423,13 +537,16 @@ amux [(-<flag> | <agent_name>)] [session_name]
                  falls back to the first agent in agents.toml
   session_name   defaults to basename of $PWD (dots → underscores)
 
+  --sessions     list agentmux agent sessions (name, agent, windows, attach state)
+  --kill         kill an agent session [session] + its frame/term (default: current dir)
+  --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
   --update       update to the latest agentmux (git pull)
   --colours      preview the colour palette (grid|pick subcommands)
   --frame        open a side terminal (left) beside amux (right), nested tmux
   --no-frame     force a plain launch (opt out of [frame] default = true)
   --frames       list active frames (they live on a separate tmux socket)
   --frame-kill   kill a frame [session] (default: current dir); agent keeps running
-  --frame-server-kill  kill ALL frames + scratch terminals at once; agents keep running
+  --frame-kill-all     kill ALL frames + scratch terminals at once; agents keep running
   --version      print version
   --help         this help
 EOF
@@ -563,6 +680,43 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _fk=$(cd "$_ckdir" && amux --frame-kill 2>&1)
   case "$_fk" in *"no frame 'has_colon-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
   _assert "frame-kill default sanitises colon" "ok" "$_got"
+
+  # --help advertises the agent-session lifecycle commands + the renamed kill-all.
+  case "$help" in *"--sessions"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --sessions" "present" "$_got"
+  case "$help" in *"--kill "*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --kill" "present" "$_got"
+  case "$help" in *"--kill-all"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --kill-all" "present" "$_got"
+  case "$help" in *"--frame-kill-all"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --frame-kill-all" "present" "$_got"
+  # The old name is gone (renamed, no alias).
+  case "$help" in *"--frame-server-kill"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help drops --frame-server-kill" "absent" "$_got"
+
+  # Agent-session commands against ISOLATED empty sockets (no real sessions touched).
+  AGENTMUX_AGENT_SOCKET="amux-selftest-agent-$$"
+  AGENTMUX_TERM_SOCKET="amux-selftest-term-$$"
+  _assert "sessions empty"          "amux: no agent sessions" "$(amux --sessions 2>/dev/null)"
+  _assert "complete-sessions empty" ""                        "$(amux --complete-sessions 2>/dev/null)"
+  _k=$(amux --kill __nope__ 2>&1); _krc=$?
+  case "$_k" in *"no session '__nope__'"*) _got=ok ;; *) _got="bad:$_k" ;; esac
+  _assert "kill missing msg"  "ok" "$_got"
+  _assert "kill missing exit" "1"  "$_krc"
+  # --kill sanitises . and : the same way sessions are named.
+  _k=$(amux --kill 'a.b:c' 2>&1)
+  case "$_k" in *"no session 'a_b_c'"*) _got=ok ;; *) _got="bad:$_k" ;; esac
+  _assert "kill sanitises arg" "ok" "$_got"
+  # --kill strips a -frame/-term suffix to the base session name.
+  _k=$(amux --kill 'proj-frame' 2>&1)
+  case "$_k" in *"no session 'proj'"*) _got=ok ;; *) _got="bad:$_k" ;; esac
+  _assert "kill strips -frame suffix" "ok" "$_got"
+  # --kill-all with nothing present aborts cleanly (no prompt, exit 1); </dev/null
+  # guards against the confirm read ever blocking.
+  _ka=$(amux --kill-all </dev/null 2>&1); _karc=$?
+  case "$_ka" in *"no agent sessions"*) _got=ok ;; *) _got="bad:$_ka" ;; esac
+  _assert "kill-all empty msg"  "ok" "$_got"
+  _assert "kill-all empty exit" "1"  "$_karc"
 
   # --colours render lists curated names; the line helper emits a paste field.
   cols=$(amux --colours 2>/dev/null)

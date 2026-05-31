@@ -83,10 +83,14 @@ amux
 | `prefix-c` | New tab, auto-launches current `@agent-mode` agent |
 | `prefix-m` | Cycle `@agent-mode` through defined agents (agentmux sessions only) |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
+| `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
+| `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir) |
+| `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 | `amux --frames` | List active `--frame` wrappers (they live on a separate tmux socket) |
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
+| `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
 
 Set `[update] check = true` in `~/.agentmux/agents.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
@@ -159,8 +163,10 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   - `amux --frames` — list active frames (no need to remember the socket).
   - `amux --frame-kill [session]` — tear down a frame: both the wrapper and its
     left terminal (default: current dir's). The agent session keeps running.
-  - `tmux kill-session -t <session>` — kill the **agent** like any amux session;
-    the frame's right pane then just closes (it won't respawn).
+  - `amux --kill [session]` — kill the whole project: the **agent** session plus
+    its frame and terminal (default: current dir's). Use this instead of a raw
+    `tmux kill-session` so nothing is left orphaned. `amux --sessions` lists the
+    exact session names.
 
 ## Adding an agent
 
