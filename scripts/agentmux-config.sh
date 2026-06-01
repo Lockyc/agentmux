@@ -5,6 +5,16 @@
 
 AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 
+# One-time migration for installs that crossed the agents.toml -> amux.toml rename
+# via `git pull` / `amux --update` (neither re-runs install.sh). Runs from the
+# freshly-pulled code at config-resolution time — the only place that can self-heal
+# the rename it ships. Default location only; a custom AGENTMUX_CONFIG is the user's.
+# Race-safe: concurrent tmux-hook consumers may both attempt it; the loser's mv no-ops.
+if [ "$AGENTMUX_CONFIG" = "$HOME/.agentmux/amux.toml" ] \
+   && [ ! -f "$AGENTMUX_CONFIG" ] && [ -f "$HOME/.agentmux/agents.toml" ]; then
+  mv "$HOME/.agentmux/agents.toml" "$AGENTMUX_CONFIG" 2>/dev/null || true
+fi
+
 _amux_json_cache=""
 _amux_json() {
   if [ -n "$_amux_json_cache" ]; then
