@@ -90,6 +90,7 @@ Normal shell commands — type them at a prompt.
 | `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir) |
 | `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
+| `amux --colours [grid\|pick]` | Preview the colour palette (curated names + 256 codes). `pick [agent]` interactively builds a paste-ready `colour =` line |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 | `amux --no-frame` | One-off plain launch when `[frame] default = true` is set (skips the frame) |
 | `amux --frames` | List active `--frame` wrappers (they live on a separate tmux socket) |
@@ -107,7 +108,7 @@ Sessions are named after `basename $PWD` (dots → underscores) by default — r
 
 **Reading the shortcuts.** `C-b` means *hold Ctrl and tap `b`*. Likewise `C-f` is Ctrl+f. That's the whole notation.
 
-**The prefix.** tmux can't act on its shortcuts directly — they'd collide with the program running inside (your agent wants Ctrl+C, Ctrl+R, and so on for itself). So you first press a **prefix** key to get tmux's attention, *release it*, then press the command key. The default prefix is **`C-b`** (Ctrl+b). When you see `prefix c`, it means: press Ctrl+b, let go, then press `c`. To use a different key for amux sessions, set `[amux] prefix` (e.g. `prefix = "C-a"`) — it applies only to amux's own sessions, not your other tmux work.
+**The prefix.** tmux can't act on its shortcuts directly — they'd collide with the program running inside (your agent wants Ctrl+C, Ctrl+R, and so on for itself). So you first press a **prefix** key to get tmux's attention, *release it*, then press the command key. The default prefix is **`C-b`** (Ctrl+b). When you see `prefix c`, it means: press Ctrl+b, let go, then press `c`. To use a different key for amux sessions, set `[amux] prefix` (e.g. `prefix = "C-a"`) — it applies only to amux's own sessions, not your other tmux work. It can be overridden per-directory with an `[amux.dirs."<path>"]` block, exactly like `[frame.dirs]` (see [Side-terminal layout](#side-terminal-layout---frame)).
 
 **The three keys you'll actually use** — each pressed after the prefix:
 
@@ -225,9 +226,14 @@ Add a new `[[agents]]` block to `~/.agentmux/amux.toml`:
 name = "myagent"
 flag = "a"
 cmd = "my-ai-cli"
-colour_inactive = "fg=black,bg=colour56"
-colour_active   = "fg=black,bg=colour93,bold"
+colour = "green"
 ```
+
+`colour` is a curated palette name (run `amux --colours` to preview them) or a 256
+code like `"colour82"`/`"82"` — agentmux derives the active and inactive tab shades
+from it automatically. Run `amux --colours pick myagent` to choose one interactively
+and get a paste-ready line. For full manual control, skip `colour` and set the raw
+tmux styles instead (see [Optional per-agent fields](#optional-per-agent-fields)).
 
 The new agent appears in the `prefix m` cycle immediately (no reload needed).
 
@@ -238,6 +244,8 @@ The new agent appears in the `prefix m` cycle immediately (no reload needed).
 | `flag` | — | Single-letter shorthand for `amux -<flag>` |
 | `dirs` | — | List of directories; a bare `amux` run inside one (or any subdirectory) auto-selects this agent. `~` → `$HOME`; longest match wins. See [Directory-based agent selection](#directory-based-agent-selection) |
 | `label` | name | Short display name used in tmux tab labels (e.g. `label = "pers"` for a `name = "personal"` agent) |
+| `colour` | — | Tab colour as a curated palette name or 256 code (`"green"`, `"colour82"`, `"82"`); the active/inactive shades are auto-derived. Preview with `amux --colours`. Ignored if the raw pair below is set |
+| `colour_inactive` / `colour_active` | — | Escape hatch: full raw tmux styles for total control (e.g. `"fg=black,bg=colour56"` / `"fg=black,bg=colour93,bold"`). Set **both** as a pair — they override `colour`, and setting only one is a misconfiguration (agentmux warns) |
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
 
