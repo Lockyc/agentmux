@@ -308,8 +308,8 @@ _amux_frame() {
     # frame, detaches it, and its attach exits — which without remain-on-exit
     # would destroy the pane and reflow the frame to full width. remain-on-exit
     # keeps the pane; the frame's pane-died hook (frame_reattach.sh) re-attaches
-    # it. @amux_role tells the hook how: "term" always re-attaches (it's
-    # disposable/persistent). Per-pane, not -g: only these nested-tmux panes
+    # it while the term session still exists. @amux_role tells the hook which
+    # session/socket to check. Per-pane, not -g: only these nested-tmux panes
     # should survive their command exiting — the optional top scratch shell is a
     # plain shell with no detach footgun, so it's left untagged and closes normally.
     tmux -L "$sock" set -p -t "$left_pid" remain-on-exit on
@@ -330,9 +330,9 @@ _amux_frame() {
     # `-l` sizes the new (right) pane, so the left lands at $left% (`-l N%` needs
     # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
     agent_pid=$(tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" -P -F '#{pane_id}' "$right_cmd")
-    # Same accidental-detach guard for the agent pane (see the term pane above).
-    # @amux_role=agent makes the hook gate its re-attach on the agent session
-    # still existing, so a real kill stays dead instead of being resurrected.
+    # Same accidental-detach guard for the agent pane (see the term pane above);
+    # @amux_role=agent points the hook at the agent session on the default
+    # socket. A real kill stays dead instead of being resurrected.
     tmux -L "$sock" set -p -t "$agent_pid" remain-on-exit on
     tmux -L "$sock" set -p -t "$agent_pid" @amux_role agent
     # Optional vertical split of the LEFT column into top/bottom (a plain shell in
