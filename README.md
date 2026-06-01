@@ -74,13 +74,20 @@ amux
 
 ## Usage
 
+> **New to tmux?** A few of the shortcuts below are tmux key bindings, written in tmux's own notation:
+> - `C-x` means **hold Ctrl and press `x`** (so `C-b` is Ctrl+b, `C-f` is Ctrl+f).
+> - The **prefix** is tmux's "attention" key — by default `C-b` (Ctrl+b). You press it, *release*, then press the next key. So `prefix-m` means: Ctrl+b, let go, then `m`.
+> - **Detaching** leaves a session running in the background instead of closing it. Press `prefix-d` (Ctrl+b, then `d`) — your agent keeps working, and re-running `amux` in the same directory reattaches you. Closing the terminal window detaches too; it doesn't kill the session. (Inside a `--frame`, detach with `C-f d` instead — see [Side-terminal layout](#side-terminal-layout---frame).)
+>
+> Commands written like `amux …` are normal shell commands — just type them at a prompt.
+
 | Command | Effect |
 |---|---|
 | `amux` | New/attach session; agent auto-selected from the current directory (see below), else the first agent in the list |
 | `amux -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
 | `amux <agent>` | New/attach session, agent by name |
 | `amux <agent> <session>` | New/attach named session with specified agent |
-| `prefix-c` | New tab, auto-launches current `@agent-mode` agent |
+| `prefix-c` | New tab, auto-launches current `@agent-mode` agent (tmux's built-in new-window key — agentmux just hooks it to auto-launch the agent) |
 | `prefix-m` | Cycle `@agent-mode` through defined agents (agentmux sessions only) |
 | `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
@@ -88,6 +95,7 @@ amux
 | `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
+| `amux --no-frame` | One-off plain launch when `[frame] default = true` is set (skips the frame) |
 | `amux --frames` | List active `--frame` wrappers (they live on a separate tmux socket) |
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
@@ -134,11 +142,18 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   Optionally split the left column top/bottom with `[frame] left_vertical_split =
   <percent>` (the top sub-pane's height, `10`–`90`; unset = single left pane). The
   top sub-pane is a plain shell; the scratch terminal (with its tab bar) stays in
-  the bottom sub-pane — reach the top shell with the mouse. Frame
+  the bottom sub-pane — reach the top shell with the mouse. Two more layout fields:
+  `[frame] focus` picks which pane starts focused — `"agent"` (right, the default)
+  or `"terminal"` (the left column); `[frame] status_position` places the frame's
+  outer status bar at `"bottom"` (default) or `"top"`. Frame
   config applies when the frame is **created** — a persistent frame keeps its
   layout, so after changing it, tear the frame down (`C-f Q` or
   `amux --frame-kill <session>`) and relaunch. Killing only the agent session
   leaves the wrapper, which reattaches at the old size.
+- **Open frames by default.** Set `[frame] default = true` to make a bare `amux`
+  (run from a plain terminal) behave like `amux --frame`; use `amux --no-frame` for
+  a one-off plain launch. It's ignored when `amux` runs inside an existing tmux (a
+  frame can't nest there) — that case falls through to a normal in-tmux launch.
 - **Per-directory overrides.** Any `[frame]` field can be overridden for a
   directory (and its subtree) with a `[frame.dirs."<path>"]` block — same
   matching as an agent's `dirs` (`~` expands, longest path wins), resolved
