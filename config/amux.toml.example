@@ -20,14 +20,12 @@
 # Opt-in: once-daily check for a newer agentmux on GitHub. Notify-only — when a
 # newer version exists, amux prints a one-line notice; run `amux --update` to apply.
 # Off by default. AGENTMUX_VERSION_CHECK=1/0 overrides this.
-
 check = false
 
 [llm]
 # OpenAI-compatible endpoint used for AI session summaries (summarise.sh).
 # Works with LM Studio, Ollama, llama.cpp, etc. — any /v1/chat/completions server.
 # AGENTMUX_LLM_URL / AGENTMUX_LLM_MODEL / AGENTMUX_LLM_TIMEOUT env vars override these.
-
 url     = "http://localhost:1234/v1/chat/completions"
 model   = "qwen2.5-14b-instruct"
 timeout = 20
@@ -50,7 +48,6 @@ timeout = 20
 [frame]
 # `amux --frame` layout: a bare scratch terminal in the left pane beside amux in
 # the right pane (its own nested tmux). `left` is the left-pane width, percent.
-
 left = 30
 
 # Secondary prefix for the frame's own controls (focus/resize/quit). Defaults to
@@ -105,7 +102,6 @@ label = "pers"
 flag = "p"
 cmd = "CLAUDE_CONFIG_DIR=~/.claude-personal claude"
 dirs = ["~/personal"]
-
 # Friendly colour: a curated name (run `amux --colours` to preview them) or a
 # 256 code like "colour82"/"82". The active/inactive shades are auto-derived.
 colour = "green"
@@ -126,7 +122,6 @@ colour = "orange"
 name = "opencode"
 flag = "o"
 cmd = "opencode"
-
 # Escape hatch: full raw tmux styles override `colour` for total control.
 # Set them as a pair — `colour` is only auto-derived when BOTH are absent.
 colour_inactive = "fg=black,bg=colour54"
