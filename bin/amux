@@ -214,8 +214,11 @@ _amux_colours() {
 # socket). Deliberately a plain one-shot, NOT a re-exec loop: a loop would
 # recreate (resurrect) the agent session moments after you kill it, and tmux runs
 # this through the user's login shell — maybe fish — which couldn't parse an sh
-# loop anyway. If the agent session is detached or killed the pane just exits;
-# reattaching the frame rebuilds it (see the <2-pane staleness check above).
+# loop anyway. The agent pane instead runs with remain-on-exit (set below), and
+# the frame's pane-died hook (frame_reattach.sh) re-attaches it ONLY while the
+# agent session is still alive: an accidental `C-b d` detach heals in place,
+# while a real kill leaves the pane dead so the live-pane staleness check above
+# rebuilds the frame on the next launch (no auto-resurrection).
 # `--no-frame` is explicit: with [frame] default = true a bare amux opens a frame,
 # and this pane runs with TMUX unset, so without it the agent pane would itself
 # spawn another frame in an endless loop.
@@ -263,11 +266,13 @@ _amux_frame() {
   local top; top=$(_amux_frame_top_height)
 
   # A frame that has lost its right (agent) pane is useless — reattaching it just
-  # shows a full-width terminal. Treat a frame with fewer than its expected pane
-  # count (2, or 3 when the left split is enabled) as stale and rebuild it.
+  # shows a full-width terminal. The agent pane runs with remain-on-exit, so a
+  # detached/killed agent leaves a DEAD pane rather than vanishing; count only
+  # LIVE panes (#{pane_dead}=0) so such a frame still reads as stale and gets
+  # rebuilt. Expected: 2 live panes, or 3 when the left split is enabled.
   if tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
     local npanes want; want=2; [ -n "$top" ] && want=3
-    npanes=$(tmux -L "$sock" list-panes -t "$fsess" 2>/dev/null | wc -l | tr -d ' ')
+    npanes=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_dead}' 2>/dev/null | grep -c '^0$')
     [ "${npanes:-0}" -lt "$want" ] && tmux -L "$sock" kill-session -t "$fsess" 2>/dev/null
   fi
 
@@ -298,6 +303,17 @@ _amux_frame() {
     # The sole pane is the left column; remember it so we can subdivide it below.
     local left_pid agent_pid
     left_pid=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_id}')
+    # Survive an accidental detach. The scratch terminal is a nested tmux client
+    # (term socket), so a stray `C-b d` while it's focused passes through the
+    # frame, detaches it, and its attach exits — which without remain-on-exit
+    # would destroy the pane and reflow the frame to full width. remain-on-exit
+    # keeps the pane; the frame's pane-died hook (frame_reattach.sh) re-attaches
+    # it. @amux_role tells the hook how: "term" always re-attaches (it's
+    # disposable/persistent). Per-pane, not -g: only these nested-tmux panes
+    # should survive their command exiting — the optional top scratch shell is a
+    # plain shell with no detach footgun, so it's left untagged and closes normally.
+    tmux -L "$sock" set -p -t "$left_pid" remain-on-exit on
+    tmux -L "$sock" set -p -t "$left_pid" @amux_role term
     # Optional frame prefix override ([frame] prefix); default is in frame.conf.
     # Per-session (not -g), like @amux_project below: prefix is a session option,
     # and the shared frame socket hosts several project frames — a global set
@@ -314,6 +330,11 @@ _amux_frame() {
     # `-l` sizes the new (right) pane, so the left lands at $left% (`-l N%` needs
     # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
     agent_pid=$(tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" -P -F '#{pane_id}' "$right_cmd")
+    # Same accidental-detach guard for the agent pane (see the term pane above).
+    # @amux_role=agent makes the hook gate its re-attach on the agent session
+    # still existing, so a real kill stays dead instead of being resurrected.
+    tmux -L "$sock" set -p -t "$agent_pid" remain-on-exit on
+    tmux -L "$sock" set -p -t "$agent_pid" @amux_role agent
     # Optional vertical split of the LEFT column into top/bottom (a plain shell in
     # the new TOP pane). `-b` inserts the new pane ABOVE left_pid, so the scratch
     # terminal (with its tab bar) stays at the BOTTOM. Done AFTER the agent split so

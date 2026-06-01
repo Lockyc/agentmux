@@ -137,7 +137,9 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   `C-f j`/`k` move within the split left column, `C-f H`/`L` resize, `C-f Q` quit,
   `C-f d` detach), overridable via `[frame] prefix`. Both
   inner tmuxes use `C-b`, which the frame passes through to whichever pane is
-  focused: left → the terminal's tabs, right → amux.
+  focused: left → the terminal's tabs, right → amux. A stray `C-b d` on either
+  pane is harmless — the pane re-attaches in place rather than vanishing (use
+  `C-f d` to detach the whole frame).
 - Set the left-pane width with `[frame] left = <percent>` (default `30`).
   Optionally split the left column top/bottom with `[frame] left_vertical_split =
   <percent>` (the top sub-pane's height, `10`–`90`; unset = single left pane). The
