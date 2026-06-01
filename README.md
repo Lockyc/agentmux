@@ -1,6 +1,6 @@
 # agentmux
 
-Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix-m` cycles through the list.
+Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix m` cycles through the list.
 
 ![agentmux overview](docs/overview.png)
 
@@ -74,12 +74,11 @@ amux
 
 ## Usage
 
-> **New to tmux?** A few of the shortcuts below are tmux key bindings, written in tmux's own notation:
-> - `C-x` means **hold Ctrl and press `x`** (so `C-b` is Ctrl+b, `C-f` is Ctrl+f).
-> - The **prefix** is tmux's "attention" key — by default `C-b` (Ctrl+b). You press it, *release*, then press the next key. So `prefix-m` means: Ctrl+b, let go, then `m`.
-> - **Detaching** leaves a session running in the background instead of closing it. Press `prefix-d` (Ctrl+b, then `d`) — your agent keeps working, and re-running `amux` in the same directory reattaches you. Closing the terminal window detaches too; it doesn't kill the session. (Inside a `--frame`, detach with `C-f d` instead — see [Side-terminal layout](#side-terminal-layout---frame).)
->
-> Commands written like `amux …` are normal shell commands — just type them at a prompt.
+agentmux is driven two ways: **`amux …` shell commands** you type at a prompt to launch and manage sessions, and **tmux key bindings** you press once you're inside a session. Never used tmux? Read [Inside a session: tmux basics](#inside-a-session-tmux-basics) first — you don't need to know tmux going in.
+
+### amux commands
+
+Normal shell commands — type them at a prompt.
 
 | Command | Effect |
 |---|---|
@@ -87,9 +86,6 @@ amux
 | `amux -<flag>` | New/attach session, agent matching flag (e.g. `-w` for `flag = "w"`) |
 | `amux <agent>` | New/attach session, agent by name |
 | `amux <agent> <session>` | New/attach named session with specified agent |
-| `prefix-c` | New tab, auto-launches current `@agent-mode` agent (tmux's built-in new-window key — agentmux just hooks it to auto-launch the agent) |
-| `prefix-m` | Cycle `@agent-mode` through defined agents (agentmux sessions only) |
-| `prefix-x` | In agentmux sessions: respawn + relaunch agent (last pane); otherwise kill-pane |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
 | `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir) |
 | `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
@@ -105,9 +101,36 @@ check that notifies (notify-only) when a newer agentmux is available on GitHub.
 
 Sessions are named after `basename $PWD` (dots → underscores) by default — run `amux` in your project directory and it picks up the name automatically. Pass an explicit name with `amux <agent> <session>` to override. agentmux sessions get a coloured status bar, AI summary rows, and tab-state emojis; plain tmux sessions are left unstyled.
 
+### Inside a session: tmux basics
+
+`amux` launches your agent inside **tmux**, which keeps the session running in the background — even if you close the terminal window. You drive tmux with a handful of keyboard shortcuts; here's everything you need, no prior tmux knowledge assumed.
+
+**Reading the shortcuts.** `C-b` means *hold Ctrl and tap `b`*. Likewise `C-f` is Ctrl+f. That's the whole notation.
+
+**The prefix.** tmux can't act on its shortcuts directly — they'd collide with the program running inside (your agent wants Ctrl+C, Ctrl+R, and so on for itself). So you first press a **prefix** key to get tmux's attention, *release it*, then press the command key. The default prefix is **`C-b`** (Ctrl+b). When you see `prefix c`, it means: press Ctrl+b, let go, then press `c`.
+
+**The three keys you'll actually use** — each pressed after the prefix:
+
+- **`c`** — **c**reate a new tab (auto-launches the current agent)
+- **`x`** — close the current tab (e**x**it)
+- **`d`** — **d**etach: leave everything running in the background and drop back to your shell
+
+**Detaching** is how you step away without stopping the agent. Press `prefix d` (Ctrl+b, then `d`) and your agent keeps working; re-run `amux` in the same directory to reattach. Closing the terminal window detaches too — it never kills the session. (Inside a `--frame` the prefix is `C-f`, so you detach with `C-f d` — see [Side-terminal layout](#side-terminal-layout---frame).)
+
+### tmux key bindings
+
+All of these are pressed **after the prefix** (`C-b` by default).
+
+| Press | Effect |
+|---|---|
+| `prefix c` | New tab — auto-launches the current `@agent-mode` agent (tmux's built-in new-window key; agentmux just hooks it to launch the agent) |
+| `prefix x` | Close the current tab. In an agentmux session's last pane it respawns + relaunches the agent instead of destroying the session; everywhere else it's tmux's kill-pane |
+| `prefix d` | Detach — leave the session running and return to your shell |
+| `prefix m` | Cycle `@agent-mode` through your defined agents (agentmux sessions only) |
+
 ### Directory-based agent selection
 
-Give an agent a `dirs` list and a bare `amux` (no flag, no agent name) auto-selects it based on the current directory — no flag or `prefix-m` toggle needed:
+Give an agent a `dirs` list and a bare `amux` (no flag, no agent name) auto-selects it based on the current directory — no flag or `prefix m` toggle needed:
 
 ```toml
 [[agents]]
@@ -156,6 +179,12 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   (run from a plain terminal) behave like `amux --frame`; use `amux --no-frame` for
   a one-off plain launch. It's ignored when `amux` runs inside an existing tmux (a
   frame can't nest there) — that case falls through to a normal in-tmux launch.
+- **Nesting inside tmux.** By default `--frame` refuses to run inside an existing
+  tmux: the frame is its own tmux server, so nesting it stacks prefixes (your outer
+  `C-b`, the frame's `C-f`, the scratch terminal's). Advanced users already living
+  in tmux can opt in with `[frame] allow_nested = true`, which lifts the guard (and
+  the `default` skip above, so a default frame opens in-tmux too). The frame's own
+  panes already clear `$TMUX`, so the inner amux/terminal still launch cleanly.
 - **Per-directory overrides.** Any `[frame]` field can be overridden for a
   directory (and its subtree) with a `[frame.dirs."<path>"]` block — same
   matching as an agent's `dirs` (`~` expands, longest path wins), resolved
@@ -198,7 +227,7 @@ colour_inactive = "fg=black,bg=colour56"
 colour_active   = "fg=black,bg=colour93,bold"
 ```
 
-The new agent appears in the `prefix-m` cycle immediately (no reload needed).
+The new agent appears in the `prefix m` cycle immediately (no reload needed).
 
 ## Optional per-agent fields
 
