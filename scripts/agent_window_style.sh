@@ -50,7 +50,7 @@ agentmux_set_window_style() {
 # Self-test: AGENTMUX_STYLE_SELFTEST=1 bash scripts/agent_window_style.sh
 if [ "${AGENTMUX_STYLE_SELFTEST:-}" = "1" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  export AGENTMUX_CONFIG="$SCRIPT_DIR/../config/agents.toml.example"
+  export AGENTMUX_CONFIG="$SCRIPT_DIR/../config/amux.toml.example"
   source "$SCRIPT_DIR/agentmux-config.sh"
   _amux_json_cache=""
 

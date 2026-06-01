@@ -77,7 +77,7 @@ if [ -d ~/.agentmux ] && [ ! -d ~/.agentmux/.git ] && [ ! -L ~/.agentmux/scripts
 
 If `OLD_COPY`, use AskUserQuestion to confirm migration, explaining: "Your
 `~/.agentmux` is an older copy-install. Migrating moves it to a timestamped
-backup, clones the current version in its place, and restores your `agents.toml`.
+backup, clones the current version in its place, and restores your `amux.toml`.
 Proceed?"
 
 On confirmation, back it up (the core install in step 4 will then clone fresh
@@ -92,7 +92,7 @@ Note the actual backup path from that output — reuse the same `~/.agentmux.bak
 Remember `~/.agentmux.bak.$TS` — after step 4 clones, restore the user's config:
 
 ```bash
-[ -f ~/.agentmux.bak.$TS/agents.toml ] && cp ~/.agentmux.bak.$TS/agents.toml ~/.agentmux/agents.toml && echo "restored agents.toml"
+for f in amux.toml agents.toml; do [ -f ~/.agentmux.bak.$TS/$f ] && cp ~/.agentmux.bak.$TS/$f ~/.agentmux/amux.toml && echo "restored $f as amux.toml" && break; done
 ```
 
 Tell the user the backup remains at `~/.agentmux.bak.$TS` and they can delete it
@@ -111,7 +111,7 @@ leaves a dev/symlink install untouched. It does not depend on `$REPO_DIR`.
 bash "$REPO_DIR/install.sh"
 ```
 
-If a migration happened in step 3.5, restore the backed-up `agents.toml` now (see
+If a migration happened in step 3.5, restore the backed-up `amux.toml` now (see
 the restore command there). If this fails, show the full output and stop.
 
 ### 5. Ask what to set up
@@ -204,7 +204,7 @@ Use the probe results from step 3 to add "(detected — running)" next to option
 
 - **LM Studio** — endpoint: `http://localhost:1234/v1/chat/completions`
 - **Ollama** — endpoint: `http://localhost:11434/v1/chat/completions`
-- **Skip for now** — I'll configure this later in `~/.agentmux/agents.toml`
+- **Skip for now** — I'll configure this later in `~/.agentmux/amux.toml`
 
 **9b. Ask for model name**
 
@@ -221,7 +221,7 @@ Options tailored to the provider (use the built-in Other escape hatch for unlist
 
 **9c. Write config**
 
-Read `~/.agentmux/agents.toml`. Update the `[llm]` section — replace `url` and `model` with the chosen values (keep `timeout = 20` unless a custom timeout was specified). Write the file back.
+Read `~/.agentmux/amux.toml`. Update the `[llm]` section — replace `url` and `model` with the chosen values (keep `timeout = 20` unless a custom timeout was specified). Write the file back.
 
 If the `[llm]` section is absent (unlikely — `install.sh` creates it from the example), append it.
 
@@ -255,11 +255,11 @@ tmux source ~/.tmux.conf           # if tmux config was wired (or start a new tm
 Restart Claude Code if hooks were wired — hooks take effect on the next session start.
 
 **Next steps**
-- Edit `~/.agentmux/agents.toml` to define your agents — this is where you set names, colours, commands, key bindings, and optional `dirs` for directory-based agent selection (a bare `amux` auto-picks the agent whose `dirs` matches the current directory). Run `amux --colours` to preview the palette and copy a ready-made `colour = "name"` line; raw `colour_inactive`/`colour_active` still work as an override.
+- Edit `~/.agentmux/amux.toml` to define your agents — this is where you set names, colours, commands, key bindings, and optional `dirs` for directory-based agent selection (a bare `amux` auto-picks the agent whose `dirs` matches the current directory). Run `amux --colours` to preview the palette and copy a ready-made `colour = "name"` line; raw `colour_inactive`/`colour_active` still work as an override.
 - Run `amux` to launch your first session
 - If AI summaries were configured: the status bar populates automatically once Claude Code hooks are active and a session is running
-- If AI summaries were skipped: configure later by setting `url` and `model` under `[llm]` in `~/.agentmux/agents.toml`
+- If AI summaries were skipped: configure later by setting `url` and `model` under `[llm]` in `~/.agentmux/amux.toml`
 - The `--notify` flags in the `PermissionRequest` and `Stop` hooks trigger macOS desktop alerts via `osascript` — remove them from `~/.claude/settings.json` if unwanted
 - Update agentmux any time with `amux --update` (it's a git clone now — a plain `git pull`).
 - Side-terminal layout: `amux --frame [agent] [session]` opens a scratch terminal beside amux (nested tmux, no `~/.tmux.conf` changes). Set the left-pane width with `[frame] left = <percent>`, and optionally split the left column top/bottom with `[frame] left_vertical_split = <percent>` (top sub-pane height). Further `[frame]` toggles: `focus = "agent"|"terminal"` (start pane, default agent), `status_position = "bottom"|"top"` (the `[amux frame]` bar, default bottom), and `default = true` to make a bare `amux` open a frame (`amux --no-frame` opts out for one run). Any `[frame]` field can be overridden per-directory (and its subtree) with a `[frame.dirs."<path>"]` block — same matching as an agent's `dirs`, resolved per-field. See the README for the frame's prefix keys.
-- Enable a once-daily update check by setting `[update] check = true` in `~/.agentmux/agents.toml`.
+- Enable a once-daily update check by setting `[update] check = true` in `~/.agentmux/amux.toml`.

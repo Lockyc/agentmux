@@ -7,7 +7,7 @@
 #   Output:     "base_label·<label>" if @window-agent is set, else "base_label"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
+AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 source "$SCRIPT_DIR/agentmux-config.sh"
 
 base="${1:-agent}"

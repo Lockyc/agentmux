@@ -9,7 +9,7 @@
 #       by the caller; displayed by summary_rows.sh).
 # Backend: any OpenAI-compatible local endpoint (LM Studio, Ollama, etc.), a
 # small NON-reasoning instruct model (no key, no cost). Settings resolved by
-# llm-config.sh (env vars > [llm] in agents.toml > defaults).
+# llm-config.sh (env vars > [llm] in amux.toml > defaults).
 # SUMMARISE_SELFTEST=1 runs asserts.
 
 maxwords="${1:-4}"
@@ -110,7 +110,7 @@ prompt=$(cat)
 command -v curl >/dev/null 2>&1 || exit 0
 command -v jq   >/dev/null 2>&1 || exit 0
 
-# Load LLM settings (env > [llm] in agents.toml > defaults) via shared helper.
+# Load LLM settings (env > [llm] in amux.toml > defaults) via shared helper.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/llm-config.sh"
 _amux_load_llm

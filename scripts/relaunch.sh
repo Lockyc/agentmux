@@ -9,7 +9,7 @@
 # from the passed pane with -t queries (mirrors launch_agent.sh).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
+AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 source "$SCRIPT_DIR/agentmux-config.sh"
 source "$SCRIPT_DIR/agent_window_style.sh"
 

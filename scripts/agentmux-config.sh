@@ -3,7 +3,7 @@
 # Provides config reader functions. Requires: toml2json, jq.
 # Override config path: export AGENTMUX_CONFIG=<path>
 
-AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
+AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 
 _amux_json_cache=""
 _amux_json() {
@@ -191,7 +191,7 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   # second phase (line ~170 onward) uses a synthetic config to cover every
   # keep_alive/reattach branch independent of what the example ships with.
   _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"
+  AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"
   _amux_json_cache=""
   pass=0; fail=0
   _assert() {

@@ -50,7 +50,7 @@ source ~/.agentmux/shell/agentmux.fish
 source-file ~/.agentmux/tmux/agentmux.conf
 ```
 
-**4. Edit `~/.agentmux/agents.toml`** to define your agents (created from the example by the installer).
+**4. Edit `~/.agentmux/amux.toml`** to define your agents (created from the example by the installer).
 
 **5. Reload:**
 ```bash
@@ -69,7 +69,7 @@ amux
 - `toml2json`: `brew install go-toml`
 - `jq`: `brew install jq`
 - A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
-- `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in agents.toml)
+- `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in amux.toml)
 - `osascript` (optional, macOS — only for `--notify` desktop alerts in the Claude Code hooks)
 
 ## Usage
@@ -96,7 +96,7 @@ Normal shell commands — type them at a prompt.
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
 
-Set `[update] check = true` in `~/.agentmux/agents.toml` to enable a once-daily
+Set `[update] check = true` in `~/.agentmux/amux.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
 
 Sessions are named after `basename $PWD` (dots → underscores) by default — run `amux` in your project directory and it picks up the name automatically. Pass an explicit name with `amux <agent> <session>` to override. agentmux sessions get a coloured status bar, AI summary rows, and tab-state emojis; plain tmux sessions are left unstyled.
@@ -218,7 +218,7 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
 
 ## Adding an agent
 
-Add a new `[[agents]]` block to `~/.agentmux/agents.toml`:
+Add a new `[[agents]]` block to `~/.agentmux/amux.toml`:
 
 ```toml
 [[agents]]
@@ -243,7 +243,7 @@ The new agent appears in the `prefix m` cycle immediately (no reload needed).
 
 ## Adding an agent integration
 
-`amux` and friends launch any CLI from `agents.toml`. The richer integration — tab-state emojis and the AI summary status lines — runs through a per-agent **adapter** that lives at `scripts/<agent>/status.sh`. The shipped Claude Code adapter (`scripts/claude/`) is the reference implementation.
+`amux` and friends launch any CLI from `amux.toml`. The richer integration — tab-state emojis and the AI summary status lines — runs through a per-agent **adapter** that lives at `scripts/<agent>/status.sh`. The shipped Claude Code adapter (`scripts/claude/`) is the reference implementation.
 
 An adapter is a thin shim that:
 

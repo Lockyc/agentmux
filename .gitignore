@@ -2,5 +2,5 @@
 *.local
 /docs/superpowers
 
-# User's live config lives at the clone root (~/.agentmux/agents.toml); never track it.
-/agents.toml
+# User's live config lives at the clone root (~/.agentmux/amux.toml); never track it.
+/amux.toml

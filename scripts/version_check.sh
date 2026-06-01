@@ -9,7 +9,7 @@
 #     detached curl of the raw VERSION from GitHub and update the cache.
 # Never blocks: the notice is a file read; the network refresh is backgrounded.
 #
-# Enable:  [update] check = true in agents.toml, or AGENTMUX_VERSION_CHECK=1.
+# Enable:  [update] check = true in amux.toml, or AGENTMUX_VERSION_CHECK=1.
 # Disable: AGENTMUX_VERSION_CHECK=0 (overrides config).
 
 VC_RAW_URL="https://raw.githubusercontent.com/lockyc/agentmux/main/VERSION"

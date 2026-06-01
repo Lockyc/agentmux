@@ -25,7 +25,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
 | `tmux/frame.conf` | `amux --frame` outer wrapper config (own socket; no `~/.tmux.conf`) |
 | `tmux/term.conf` | `amux --frame` left scratch terminal config (own socket; persistent) |
-| `config/agents.toml.example` | Example agent config |
+| `config/amux.toml.example` | Example agent config |
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
 | `VERSION` | Semver version string |
@@ -36,11 +36,11 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 
 - **`install.sh`** — clones into `~/.agentmux/` if absent, `git pull --ff-only`s an
   existing clone, leaves a dev/symlink install untouched, and *refuses* a pre-clone
-  copy-install (pointing at `/agentmux:install` to migrate). Seeds `agents.toml` from
+  copy-install (pointing at `/agentmux:install` to migrate). Seeds `amux.toml` from
   the example and prints the shell/tmux/hook wiring. Runnable locally or via
   `curl -fsSL …/install.sh | bash`. Needs `git` (install/update only).
 - **`/agentmux:install`** (`.claude/commands/agentmux/install.md`) — interactive. Runs
-  `install.sh`, migrates an old copy-install (backup → clone → restore `agents.toml`),
+  `install.sh`, migrates an old copy-install (backup → clone → restore `amux.toml`),
   and wires shell config, `~/.tmux.conf`, the Claude Code hooks, and `[llm]`/`[update]`.
 
 **Invariant:** whenever you change what gets installed or wired, update **both**
@@ -50,7 +50,7 @@ Updating an installed clone: `amux --update` (= `git -C ~/.agentmux pull --ff-on
 
 ## Local dev setup
 
-`~/.agentmux/scripts`, `~/.agentmux/shell`, `~/.agentmux/tmux`, and `~/.agentmux/bin` are directory-level symlinks to the repo, and `~/.agentmux/VERSION` is a file-level symlink to it. Changes to scripts are live immediately — no install step needed during development. (`agents.toml` stays a real file — it's your config, not repo content.)
+`~/.agentmux/scripts`, `~/.agentmux/shell`, `~/.agentmux/tmux`, and `~/.agentmux/bin` are directory-level symlinks to the repo, and `~/.agentmux/VERSION` is a file-level symlink to it. Changes to scripts are live immediately — no install step needed during development. (`amux.toml` stays a real file — it's your config, not repo content.)
 
 The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do **not** need to be copied to `~/.claude/hooks/`.
 

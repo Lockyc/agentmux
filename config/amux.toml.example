@@ -1,5 +1,5 @@
 # agentmux agent configuration
-# Copy this file to ~/.agentmux/agents.toml and edit to suit.
+# Copy this file to ~/.agentmux/amux.toml and edit to suit.
 # Agents are launched in the order defined. A bare `amux` (no flag, no agent
 # name) picks the agent whose `dirs` matches the current directory; if none
 # match, it falls back to the first agent in the list.

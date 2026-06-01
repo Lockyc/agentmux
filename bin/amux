@@ -3,10 +3,10 @@
 # The single source of truth for amux logic; shell integration files
 # (shell/agentmux.sh, shell/agentmux.fish) are thin wrappers around this.
 #
-# Required env: AGENTMUX_CONFIG  (default: ~/.agentmux/agents.toml)
+# Required env: AGENTMUX_CONFIG  (default: ~/.agentmux/amux.toml)
 #               AGENTMUX_SCRIPTS (default: <dir of this script>/../scripts)
 
-AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/agents.toml}"
+AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 AGENTMUX_SCRIPTS="${AGENTMUX_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" 2>/dev/null && pwd)}"
 
 # BASH_SOURCE is not symlink-resolved: the default above assumes bin/ and
@@ -385,6 +385,15 @@ _amux_frame() {
       *)        tmux -L "$sock" select-pane -t "$agent_pid" ;;
     esac
   fi
+  # Wire the pane-died reattach hook on the frame SERVER (global) — here, not in
+  # frame.conf. `-f frame.conf` is read only when the server first starts, but the
+  # frame socket is shared and long-lived, so a server that predates this hook (or
+  # any later frame.conf change) would never pick it up. Re-setting it on every
+  # `amux --frame` is idempotent and keeps every frame on the server current. Path
+  # from $AGENTMUX_SCRIPTS, shquoted so a space in the install path survives the
+  # run-shell; #{pane_id} resolves to the dead pane when the hook fires.
+  tmux -L "$sock" set-hook -g pane-died \
+    "run-shell \"$(_amux_shquote "$AGENTMUX_SCRIPTS/frame_reattach.sh") #{pane_id}\""
   tmux -L "$sock" attach-session -t "$fsess"
 }
 
@@ -514,7 +523,7 @@ _amux_kill_all() {
 #
 # Creates or attaches a tmux session managed by agentmux.
 # Agent selection (in precedence order):
-#   -<flag>        flag defined in agents.toml (e.g. -w for flag="w")
+#   -<flag>        flag defined in amux.toml (e.g. -w for flag="w")
 #   <agent_name>   exact agent name (e.g. "work")
 #   (none)         agent whose `dirs` matches $PWD; else first agent in config
 # Remaining arg (if any) is the session name; defaults to current dir basename.
@@ -588,10 +597,10 @@ amux() {
 amux [(-<flag> | <agent_name>)] [session_name]
   Creates or attaches a tmux session managed by agentmux.
 
-  -<flag>        agent matching `flag` in agents.toml (e.g. -w for flag="w")
+  -<flag>        agent matching `flag` in amux.toml (e.g. -w for flag="w")
   <agent_name>   agent by name (e.g. "work")
   (none)         agent whose `dirs` matches the current directory;
-                 falls back to the first agent in agents.toml
+                 falls back to the first agent in amux.toml
   session_name   defaults to basename of $PWD (dots → underscores)
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
@@ -653,7 +662,7 @@ EOF
 # Self-test: AMUX_SELFTEST=1 bash bin/amux
 if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"
+  AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"
   _amux_json_cache=""
   # Isolate the disk cache so synthetic configs don't collide with real or
   # each other (same-second mtime → same cache key on fast machines).
@@ -880,7 +889,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "amux_prefix collide default" "" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_prefix 2>/dev/null)"
 
   rm -f "$_fw"
-  AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"; _amux_json_cache=""
+  AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"; _amux_json_cache=""
 
   # _amux_resolve_target: flag/name/session precedence (explicit session = deterministic).
   _rt=$(_amux_resolve_target -w proj)

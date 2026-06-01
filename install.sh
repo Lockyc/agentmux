@@ -26,20 +26,26 @@ elif _is_symlink_dev; then
   echo "Detected dev/symlink install at $INSTALL_DIR — leaving it untouched."
 else
   echo "agentmux: existing non-clone install at $INSTALL_DIR." >&2
-  echo "Run /agentmux:install to migrate it safely (backs up your current install, preserves agents.toml)." >&2
+  echo "Run /agentmux:install to migrate it safely (backs up your current install, preserves amux.toml)." >&2
   exit 1
 fi
 
 VERSION="$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION" 2>/dev/null || true)"
 
+# Migrate a pre-rename config (agents.toml -> amux.toml) from older installs.
+if [ ! -f "$INSTALL_DIR/amux.toml" ] && [ -f "$INSTALL_DIR/agents.toml" ]; then
+  mv "$INSTALL_DIR/agents.toml" "$INSTALL_DIR/amux.toml"
+  echo "Renamed legacy config $INSTALL_DIR/agents.toml -> amux.toml."
+fi
+
 # Seed the user's config from the example if they don't have one yet.
-if [ -f "$INSTALL_DIR/agents.toml" ]; then
-  echo "Config already exists at $INSTALL_DIR/agents.toml — not overwritten."
-elif [ -f "$INSTALL_DIR/config/agents.toml.example" ]; then
-  cp "$INSTALL_DIR/config/agents.toml.example" "$INSTALL_DIR/agents.toml"
-  echo "Created default config at $INSTALL_DIR/agents.toml — edit to suit."
+if [ -f "$INSTALL_DIR/amux.toml" ]; then
+  echo "Config already exists at $INSTALL_DIR/amux.toml — not overwritten."
+elif [ -f "$INSTALL_DIR/config/amux.toml.example" ]; then
+  cp "$INSTALL_DIR/config/amux.toml.example" "$INSTALL_DIR/amux.toml"
+  echo "Created default config at $INSTALL_DIR/amux.toml — edit to suit."
 else
-  echo "No agents.toml.example found — create $INSTALL_DIR/agents.toml manually."
+  echo "No amux.toml.example found — create $INSTALL_DIR/amux.toml manually."
 fi
 
 echo ""
@@ -75,14 +81,14 @@ echo "  Hook command path: ~/.agentmux/scripts/claude/status.sh <state>"
 echo ""
 echo "AI summary status lines require an OpenAI-compatible endpoint (LM Studio,"
 echo "Ollama, llama.cpp, etc.). Default: http://localhost:1234/v1/chat/completions."
-echo "Configure via [llm] in ~/.agentmux/agents.toml or AGENTMUX_LLM_URL."
+echo "Configure via [llm] in ~/.agentmux/amux.toml or AGENTMUX_LLM_URL."
 echo ""
 echo "Optional — enable a once-daily update check: set [update] check = true"
-echo "in ~/.agentmux/agents.toml. Update any time with: amux --update"
+echo "in ~/.agentmux/amux.toml. Update any time with: amux --update"
 echo ""
 echo "Side-terminal layout: 'amux --frame [agent] [session]' opens a bare terminal"
 echo "in the left pane beside amux in the right (a nested tmux on its own socket)."
-echo "Set the left-pane width with [frame] left = <percent> in ~/.agentmux/agents.toml;"
+echo "Set the left-pane width with [frame] left = <percent> in ~/.agentmux/amux.toml;"
 echo "optionally split the left column top/bottom with [frame] left_vertical_split = <percent>."
 echo "[frame] focus = agent|terminal picks the start pane; status_position = bottom|top"
 echo "moves the bar; default = true makes a bare 'amux' open a frame ('amux --no-frame' opts out)."

@@ -116,7 +116,7 @@ DIG="${AGENTMUX_DIGEST_BIN:-}"
 GATE="${AGENTMUX_STRIP_GATE_BIN:-$HOME/.agentmux/scripts/strip_unbacked_done.sh}"
 if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] && [ -x "$DIG" ]; then
   # Resolve the configured LLM URL (used for the diag-ping fallback inside the
-  # detached subshell). env > [llm] in agents.toml > default.
+  # detached subshell). env > [llm] in amux.toml > default.
   . "$SCRIPT_DIR/llm-config.sh"
   _amux_load_llm
   pfile=$(mktemp /tmp/agentmux-raw-XXXXXX 2>/dev/null) || pfile=""
