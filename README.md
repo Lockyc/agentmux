@@ -107,7 +107,7 @@ Sessions are named after `basename $PWD` (dots → underscores) by default — r
 
 **Reading the shortcuts.** `C-b` means *hold Ctrl and tap `b`*. Likewise `C-f` is Ctrl+f. That's the whole notation.
 
-**The prefix.** tmux can't act on its shortcuts directly — they'd collide with the program running inside (your agent wants Ctrl+C, Ctrl+R, and so on for itself). So you first press a **prefix** key to get tmux's attention, *release it*, then press the command key. The default prefix is **`C-b`** (Ctrl+b). When you see `prefix c`, it means: press Ctrl+b, let go, then press `c`.
+**The prefix.** tmux can't act on its shortcuts directly — they'd collide with the program running inside (your agent wants Ctrl+C, Ctrl+R, and so on for itself). So you first press a **prefix** key to get tmux's attention, *release it*, then press the command key. The default prefix is **`C-b`** (Ctrl+b). When you see `prefix c`, it means: press Ctrl+b, let go, then press `c`. To use a different key for amux sessions, set `[amux] prefix` (e.g. `prefix = "C-a"`) — it applies only to amux's own sessions, not your other tmux work.
 
 **The three keys you'll actually use** — each pressed after the prefix:
 
@@ -158,11 +158,13 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   on purpose.
 - **Prefixes:** the frame uses `C-f` ("f" for frame — `C-f h`/`l` focus left/right,
   `C-f j`/`k` move within the split left column, `C-f H`/`L` resize, `C-f Q` quit,
-  `C-f d` detach), overridable via `[frame] prefix`. Both
-  inner tmuxes use `C-b`, which the frame passes through to whichever pane is
-  focused: left → the terminal's tabs, right → amux. A stray `C-b d` on either
-  pane is harmless — the pane re-attaches in place rather than vanishing (use
-  `C-f d` to detach the whole frame).
+  `C-f d` detach), overridable via `[frame] prefix`. The two inner tmuxes use their
+  own prefix (`C-b` by default, or amux's `[amux] prefix` for the right pane), which
+  the frame passes through to whichever pane is focused: left → the terminal's tabs,
+  right → amux. A stray `prefix d` on either pane is harmless — the pane re-attaches
+  in place rather than vanishing (use `C-f d` to detach the whole frame). The `[amux]`
+  and `[frame]` prefixes must differ: the frame grabs its own prefix before the inner
+  amux can see it, so a colliding `[amux] prefix` is ignored (with a warning).
 - Set the left-pane width with `[frame] left = <percent>` (default `30`).
   Optionally split the left column top/bottom with `[frame] left_vertical_split =
   <percent>` (the top sub-pane's height, `10`–`90`; unset = single left pane). The

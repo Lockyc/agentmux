@@ -23,12 +23,25 @@ url     = "http://localhost:1234/v1/chat/completions"
 model   = "qwen2.5-14b-instruct"
 timeout = 20
 
+[amux]
+# The amux (agent) session runs on your default tmux socket and reads your own
+# ~/.tmux.conf, so its prefix is normally whatever you set there (usually C-b).
+# Set `prefix` here to override it per amux session only (a session option — it
+# never touches your other tmux sessions). Must differ from the [frame] prefix
+# below: --frame intercepts the frame prefix before the inner amux sees it, so a
+# colliding value is ignored (with a warning) rather than silently shadowed. e.g.:
+# prefix = "C-a"
+# Per-directory overrides work exactly like [frame]'s (see below):
+# [amux.dirs."~/Developer/github.com/lockyc/agentmux"]
+# prefix = "C-Space"
+
 [frame]
 # `amux --frame` layout: a bare scratch terminal in the left pane beside amux in
 # the right pane (its own nested tmux). `left` is the left-pane width, percent.
 left = 30
 # Secondary prefix for the frame's own controls (focus/resize/quit). Defaults to
-# C-f ('f' for frame). Override here with anything but C-b (which amux uses), e.g.:
+# C-f ('f' for frame). Override here with anything but the [amux] prefix (the
+# frame would otherwise shadow it inside --frame), e.g.:
 # prefix = "C-Space"
 # Optionally split the left column top/bottom: percent height of the TOP sub-pane
 # (10..90). Unset = single left pane (default). The top sub-pane is a plain shell;
@@ -42,8 +55,13 @@ left = 30
 # status_position = "top"
 # Make a bare `amux` (no --frame) open a frame by default. Off by default; a
 # bare `amux` then behaves like `amux --frame`. Use `amux --no-frame` for a
-# one-off plain launch. Ignored when amux is run inside an existing tmux. e.g.:
+# one-off plain launch. Ignored when amux is run inside an existing tmux (unless
+# allow_nested below is set). e.g.:
 # default = true
+# Allow --frame to run inside an existing tmux. Off by default — the frame is its
+# own tmux server, so nesting it stacks prefixes; --frame refuses it. Advanced
+# users already living in tmux can opt in (also lifts the `default` skip above):
+# allow_nested = true
 #
 # Per-directory overrides: any field above can be overridden for a directory
 # (and its subdirectories) with a [frame.dirs."<path>"] block. Same matching as

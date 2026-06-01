@@ -93,6 +93,42 @@ _amux_frame_default() {
   [ "$(agentmux_frame_field default "$PWD")" = "true" ] && echo 1 || echo ""
 }
 
+# The effective frame prefix for $PWD: [frame] prefix, or frame.conf's built-in
+# default when unset. Kept in sync with `set -g prefix` in tmux/frame.conf.
+_AMUX_FRAME_PREFIX_DEFAULT="C-f"
+_amux_frame_prefix() {
+  local p; p=$(agentmux_frame_field prefix "$PWD")
+  printf '%s' "${p:-$_AMUX_FRAME_PREFIX_DEFAULT}"
+}
+
+# Resolve the per-session prefix for the amux (agent) session: [amux] prefix,
+# dir-scoped. Empty output = leave the user's own ~/.tmux.conf prefix untouched.
+#
+# Collision guard: the --frame wrapper runs amux in its right pane and intercepts
+# its OWN prefix before the inner amux ever sees it, so an [amux] prefix equal to
+# the (effective) [frame] prefix would be unreachable inside a frame. On collision
+# we warn and emit nothing — falling back to the user's default prefix (which the
+# frame passes straight through) beats setting a key the frame would shadow.
+_amux_prefix() {
+  local p f
+  p=$(agentmux_amux_field prefix "$PWD")
+  [ -z "$p" ] && return 0
+  f=$(_amux_frame_prefix)
+  if [ "$p" = "$f" ]; then
+    echo "amux: [amux] prefix '$p' collides with the [frame] prefix; ignoring (the frame would shadow it inside --frame)" >&2
+    return 0
+  fi
+  printf '%s' "$p"
+}
+
+# Whether --frame may run inside an existing tmux: [frame] allow_nested = true.
+# Off by default — the frame is itself a tmux server, so nesting it inside your
+# tmux stacks prefixes and is normally refused. Advanced users already living in
+# tmux can opt in. Echoes "1" when on, "" otherwise.
+_amux_frame_allow_nested() {
+  [ "$(agentmux_frame_field allow_nested "$PWD")" = "true" ] && echo 1 || echo ""
+}
+
 # Resolve (agent, session) from amux positional args: [(-flag | name)] [session].
 # Echoes agent on line 1, session on line 2 (neither can contain a newline:
 # agent names are TOML keys, sessions are sanitised). Mirrors amux()'s own
@@ -216,7 +252,7 @@ _amux_colours() {
 # this through the user's login shell — maybe fish — which couldn't parse an sh
 # loop anyway. The agent pane instead runs with remain-on-exit (set below), and
 # the frame's pane-died hook (frame_reattach.sh) re-attaches it ONLY while the
-# agent session is still alive: an accidental `C-b d` detach heals in place,
+# agent session is still alive: an accidental prefix-d detach heals in place,
 # while a real kill leaves the pane dead so the live-pane staleness check above
 # rebuilds the frame on the next launch (no auto-resurrection).
 # `--no-frame` is explicit: with [frame] default = true a bare amux opens a frame,
@@ -239,8 +275,8 @@ _amux_frame_left_cmd() { # <term-socket> <term-conf> <term-session>
 # Outer "frame": a bare $SHELL in the left pane, amux in the right pane, as a
 # nested tmux on a dedicated socket. Must be run from a plain terminal.
 _amux_frame() {
-  if [ -n "${TMUX:-}" ]; then
-    echo "amux: --frame must be run from a plain terminal, not inside tmux" >&2
+  if [ -n "${TMUX:-}" ] && [ -z "$(_amux_frame_allow_nested)" ]; then
+    echo "amux: --frame must be run from a plain terminal, not inside tmux (set [frame] allow_nested = true to override)" >&2
     return 1
   fi
   local frame_conf="$AGENTMUX_TMUX/frame.conf" term_conf="$AGENTMUX_TMUX/term.conf"
@@ -304,7 +340,7 @@ _amux_frame() {
     local left_pid agent_pid
     left_pid=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_id}')
     # Survive an accidental detach. The scratch terminal is a nested tmux client
-    # (term socket), so a stray `C-b d` while it's focused passes through the
+    # (term socket), so a stray prefix-d while it's focused passes through the
     # frame, detaches it, and its attach exits — which without remain-on-exit
     # would destroy the pane and reflow the frame to full width. remain-on-exit
     # keeps the pane; the frame's pane-died hook (frame_reattach.sh) re-attaches
@@ -577,9 +613,10 @@ EOF
   fi
 
   # [frame] default = true makes a bare amux open a frame, as if --frame were
-  # passed. Skipped when --no-frame was given, or when already inside tmux (where
-  # --frame can't run anyway — fall through to a normal in-tmux launch instead).
-  if [ -z "$no_frame" ] && [ -z "${TMUX:-}" ] && [ -n "$(_amux_frame_default)" ]; then
+  # passed. Skipped when --no-frame was given, or when already inside tmux and
+  # [frame] allow_nested isn't set (--frame can't nest there — fall through to a
+  # normal in-tmux launch instead).
+  if [ -z "$no_frame" ] && { [ -z "${TMUX:-}" ] || [ -n "$(_amux_frame_allow_nested)" ]; } && [ -n "$(_amux_frame_default)" ]; then
     _amux_frame "$@"
     return $?
   fi
@@ -604,6 +641,12 @@ EOF
   fi
 
   tmux set-option -t "$name" "@autoagent" "1"
+  # Optional per-session prefix ([amux] prefix). Set unconditionally (new and
+  # reattached sessions) so a config change applies on the next launch, and as a
+  # session option so it never touches other sessions' ~/.tmux.conf prefix. Empty
+  # = unset/collided → leave the default prefix untouched.
+  local _prefix; _prefix=$(_amux_prefix)
+  [ -n "$_prefix" ] && tmux set-option -t "$name" prefix "$_prefix"
   _amux_attach "$name"
 }
 
@@ -661,11 +704,26 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$help" in *"--no-frame"*) _got="present" ;; *) _got="absent" ;; esac
   _assert "help advertises --no-frame" "present" "$_got"
 
-  # --frame refuses to run inside tmux (guard returns 1 before any tmux call).
+  # --frame refuses to run inside tmux (guard returns 1 before any tmux call)
+  # unless [frame] allow_nested is set. The example config sets none, so it's off.
   _fout=$(TMUX="/tmp/fake,1,0" _amux_frame work test 2>&1); _frc=$?
   case "$_fout" in *"must be run from a plain terminal"*) _got=ok ;; *) _got="bad:$_fout" ;; esac
   _assert "frame guard message" "ok" "$_got"
   _assert "frame guard exit"    "1"  "$_frc"
+  # [frame] allow_nested = true lifts the guard: _amux_frame proceeds past it (we
+  # point it at a bogus config dir so it fails on the missing frame.conf, not the
+  # tmux guard — proving the guard no longer fired).
+  _anw=$(mktemp /tmp/amux-nest-XXXXXX.toml) || exit 1
+  printf '[frame]\nallow_nested = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_anw"
+  _fout=$(TMUX="/tmp/fake,1,0" AGENTMUX_CONFIG="$_anw" _amux_json_cache="" \
+          AGENTMUX_TMUX="/tmp/amux-no-such-tmux-dir" _amux_frame a test 2>&1)
+  case "$_fout" in
+    *"must be run from a plain terminal"*) _got="guard-still-fired" ;;
+    *"frame config not found"*)            _got=ok ;;
+    *)                                     _got="bad:$_fout" ;;
+  esac
+  _assert "frame allow_nested lifts guard" "ok" "$_got"
+  rm -f "$_anw"
 
   # _amux_frame_right_cmd: a single plain amux attach (no loop → no resurrection,
   # and parseable by any login shell incl. fish).
@@ -794,6 +852,33 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "frame_focus bad val"  "agent"  "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_focus)"
   _assert "frame_status bad val" "bottom" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_status_position)"
+
+  # _amux_frame_prefix: effective frame prefix = [frame] prefix or the C-f default.
+  printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_prefix default" "C-f" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_prefix)"
+  printf '[frame]\nprefix = "C-x"\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_prefix set"     "C-x" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_prefix)"
+
+  # _amux_prefix: example config sets no [amux] → empty (default prefix untouched).
+  _assert "amux_prefix unset" "" "$(_amux_prefix)"
+  # [amux] prefix with no collision → emitted verbatim (frame default is C-f).
+  printf '[amux]\nprefix = "C-a"\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "amux_prefix set" "C-a" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_prefix 2>/dev/null)"
+  # Collision with an explicit [frame] prefix → empty stdout + a warning on stderr.
+  printf '[amux]\nprefix = "C-x"\n[frame]\nprefix = "C-x"\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "amux_prefix collide stdout" "" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_prefix 2>/dev/null)"
+  _pw=$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_prefix 2>&1 >/dev/null)
+  case "$_pw" in *"collides with the [frame] prefix"*) _got=warns ;; *) _got="silent:$_pw" ;; esac
+  _assert "amux_prefix collide warns" "warns" "$_got"
+  # Collision against the C-f default (no [frame] block) is caught too.
+  printf '[amux]\nprefix = "C-f"\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "amux_prefix collide default" "" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_prefix 2>/dev/null)"
+
   rm -f "$_fw"
   AGENTMUX_CONFIG="$_selftest_dir/../config/agents.toml.example"; _amux_json_cache=""
 

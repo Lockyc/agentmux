@@ -119,23 +119,25 @@ agentmux_llm_field() {
   _amux_json | jq -r ".llm.${1} // empty"
 }
 
-# Field value from the [frame] table, optionally directory-scoped.
-# Usage: agentmux_frame_field <field> [dir]
+# Field value from a directory-scoped config table, optionally directory-scoped.
+# Usage: _agentmux_scoped_field <table> <field> [dir]
 #
-# With <dir>: per-field override resolution. Each [frame.dirs."<path>"] block
-# whose path matches <dir> (same rules as agentmux_agent_for_dir: ~→$HOME,
-# trailing slash ignored, equal-or-subtree match) is a candidate *for fields it
-# actually sets*; the longest matching path wins. A field no block sets falls
-# back to the base [frame].<field>. Cascade is per-field, so a deep block only
-# shadows the fields it names; the rest inherit shallower blocks or the base.
-# Without <dir> (or empty): plain base read — current behaviour, unchanged.
+# Shared engine for tables that support a base block plus per-directory override
+# sub-blocks (currently [frame] and [amux]). With <dir>: per-field override
+# resolution. Each [<table>.dirs."<path>"] block whose path matches <dir> (same
+# rules as agentmux_agent_for_dir: ~→$HOME, trailing slash ignored, equal-or-
+# subtree match) is a candidate *for fields it actually sets*; the longest
+# matching path wins. A field no block sets falls back to the base
+# [<table>].<field>. Cascade is per-field, so a deep block only shadows the
+# fields it names; the rest inherit shallower blocks or the base. Without <dir>
+# (or empty): plain base read.
 #
 # Uses an explicit has()/null check rather than `//` so an override that sets a
 # field to boolean false wins over a truthy base (jq's // treats false as empty).
-agentmux_frame_field() {
-  _amux_json | jq -r --arg f "$1" --arg dir "${2:-}" --arg home "$HOME" '
-    (.frame // {}) as $frame
-    | [ ($frame.dirs // {}) | to_entries[]
+_agentmux_scoped_field() {
+  _amux_json | jq -r --arg t "$1" --arg f "$2" --arg dir "${3:-}" --arg home "$HOME" '
+    (.[$t] // {}) as $tbl
+    | [ ($tbl.dirs // {}) | to_entries[]
         | (.key | gsub("^~"; $home) | rtrimstr("/")) as $pat
         | select($dir != "" and ($dir == $pat or ($dir | startswith($pat + "/"))))
         | select(.value | has($f))
@@ -143,11 +145,19 @@ agentmux_frame_field() {
       ] as $cands
     | ($cands | map(.len) | max) as $m
     | ($cands | map(select(.len == $m)) | first) as $hit
-    | if   $hit != null     then $hit.val
-      elif $frame | has($f) then $frame[$f]
+    | if   $hit != null   then $hit.val
+      elif $tbl | has($f) then $tbl[$f]
       else empty end
   '
 }
+
+# Field value from the [frame] table, optionally directory-scoped (see
+# _agentmux_scoped_field). Usage: agentmux_frame_field <field> [dir]
+agentmux_frame_field() { _agentmux_scoped_field frame "$1" "${2:-}"; }
+
+# Field value from the [amux] table, optionally directory-scoped (see
+# _agentmux_scoped_field). Usage: agentmux_amux_field <field> [dir]
+agentmux_amux_field() { _agentmux_scoped_field amux "$1" "${2:-}"; }
 
 # Build the launch command for agent at index, applying keep_alive/reattach wrappers.
 # Warns to stderr if reattach=true without keep_alive=true.
@@ -346,6 +356,29 @@ TOML
   _assert "frame tilde key"         "45" "$(agentmux_frame_field left "$HOME/amux-fr-home/proj")"
   _fr_mtime=$(stat -f %m "$_frcfg" 2>/dev/null || stat -c %Y "$_frcfg" 2>/dev/null || echo 0)
   rm -f "$_frcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_fr_mtime}.json"
+
+  # [amux] shares the same dir-scoped engine as [frame]. Cover a base read, a
+  # per-dir override (longest match), subtree fallback to base, and an unset field.
+  _amcfg=$(mktemp /tmp/agentmux-amux-XXXXXX.toml) || exit 1
+  cat > "$_amcfg" <<TOML
+[amux]
+prefix = "C-a"
+
+[amux.dirs."/tmp/amux-pfx"]
+prefix = "C-Space"
+
+[amux.dirs."$HOME/amux-pfx-home"]
+prefix = "C-o"
+TOML
+  AGENTMUX_CONFIG="$_amcfg"
+  _amux_json_cache=""
+  _assert "amux base prefix"      "C-a"     "$(agentmux_amux_field prefix)"
+  _assert "amux override prefix"  "C-Space" "$(agentmux_amux_field prefix /tmp/amux-pfx/deep)"
+  _assert "amux fallback prefix"  "C-a"     "$(agentmux_amux_field prefix /tmp/elsewhere)"
+  _assert "amux tilde prefix"     "C-o"     "$(agentmux_amux_field prefix "$HOME/amux-pfx-home/x")"
+  _assert "amux absent field"     ""        "$(agentmux_amux_field nonexistent)"
+  _am_mtime=$(stat -f %m "$_amcfg" 2>/dev/null || stat -c %Y "$_amcfg" 2>/dev/null || echo 0)
+  rm -f "$_amcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_am_mtime}.json"
 
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
