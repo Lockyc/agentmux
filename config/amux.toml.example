@@ -1,24 +1,33 @@
 # agentmux agent configuration
 # Copy this file to ~/.agentmux/amux.toml and edit to suit.
+#
 # Agents are launched in the order defined. A bare `amux` (no flag, no agent
 # name) picks the agent whose `dirs` matches the current directory; if none
 # match, it falls back to the first agent in the list.
-# flag:  optional single-letter shorthand for amux -<flag>
-# label: optional short display name for tmux tabs (defaults to name if omitted)
-# dirs:  optional list of directories; a bare `amux` run inside one of them (or
-#        any subdirectory) auto-selects this agent. `~` expands to $HOME. When
-#        several agents match, the longest (most specific) path wins.
+#
+# Optional per-agent fields:
+#   flag:       single-letter shorthand for `amux -<flag>`
+#   label:      short display name for tmux tabs (defaults to name)
+#   dirs:       directories that auto-select this agent for a bare `amux` run
+#               inside one (or any subdirectory). `~` expands to $HOME; when
+#               several agents match, the longest (most specific) path wins.
+#   colour:     tab colour — a curated name or 256 code (see the agents below)
+#   keep_alive: keep the pane open after the agent exits (re-exec's your shell)
+#   reattach:   wrap in reattach-to-user-namespace (macOS clipboard inside tmux);
+#               requires keep_alive = true, else it's ignored with a warning
 
 [update]
 # Opt-in: once-daily check for a newer agentmux on GitHub. Notify-only — when a
 # newer version exists, amux prints a one-line notice; run `amux --update` to apply.
 # Off by default. AGENTMUX_VERSION_CHECK=1/0 overrides this.
+
 check = false
 
 [llm]
 # OpenAI-compatible endpoint used for AI session summaries (summarise.sh).
 # Works with LM Studio, Ollama, llama.cpp, etc. — any /v1/chat/completions server.
 # AGENTMUX_LLM_URL / AGENTMUX_LLM_MODEL / AGENTMUX_LLM_TIMEOUT env vars override these.
+
 url     = "http://localhost:1234/v1/chat/completions"
 model   = "qwen2.5-14b-instruct"
 timeout = 20
@@ -30,45 +39,62 @@ timeout = 20
 # never touches your other tmux sessions). Must differ from the [frame] prefix
 # below: --frame intercepts the frame prefix before the inner amux sees it, so a
 # colliding value is ignored (with a warning) rather than silently shadowed. e.g.:
+#
 # prefix = "C-a"
+
 # Per-directory overrides work exactly like [frame]'s (see below):
+#
 # [amux.dirs."~/Developer/github.com/lockyc/agentmux"]
 # prefix = "C-Space"
 
 [frame]
 # `amux --frame` layout: a bare scratch terminal in the left pane beside amux in
 # the right pane (its own nested tmux). `left` is the left-pane width, percent.
+
 left = 30
+
 # Secondary prefix for the frame's own controls (focus/resize/quit). Defaults to
 # C-f ('f' for frame). Override here with anything but the [amux] prefix (the
 # frame would otherwise shadow it inside --frame), e.g.:
+#
 # prefix = "C-Space"
+
 # Optionally split the left column top/bottom: percent height of the TOP sub-pane
 # (10..90). Unset = single left pane (default). The top sub-pane is a plain shell;
 # the scratch terminal (with its tab bar) stays in the bottom sub-pane. Reach the
 # top shell with the mouse. e.g.:
+#
 # left_vertical_split = 70
+
 # Which pane is focused when the frame starts: "agent" (right, the default) or
 # "terminal" (the left scratch column). e.g.:
+#
 # focus = "terminal"
+
 # Where the frame's [amux frame] status bar sits: "bottom" (default) or "top". e.g.:
+#
 # status_position = "top"
+
 # Make a bare `amux` (no --frame) open a frame by default. Off by default; a
 # bare `amux` then behaves like `amux --frame`. Use `amux --no-frame` for a
 # one-off plain launch. Ignored when amux is run inside an existing tmux (unless
 # allow_nested below is set). e.g.:
+#
 # default = true
+
 # Allow --frame to run inside an existing tmux. Off by default — the frame is its
 # own tmux server, so nesting it stacks prefixes; --frame refuses it. Advanced
 # users already living in tmux can opt in (also lifts the `default` skip above):
-# allow_nested = true
 #
+# allow_nested = true
+
 # Per-directory overrides: any field above can be overridden for a directory
 # (and its subdirectories) with a [frame.dirs."<path>"] block. Same matching as
 # an agent's `dirs` — `~` expands to $HOME, trailing slash ignored, the longest
 # matching path wins — and resolution is per-field: a block only overrides the
 # fields it names; everything else falls back to a shallower block, then to the
 # base [frame] values above. e.g. a taller split + terminal focus in one tree:
+#
 # [frame.dirs."~/Developer/github.com/lockyc/agentmux"]
 # left_vertical_split = 30
 # focus = "terminal"
@@ -79,6 +105,7 @@ label = "pers"
 flag = "p"
 cmd = "CLAUDE_CONFIG_DIR=~/.claude-personal claude"
 dirs = ["~/personal"]
+
 # Friendly colour: a curated name (run `amux --colours` to preview them) or a
 # 256 code like "colour82"/"82". The active/inactive shades are auto-derived.
 colour = "green"
@@ -99,6 +126,7 @@ colour = "orange"
 name = "opencode"
 flag = "o"
 cmd = "opencode"
+
 # Escape hatch: full raw tmux styles override `colour` for total control.
 # Set them as a pair — `colour` is only auto-derived when BOTH are absent.
 colour_inactive = "fg=black,bg=colour54"
