@@ -4,6 +4,8 @@ Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; session
 
 ![agentmux overview](docs/overview.png)
 
+![agentmux overview with sidebar](docs/overview-sidebar.png)
+
 ## Install
 
 ### Claude Code (interactive — recommended)
