@@ -1,22 +1,25 @@
 #!/bin/sh
-# Per-session tmux status-bar colour, DETERMINISTIC from the session name:
-# cksum(name) % palette_size picks a curated (bg fg) slot. Same name -> same
-# colour, on every machine (cksum is a stable CRC) — the randomColor.js
-# "seeded, not random, curated range" idea.
+# Per-session tmux status-bar colour, assigned ONCE at a session's birth and then
+# FROZEN for that session's lifetime — a session's colour never moves while it
+# lives, no matter what other agent sessions start or stop.
 #
-# A plain name-hash pigeonholes, though: two distinct names can cksum to the
-# same slot (e.g. agentmux & reductable). So the slot is COLLISION-RESOLVED —
-# each coloured session linear-probes from its preferred slot past slots already
-# claimed by other coloured sessions, keeping distinct sessions on distinct
-# colours while their count stays <= the palette size. The assignment is a pure
-# function of the sorted set of coloured session names, so adding/removing a
-# session can reshuffle slots; to stop that leaving a stale, now-colliding colour
-# on a session whose hook didn't re-fire, every hook RECONCILES all coloured
-# sessions, not just the one that triggered it.
+# A session's preferred slot is cksum(name) % palette_size: a stable CRC, so the
+# same name prefers the same curated (bg fg) slot on every machine — the
+# randomColor.js "seeded, not random, curated range" idea. But a plain name-hash
+# pigeonholes: two distinct names can cksum to the same slot (e.g. agentmux &
+# reductable). So a NEW session DE-DUPS AT BIRTH — it linear-probes from its
+# preferred slot past every slot already claimed by a live session and takes the
+# first free one. That chosen slot is stored on the session (@l1idx) and never
+# recomputed: existing sessions are fixed points; newcomers fill the gaps around
+# them. Killing a session frees its slot for the next newcomer without disturbing
+# anyone else, which is what keeps live sessions' colours stable.
 #
-# Fired by the client-attached / session-created / client-session-changed
-# hooks in .tmux.conf; a static `set -g status-style` is pointless, this
-# overrides it per session on every attach/switch.
+# Fired by the client-attached / session-created / client-session-changed hooks in
+# .tmux.conf. Each fire reconciles every coloured session, but reconciliation only
+# ASSIGNS sessions that lack a stored @l1idx (newcomers, or one whose creation hook
+# raced); already-assigned sessions are repainted from their frozen slot, never
+# reshuffled. A static `set -g status-style` is pointless; this overrides it per
+# session on every attach/switch.
 #
 # Palette is hand-picked saturated mid/dark backgrounds, each paired with a
 # legible foreground, so the bar text and #(...) right side never end up
@@ -45,28 +48,23 @@ palette='24 231
 
 count=$(printf '%s\n' "$palette" | wc -l | tr -d ' ')
 
-# Collision-resolved palette index, a pure function of the sorted set of coloured
-# session names read on stdin (one per line). Each name probes from its own
-# cksum-preferred slot to the next free one, so distinct sessions land on distinct
-# palette entries while their count stays <= <count>; beyond that, reuse is
-# unavoidable and it wraps. Deterministic given the same session set.
-#   printf '%s\n' "$sorted_names" | _amux_assign_idx <target> <count>
-_amux_assign_idx() {
-  target=$1 cnt=$2 used=' ' ans=''
-  while IFS= read -r s; do
-    [ -n "$s" ] || continue
-    i=$(( $(printf '%s' "$s" | cksum | cut -d' ' -f1) % cnt ))
-    n=0
-    while [ "$n" -lt "$cnt" ]; do
-      case "$used" in
-        *" $i "*) i=$(( (i + 1) % cnt )); n=$(( n + 1 )) ;;
-        *) break ;;
-      esac
-    done
-    used="$used$i "
-    [ "$s" = "$target" ] && ans=$i
+# Pick a palette slot for a newcomer: probe from its cksum-preferred slot past
+# every slot already taken, returning the first free one. <used> is a space-padded
+# list of claimed slots (" 2 5 "); if all <cnt> slots are taken the palette is
+# exhausted and it returns the (now-colliding) preferred slot. Pure; deterministic
+# given the same name and used-set.
+#   _amux_pick_slot <name> <cnt> <used>
+_amux_pick_slot() {
+  nm=$1 cnt=$2 used=$3
+  i=$(( $(printf '%s' "$nm" | cksum | cut -d' ' -f1) % cnt ))
+  n=0
+  while [ "$n" -lt "$cnt" ]; do
+    case "$used" in
+      *" $i "*) i=$(( (i + 1) % cnt )); n=$(( n + 1 )) ;;
+      *) break ;;
+    esac
   done
-  printf '%s' "$ans"
+  printf '%s' "$i"
 }
 
 # Apply the bar colour for session $1 using palette slot $2.
@@ -124,6 +122,9 @@ _amux_clear_colour() {
   tmux set -u -t "$s" status-right 2>/dev/null
   tmux set -u -t "$s" @l2bg 2>/dev/null
   tmux set -u -t "$s" @l2fg 2>/dev/null
+  # Drop the frozen slot too: a session that is no longer autoagent should carry no
+  # marker, so if it is ever re-promoted it re-assigns (de-dups) fresh at that birth.
+  tmux set -u -t "$s" @l1idx 2>/dev/null
   tmux set -t "$s" status on
 }
 
@@ -135,27 +136,66 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
     else echo "FAIL: $1 — expected '$2' got '$3'"; fail=$((fail + 1)); fi
   }
   _pref() { echo $(( $(printf '%s' "$1" | cksum | cut -d' ' -f1) % count )); }
-  _idx()  { printf '%s\n' "$2" | _amux_assign_idx "$1" "$count"; }
 
-  # The reported regression: agentmux & reductable both prefer the same slot.
-  names='agentmux
-lockyc
-locus
-reductable'
+  # Simulate the runtime's two-pass reconcile without tmux. Input: newline-separated
+  # "name:frozenidx" lines (no ':' or empty after ':' = a newcomer to assign).
+  # Output: "name=idx" lines. Mirrors the live loop exactly, so it exercises the
+  # real _amux_pick_slot and the frozen-vs-newcomer split.
+  _sim() {
+    data=$1 oi=$IFS; IFS='
+'
+    u=' '
+    for ln in $data; do
+      nm=${ln%%:*}; fi=${ln#*:}; [ "$fi" = "$ln" ] && fi=''
+      case "$fi" in ''|*[!0-9]*) ;; *) u="$u$fi " ;; esac
+    done
+    out=''
+    for ln in $data; do
+      nm=${ln%%:*}; fi=${ln#*:}; [ "$fi" = "$ln" ] && fi=''
+      case "$fi" in
+        ''|*[!0-9]*) idx=$(_amux_pick_slot "$nm" "$count" "$u"); u="$u$idx " ;;
+        *) idx=$fi ;;
+      esac
+      out="$out$nm=$idx
+"
+    done
+    IFS=$oi; printf '%s' "$out"
+  }
+  _get() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
+
+  # A lone newcomer takes its cksum-preferred slot.
+  _assert "newcomer takes preferred slot" "$(_pref agentmux)" \
+    "$(_get "$(_sim 'agentmux:')" agentmux)"
+
+  # De-dup at birth: agentmux & reductable both PREFER the same slot, but two
+  # newcomers must still land on distinct slots.
   _assert "agentmux & reductable collide (pure hash)" "yes" \
     "$([ "$(_pref agentmux)" = "$(_pref reductable)" ] && echo yes || echo no)"
-  a=$(_idx agentmux "$names"); r=$(_idx reductable "$names")
-  _assert "collision-resolved: distinct slots" "no" \
-    "$([ "$a" = "$r" ] && echo yes || echo no)"
-  _assert "preferred slot kept when free (agentmux)" "$(_pref agentmux)" "$a"
-  # Deterministic: same set -> same answer on recompute.
-  _assert "deterministic" "$a" "$(_idx agentmux "$names")"
-  # All four live sessions land on four distinct slots.
-  l=$(_idx lockyc "$names"); o=$(_idx locus "$names")
-  _assert "all four distinct" "4" "$(printf '%s\n%s\n%s\n%s\n' "$a" "$r" "$l" "$o" | sort -u | wc -l | tr -d ' ')"
-  # A full palette of distinct sessions fills every slot exactly once.
-  big=$(i=0; while [ "$i" -lt "$count" ]; do echo "s$i"; i=$((i + 1)); done)
-  got=$(for s in $big; do _idx "$s" "$big"; echo; done | sort -un | wc -l | tr -d ' ')
+  o=$(_sim 'agentmux:
+reductable:')
+  _assert "newcomers de-dup at birth" "no" \
+    "$([ "$(_get "$o" agentmux)" = "$(_get "$o" reductable)" ] && echo yes || echo no)"
+
+  # The whole point: a FROZEN slot never moves when other sessions come or go.
+  # agentmux is pinned to 0; adding two newcomers must not budge it, and they must
+  # avoid it.
+  o=$(_sim 'agentmux:0
+lockyc:
+reductable:')
+  _assert "frozen slot unmoved by newcomers" "0" "$(_get "$o" agentmux)"
+  _assert "newcomer avoids frozen slot (lockyc)" "no" \
+    "$([ "$(_get "$o" lockyc)" = "0" ] && echo yes || echo no)"
+  _assert "newcomer avoids frozen slot (reductable)" "no" \
+    "$([ "$(_get "$o" reductable)" = "0" ] && echo yes || echo no)"
+
+  # Removing a session frees its slot without touching the survivor: agentmux pinned
+  # to 0 stays at 0 whether or not reductable is present.
+  solo=$(_get "$(_sim 'agentmux:0')" agentmux)
+  _assert "survivor unmoved when peer removed" "0" "$solo"
+
+  # A full palette of distinct newcomers fills every slot exactly once.
+  big=$(i=0; while [ "$i" -lt "$count" ]; do echo "s$i:"; i=$((i + 1)); done)
+  got=$(_sim "$big" | sed 's/.*=//' | sort -un | wc -l | tr -d ' ')
   _assert "full palette: all slots unique" "$count" "$got"
 
   echo "---"; echo "Passed: $pass  Failed: $fail"
@@ -169,17 +209,40 @@ fi
 # demote-cleanup, which is simply skipped when no session was passed (manual runs).
 session="${1:-}"
 
-# Coloured (autoagent) sessions, sorted so the assignment is order-independent.
+# Coloured (autoagent) sessions, sorted so a batch of simultaneous newcomers picks
+# slots in a stable order. Iterated with IFS=newline so names with spaces survive.
 names=$(tmux list-sessions -F '#{?@autoagent,#S,}' 2>/dev/null | grep . | sort)
+oldifs=$IFS
+IFS='
+'
 
-# Reconcile EVERY coloured session to the current global assignment (see header).
-printf '%s\n' "$names" | while IFS= read -r s; do
+# Pass 1: collect the slots already FROZEN onto live sessions. These are fixed
+# points — never recomputed — which is what keeps a session's colour stable for
+# its whole life regardless of who else starts or stops.
+used=' '
+for s in $names; do
   [ -n "$s" ] || continue
-  idx=$(printf '%s\n' "$names" | _amux_assign_idx "$s" "$count")
-  # Guard against a not-yet-registered session (hook racing session creation).
-  [ -n "$idx" ] || idx=$(( $(printf '%s' "$s" | cksum | cut -d' ' -f1) % count ))
+  fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
+  case "$fi" in ''|*[!0-9]*) ;; *) used="$used$fi " ;; esac
+done
+
+# Pass 2: repaint everyone. A session with a frozen slot is painted from it as-is;
+# a newcomer (no @l1idx, or one whose creation hook raced) de-dups against every
+# claimed slot, stores its pick, and joins the fixed points.
+for s in $names; do
+  [ -n "$s" ] || continue
+  fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
+  case "$fi" in
+    ''|*[!0-9]*)
+      idx=$(_amux_pick_slot "$s" "$count" "$used")
+      used="$used$idx "
+      tmux set -t "$s" @l1idx "$idx"
+      ;;
+    *) idx=$fi ;;
+  esac
   _amux_apply_colour "$s" "$idx"
 done
+IFS=$oldifs
 
 # If the triggering session is not (or no longer) autoagent, clear its overrides.
 if [ -n "$session" ] && [ "$(tmux show-options -t "$session" -qv @autoagent 2>/dev/null)" != "1" ]; then
