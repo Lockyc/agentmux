@@ -17,9 +17,16 @@
 # _render <content> <row> <width> -> the row's field, trimmed/clipped/escaped.
 _render() {
   awk -v r="$2" -v w="$3" -v s="$1" '
-    function clip(t) {
+    function clip(t,   cut, sp) {
       sub(/^[ ;]+/, "", t); sub(/[ ;]+$/, "", t)
-      if (length(t) > w) t = substr(t, 1, w - 1) "…"
+      if (length(t) > w) {
+        cut = substr(t, 1, w - 1)
+        sp = cut
+        sub(/[^ ]*$/, "", sp)   # drop the trailing partial word
+        sub(/ +$/, "", sp)      # and the space before it
+        if (length(sp) > 0) cut = sp   # else: single token > width, keep hard cut
+        t = cut "…"
+      }
       gsub(/#/, "##", t)
       return t
     }
@@ -61,9 +68,14 @@ if [ "${SUMMARY_ROWS_SELFTEST:-}" = "1" ]; then
   [ "$(_render "$s4" 1 200)" = "just a bare subject phrase" ] || { echo "lt8 FAIL [$(_render "$s4" 1 200)]" >&2; fail=1; }
   [ "$(_render "$s4" 2 200)" = "" ] || { echo "lt9 FAIL" >&2; fail=1; }
 
-  # Clip to width-1 chars + "…" when the field overflows (width 12 -> 11 kept).
+  # Clip at the last word boundary within width-1, then "…".
   got=$(_render "aaaaaaaaaa bbbbbbbbbb cccccccccc. now: x" 1 12)
-  [ "$got" = "aaaaaaaaaa …" ] || { echo "lt10 FAIL clip [$got]" >&2; fail=1; }
+  [ "$got" = "aaaaaaaaaa…" ] || { echo "lt10 FAIL clip [$got]" >&2; fail=1; }
+  got=$(_render "alpha beta gamma. now: x" 1 14)
+  [ "$got" = "alpha beta…" ] || { echo "lt10b FAIL wordbreak [$got]" >&2; fail=1; }
+  # Single token longer than width -> hard cut fallback.
+  got=$(_render "supercalifragilistic. now: x" 1 12)
+  [ "$got" = "supercalifr…" ] || { echo "lt10c FAIL hardcut [$got]" >&2; fail=1; }
 
   # '#' is escaped to '##'.
   [ "$(_render "subj #1. now: y" 1 200)" = "subj ##1." ] || { echo "lt12 FAIL [$(_render "subj #1. now: y" 1 200)]" >&2; fail=1; }
