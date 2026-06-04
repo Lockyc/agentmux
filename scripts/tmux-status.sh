@@ -150,8 +150,8 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
         fi
       else
         # Subject set: if recent work shares no content word (>3 chars) with
-        # it, the work moved on. AUGMENT (append) the new aspect instead of
-        # replacing, so the original anchor noun survives drift. Punctuation
+        # it, the work moved on. REPLACE the anchor with the fresh candidate
+        # (single phrase) so it never accretes stale slices. Punctuation
         # is fine here: the subject is only ever LM context (AGENTMUX_SUBJECT),
         # never rendered as a tmux label.
         cand=$(printf "%s" "$blob" | "$sum" 6 label)
@@ -163,12 +163,14 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
             case "$sl" in *" $w "*) ov=1; break ;; esac
           done
           if [ -z "$ov" ]; then
-            # cut, not awk: an awk program literal would nest single quotes
-            # inside this nohup sh -c block and break the outer quoting.
-            subj=$(printf "%s; %s\n" "$subj" "$cand" | tr -s " " | cut -d" " -f1-12)
+            # Real drift (candidate shares no >3-char content word with the
+            # current anchor): REPLACE the anchor with the fresh single-phrase
+            # candidate. Appending "subj; cand" accreted stale slices into soup
+            # (e.g. "modal focus ring; siteexit...; redirecting click handlers").
+            subj="$cand"
             printf "%s" "$subj" > "$sf"
-            # Record transcript line offset at re-anchor so the digest
-            # (scope B) covers only the new task, not the whole session.
+            # Re-anchor the digest offset so done/now/next cover only the new
+            # slice, not the whole session.
             wc -l < "$tp" 2>/dev/null | tr -d " " > "$ssf"
           fi
         fi
