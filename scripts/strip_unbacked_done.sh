@@ -17,13 +17,14 @@
 # Always exits 0; caller is cosmetic. Test: STRIP_UNBACKED_DONE_SELFTEST=1.
 
 _has_mutation() {
-  # digest.sh joins segments with " / "; mutation segments start with one of
-  # "edited " or "wrote ". Match either at line start or after " / ".
+  # digest.sh joins segments with " / "; evidence segments start with one of
+  # "edited ", "wrote " (file mutation) or "todo-done:" (agent self-report of
+  # finished work). Match at line start or after " / ".
   case "$1" in
-    'edited '*|'wrote '*) return 0 ;;
+    'edited '*|'wrote '*|'todo-done:'*) return 0 ;;
   esac
   case "$1" in
-    *' / edited '*|*' / wrote '*) return 0 ;;
+    *' / edited '*|*' / wrote '*|*' / todo-done:'*) return 0 ;;
   esac
   return 1
 }
@@ -73,6 +74,9 @@ if [ "${STRIP_UNBACKED_DONE_SELFTEST:-}" = "1" ]; then
   _has_mutation "wrote bar.txt" || { echo "ta2 FAIL (wrote at start)" >&2; fail=1; }
   _has_mutation "user prose / edited foo.sh" || { echo "ta3 FAIL (edited after sep)" >&2; fail=1; }
   _has_mutation "x / y / wrote bar / z" || { echo "ta4 FAIL (wrote mid sep)" >&2; fail=1; }
+
+  _has_mutation "todo-done: shipped backfill" || { echo "ta11 FAIL (todo-done at start)" >&2; fail=1; }
+  _has_mutation "prose / todo-done: shipped backfill" || { echo "ta12 FAIL (todo-done after sep)" >&2; fail=1; }
 
   # _has_mutation: negative cases — ran: is NOT mutation evidence
   if _has_mutation "ran: pytest -q"; then echo "ta5 FAIL (ran at start matched)" >&2; fail=1; fi
@@ -151,6 +155,10 @@ if [ "${STRIP_UNBACKED_DONE_SELFTEST:-}" = "1" ]; then
   gooddigest="lets refactor auth / edited auth.py / wrote tests/test_auth.py / ran: pytest -q"
   got=$(_gate "$gooddigest" "$goodsum")
   [ "$got" = "$goodsum" ] || { echo "g4 FAIL (legit done stripped) got=[$got]" >&2; fail=1; }
+
+  # todo-done is valid done evidence even with zero file mutations.
+  got=$(_gate "discussing scope / todo-done: shipped backfill / todo-now: writing tests" "subj. done: shipped backfill; now: writing tests")
+  [ "$got" = "subj. done: shipped backfill; now: writing tests" ] || { echo "g5 FAIL (todo-done evidence stripped) got=[$got]" >&2; fail=1; }
 
   [ "$fail" = 0 ] && echo "selftest OK"
   exit "$fail"
