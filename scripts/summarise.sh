@@ -22,6 +22,7 @@ mode="${2:-label}"
 # $maxwords from the environment (awk -v).
 _clean() {
   tr '\n\r\t' '   ' \
+    | sed -e 's/\([a-z0-9]\)\([A-Z]\)/\1 \2/g' \
     | tr 'A-Z' 'a-z' \
     | tr '_-/' '   ' \
     | LC_ALL=C tr -c 'a-z0-9 ' ' ' \
@@ -35,6 +36,7 @@ _clean() {
 # reach tmux.
 _clean_para() {
   tr '\n\r\t' '   ' \
+    | sed -e 's/\([a-z0-9]\)\([A-Z]\)/\1 \2/g' \
     | tr 'A-Z' 'a-z' \
     | tr '_/' '  ' \
     | LC_ALL=C tr -c 'a-z0-9 .,:;' ' ' \
@@ -93,6 +95,10 @@ if [ "${SUMMARISE_SELFTEST:-}" = "1" ]; then
   [ "$got" = "fix idempotency keys stripe" ] || { echo "selftest4 FAIL got=[$got]" >&2; fail=1; }
   got=$( ( maxwords=4; printf 'keys**actually test path' | _clean ) )
   [ "$got" = "keys actually test path" ] || { echo "selftest5 FAIL got=[$got]" >&2; fail=1; }
+  got=$( ( maxwords=6; printf 'SiteExitConfirmationAuditFixes' | _clean ) )
+  [ "$got" = "site exit confirmation audit fixes" ] || { echo "selftest_camel1 FAIL got=[$got]" >&2; fail=1; }
+  got=$( ( maxwords=6; printf 'fooBarBaz tiptapEditor' | _clean ) )
+  [ "$got" = "foo bar baz tiptap editor" ] || { echo "selftest_camel2 FAIL got=[$got]" >&2; fail=1; }
   got=$( ( maxwords=30; printf 'Billing Migration: backfilling soft-delete, adding **tests**.\nNext: proration!' | _clean_para ) )
   [ "$got" = "billing migration: backfilling soft delete, adding tests. next: proration" ] || { echo "selftest6 FAIL got=[$got]" >&2; fail=1; }
   got=$( ( maxwords=30; printf 'done: a; now: b #c' | _clean_para ) )
@@ -101,6 +107,8 @@ if [ "${SUMMARISE_SELFTEST:-}" = "1" ]; then
   [ "$got" = "subject. done: x; now: y" ] || { echo "selftest8 FAIL got=[$got]" >&2; fail=1; }
   got=$( ( maxwords=30; printf 'all done.' | _clean_para ) )
   [ "$got" = "all done." ] || { echo "selftest9 FAIL (trailing period preserved) got=[$got]" >&2; fail=1; }
+  got=$( ( maxwords=30; printf 'now: fixing TipTapEditor focus' | _clean_para ) )
+  [ "$got" = "now: fixing tip tap editor focus" ] || { echo "selftest_camel3 FAIL got=[$got]" >&2; fail=1; }
   [ "$fail" = 0 ] && echo "selftest OK"
   exit "$fail"
 fi
