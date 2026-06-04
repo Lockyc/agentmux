@@ -9,7 +9,8 @@
 #       Write                        -> "wrote <basename>"
 #       Bash                         -> "ran: <command, first 60 chars>"
 #     a failed paired tool_result (is_error true) appends " (failed)".
-#   Read/Grep/Glob/LS/TodoWrite/Task and other non-mutating tools are skipped.
+#   Read/Grep/Glob/LS/Task and other non-mutating tools are skipped. The LATEST
+#   TodoWrite snapshot is appended as "todo-done:/todo-now:/todo-next: <item>".
 # Over char_budget, drops the OLDEST prose first but keeps ALL tool lines.
 # Prints NOTHING and exits 0 on any problem (cosmetic caller degrades silently).
 # Test: CLAUDE_DIGEST_SELFTEST=1.
@@ -29,9 +30,9 @@ _digest() {
         | select((.type=="tool_result") and (.is_error==true))
         | .tool_use_id' 2>/dev/null)
 
-  # Pass 2: tagged stream, one record per line: "<U|A|T>\t<text>".
-  # Text is whitespace-flattened in jq so no record spans multiple lines.
-  tail -n +"$_start" "$_f" 2>/dev/null \
+  # Pass 2: tagged stream (prose + mutating tool one-liners), captured so we can
+  # append the latest TodoWrite snapshot after the budget trim.
+  _main=$(tail -n +"$_start" "$_f" 2>/dev/null \
   | jq -rR --arg ferr "$_ferr" '
       ($ferr | split("\n") | map(select(length>0))) as $F
       | fromjson? // empty
@@ -91,7 +92,42 @@ _digest() {
         }
         first=1
         for(i=1;i<=n;i++) if(!removed[i]){ printf "%s%s", (first?"":" / "), X[i]; first=0 }
-      }'
+      }')
+
+  # Latest TodoWrite snapshot -> labeled segments (agent's own done/now/next).
+  # TodoWrite is a full-state snapshot per call, so take the LAST one in the
+  # window. @json keeps each snapshot on one line; tail -n1 = newest.
+  _todojson=$(tail -n +"$_start" "$_f" 2>/dev/null \
+    | jq -rR 'fromjson? // empty
+        | select(.type=="assistant")
+        | (.message.content // empty)
+        | if type=="array" then .[] else empty end
+        | select(.type=="tool_use" and .name=="TodoWrite")
+        | (.input.todos // empty) | @json' 2>/dev/null \
+    | tail -n 1)
+  # jq joins the ordered segments itself, so no shell word-splitting / subshell
+  # var-mutation (keeps shellcheck clean — no SC2030/SC2086).
+  _todoseg=""
+  if [ -n "$_todojson" ]; then
+    _todoseg=$(printf '%s' "$_todojson" | jq -r '
+        ( map(select(.status=="completed"))
+          + map(select(.status=="in_progress"))
+          + map(select(.status=="pending")) )
+        | map( if .status=="completed"    then "todo-done: " + ((.content // "")|gsub("\\s+";" ")|.[0:240])
+               elif .status=="in_progress" then "todo-now: "  + ((.activeForm // .content // "")|gsub("\\s+";" ")|.[0:240])
+               else "todo-next: " + ((.content // "")|gsub("\\s+";" ")|.[0:240]) end )
+        | join(" / ")' 2>/dev/null)
+  fi
+
+  # Emit main digest + todo segments joined by " / ", omitting the separator
+  # when either side is empty (preserves the "prints NOTHING when empty" contract).
+  if [ -n "$_main" ] && [ -n "$_todoseg" ]; then
+    printf '%s / %s' "$_main" "$_todoseg"
+  elif [ -n "$_main" ]; then
+    printf '%s' "$_main"
+  else
+    printf '%s' "$_todoseg"
+  fi
 }
 
 if [ "${CLAUDE_DIGEST_SELFTEST:-}" = "1" ]; then
@@ -105,6 +141,8 @@ if [ "${CLAUDE_DIGEST_SELFTEST:-}" = "1" ]; then
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t9","name":"Edit","input":{}}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"pytest -q tests/test_auth.py"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t3","is_error":true,"content":"2 failed"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"td1","name":"TodoWrite","input":{"todos":[{"content":"Investigate bug","activeForm":"Investigating bug","status":"in_progress"}]}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"td2","name":"TodoWrite","input":{"todos":[{"content":"Write backfill","activeForm":"Writing backfill","status":"completed"},{"content":"Add proration tests","activeForm":"Adding proration tests","status":"in_progress"},{"content":"Run migration","activeForm":"Running migration","status":"pending"}]}}]}}
 {"type":"user","message":{"content":"ok"}}
 JSONL
 
@@ -115,6 +153,10 @@ JSONL
   case "$out" in *"models.py"*|*"Read"*|*"read "*) echo "selftest4 FAIL (Read leaked) got=[$out]" >&2; fail=1 ;; esac
   case "$out" in *" / ok"|*" / ok "*|"ok"|*"/ ok /"*) echo "selftest5 FAIL (filler 'ok' kept) got=[$out]" >&2; fail=1 ;; esac
   case "$out" in *"edited  "*) echo "selftest9 FAIL (empty-input tool emitted bare line) got=[$out]" >&2; fail=1 ;; esac
+  case "$out" in *"todo-done: Write backfill"*) ;; *) echo "selftest_todo1 FAIL (completed) got=[$out]" >&2; fail=1 ;; esac
+  case "$out" in *"todo-now: Adding proration tests"*) ;; *) echo "selftest_todo2 FAIL (in_progress activeForm) got=[$out]" >&2; fail=1 ;; esac
+  case "$out" in *"todo-next: Run migration"*) ;; *) echo "selftest_todo3 FAIL (pending) got=[$out]" >&2; fail=1 ;; esac
+  case "$out" in *"Investigating bug"*|*"Investigate bug"*) echo "selftest_todo4 FAIL (stale earlier snapshot leaked) got=[$out]" >&2; fail=1 ;; esac
 
   # Budget trim: with a tiny budget the prose drops but the tool lines survive.
   small=$(_digest "$tmp" 1 30)
