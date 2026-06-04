@@ -1,7 +1,12 @@
 #!/bin/sh
-# ctx.sh <transcript_path> <max_msgs> [percap] [head|tail]
+# ctx.sh <transcript_path> <max_msgs> [percap] [head|tail|todos]
 # end=head → the EARLIEST <max_msgs> turns (for the session subject);
-# end=tail (default) → the most RECENT ones (for current activity).
+# end=tail (default) → the most RECENT ones (for current activity);
+# end=todos → the agent's LATEST task-list snapshot (TodoWrite), task contents
+#   in list order, up to <max_msgs> items each capped to [percap] chars, joined
+#   by " / ". This is the session's umbrella GOAL signal — used to anchor the
+#   subject on the overall goal rather than the current subtask. Empty when the
+#   agent has no task list.
 # Prints the text of the last <max_msgs> *user AND assistant* turns from a
 # Claude Code transcript JSONL — including assistant text segments so the
 # concrete subject matter (file/function names, what was changed) reaches
@@ -25,6 +30,25 @@ _ctx() {
 
   [ -n "$_tr" ] && [ -r "$_tr" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
+
+  if [ "$_end" = todos ]; then
+    # Latest TodoWrite snapshot's task list = the session's GOAL/plan. Each
+    # TodoWrite call is a full-state snapshot, so take the NEWEST one (tail -n1)
+    # and emit its task contents in list order, each capped, joined " / ".
+    # Empty (and exit 0) when there is no task list, so callers degrade silently.
+    tail -n 800 "$_tr" 2>/dev/null \
+    | jq -rR 'fromjson? // empty
+        | select(.type=="assistant")
+        | (.message.content // empty)
+        | if type=="array" then .[] else empty end
+        | select(.type=="tool_use" and .name=="TodoWrite")
+        | (.input.todos // empty) | @json' 2>/dev/null \
+    | tail -n 1 \
+    | jq -r --argjson n "$_n" --argjson pc "$_percap" '
+        map(.content // "" | gsub("\\s+";" ") | .[0:$pc])
+        | map(select(length > 0)) | .[0:$n] | join(" / ")' 2>/dev/null
+    return 0
+  fi
 
   # tail bounds work on very long sessions; we only ever need recent user turns.
   tail -n 800 "$_tr" 2>/dev/null \
@@ -67,6 +91,8 @@ if [ "${CLAUDE_CTX_SELFTEST:-}" = "1" ]; then
 {"type":"user","message":{"content":"hash 01HZQ4XJ5N8K3MFGRTVBPCY7ASAAAAAA appears in log"}}
 {"type":"user","message":{"content":"ok"}}
 {"type":"user","message":{"content":"x=1; y=2; z=3; q=4; m=5"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"old","name":"TodoWrite","input":{"todos":[{"content":"Stale early plan","status":"in_progress","activeForm":"Doing stale early plan"}]}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"new","name":"TodoWrite","input":{"todos":[{"content":"Build site config","status":"completed","activeForm":"Building site config"},{"content":"Implement layout","status":"in_progress","activeForm":"Implementing layout"},{"content":"Add pricing page","status":"pending","activeForm":"Adding pricing page"}]}}]}}
 {"type":"user","message":{"content":"now wire up the migration script"}}
 JSONL
 
@@ -90,6 +116,21 @@ JSONL
   # percap clipping
   clip=$(_ctx "$tmp" 1 8 head)
   [ "$clip" = "lets ref" ] || { echo "ctx12 FAIL (percap) got=[$clip]" >&2; fail=1; }
+
+  # todos mode: latest TodoWrite snapshot's task contents, in order, joined.
+  todos=$(_ctx "$tmp" 12 120 todos)
+  case "$todos" in *"Build site config"*) ;; *) echo "ctx_todos1 FAIL (completed item) got=[$todos]" >&2; fail=1 ;; esac
+  case "$todos" in *"Implement layout"*) ;; *) echo "ctx_todos2 FAIL (in_progress item) got=[$todos]" >&2; fail=1 ;; esac
+  case "$todos" in *"Add pricing page"*) ;; *) echo "ctx_todos3 FAIL (pending item) got=[$todos]" >&2; fail=1 ;; esac
+  case "$todos" in *"Stale early plan"*) echo "ctx_todos4 FAIL (older snapshot leaked) got=[$todos]" >&2; fail=1 ;; esac
+  case "$todos" in *" / "*) ;; *) echo "ctx_todos5 FAIL (items not joined) got=[$todos]" >&2; fail=1 ;; esac
+  # item cap (percap) clips each task content.
+  tcap=$(_ctx "$tmp" 12 5 todos)
+  case "$tcap" in *"Build "*) ;; *) echo "ctx_todos6 FAIL (percap clip) got=[$tcap]" >&2; fail=1 ;; esac
+  case "$tcap" in *"Build site"*) echo "ctx_todos7 FAIL (percap not applied) got=[$tcap]" >&2; fail=1 ;; esac
+  # item count cap (max_msgs) keeps only the first N tasks.
+  tn=$(_ctx "$tmp" 1 120 todos)
+  [ "$tn" = "Build site config" ] || { echo "ctx_todos8 FAIL (count cap) got=[$tn]" >&2; fail=1; }
 
   # All-filler transcript yields empty (callers keep prior label).
   cat > "$tmp" <<'JSONL'

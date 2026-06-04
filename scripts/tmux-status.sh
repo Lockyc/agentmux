@@ -22,6 +22,7 @@
 # /tmp/<agent_name>-substart-<pane>.txt subject-start line offset (scope B; written on re-anchor)
 # /tmp/agentmux-sum-<pane>.lock.d       summariser overlap lock
 # /tmp/agentmux-sum-<pane>.ts           last-refresh stamp (throttles prompt-less PostToolUse refreshes)
+# /tmp/agentmux-sum-<pane>.drift        consecutive-drift counter (subject re-derives only after sustained drift)
 # start state removes all of the above. Needs jq, AGENTMUX_CTX_BIN, AGENTMUX_DIGEST_BIN,
 # summarise.sh, and a reachable LLM endpoint; without it diag shows "llm: unreachable".
 
@@ -53,6 +54,7 @@ diagfile="/tmp/agentmux-diag-${pane_key}.txt"
 subjectfile="/tmp/${agent_name}-subject-${pane_key}.txt"
 substartfile="/tmp/${agent_name}-substart-${pane_key}.txt"
 sumtsfile="/tmp/agentmux-sum-${pane_key}.ts"
+driftfile="/tmp/agentmux-sum-${pane_key}.drift"
 TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
 label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
 # Target our own pane explicitly: an un-targeted display-message resolves against
@@ -76,7 +78,7 @@ case "$(git rev-parse --absolute-git-dir 2>/dev/null)" in
 esac
 
 if [ "$emoji" = "🤖" ]; then
-  rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" "$sumtsfile" 2>/dev/null
+  rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" "$sumtsfile" "$driftfile" 2>/dev/null
   rmdir "/tmp/agentmux-sum-${pane_key}.lock.d" 2>/dev/null
 fi
 
@@ -116,8 +118,8 @@ tmux rename-window -t "$TMUX_PANE" "$render $label"
 # Detached: never blocks the hook (cosmetic-hook contract); the foreground
 # already did exec >/dev/null and will exit 0. Spawned nohup ... >/dev/null
 # 2>&1 </dev/null & so it shares no fd with the agent. Up to 3 LM calls
-# (subject-derive OR shift-candidate, then stand); detached + per-pane lock so
-# latency is invisible.
+# (drift-probe, then a goal re-derive once drift is sustained, then stand);
+# detached + per-pane lock so latency is invisible.
 SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
 CTX="${AGENTMUX_CTX_BIN:-}"
 DIG="${AGENTMUX_DIGEST_BIN:-}"
@@ -147,7 +149,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
   if [ -n "$pfile" ]; then
     printf '%s' "$prompt" > "$pfile"
     nohup sh -c '
-      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}
+      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}; dcf=${12}
       cur=$(cat "$pf" 2>/dev/null); rm -f "$pf"
       recent=$("$ctx" "$tp" 6 400 tail 2>/dev/null)
       if [ -n "$recent" ] && [ -n "$cur" ]; then blob="$recent / $cur"
@@ -157,11 +159,24 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       lock="/tmp/agentmux-sum-${pane}.lock.d"
       mkdir "$lock" 2>/dev/null || exit 0
 
+      # GOAL context for the subject: early intent + the agent task list (the
+      # umbrella goal) + recent work. Deliberately broad so the subject names
+      # the GOAL, not the current subtask. The task list is the strongest, most
+      # stable goal signal; recent is included so a genuine pivot can still be
+      # named. "plan:" is a process word the label prompt is told to ignore, so
+      # it cues the model without leaking into the title.
+      early=$("$ctx" "$tp" 8 300 head 2>/dev/null)
+      todos=$("$ctx" "$tp" 12 120 todos 2>/dev/null)
+      goal="$early"
+      [ -n "$todos" ] && goal="${goal:+$goal / }plan: $todos"
+      [ -n "$recent" ] && goal="${goal:+$goal / }$recent"
+      [ -n "$goal" ] || goal="$blob"
+
       subj=$(cat "$sf" 2>/dev/null)
       if [ -z "$subj" ]; then
         # No subject yet: derive once the early window has enough signal
-        # (>= 6 substantive post-filter user turns, roughly the first 20%).
-        early=$("$ctx" "$tp" 8 300 head 2>/dev/null)
+        # (>= 6 substantive post-filter user turns, roughly the first 20%),
+        # from the broad GOAL context above.
         if [ -n "$early" ]; then
           seps=$(printf "%s" "$early" | grep -o " / " | wc -l | tr -d " ")
           segs=$(( ${seps:-0} + 1 ))
@@ -169,15 +184,19 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
           segs=0
         fi
         if [ "$segs" -ge 6 ]; then
-          subj=$(printf "%s" "$early" | "$sum" 6 label)
+          subj=$(printf "%s" "$goal" | "$sum" 6 label)
           [ -n "$subj" ] && printf "%s" "$subj" > "$sf"
         fi
       else
-        # Subject set: if recent work shares no content word (>3 chars) with
-        # it, the work moved on. REPLACE the anchor with the fresh candidate
-        # (single phrase) so it never accretes stale slices. Punctuation
-        # is fine here: the subject is only ever LM context (AGENTMUX_SUBJECT),
-        # never rendered as a tmux label.
+        # Subject set: probe whether recent work has moved off the subject. If
+        # the recent candidate shares no >3-char content word with it, that is
+        # ONE drift tick (persisted in $dcf). Only after AGENTMUX_SUM_DRIFT
+        # consecutive ticks (a SUSTAINED move, not a brief subtask dive) do we
+        # re-derive — and we re-derive from the broad GOAL context, never the
+        # bare recent slice, so the new subject stays goal-level. Any overlap
+        # resets the counter. (The subject is only ever LM context via
+        # AGENTMUX_SUBJECT, never rendered as a tmux label, so punctuation is
+        # harmless here.)
         cand=$(printf "%s" "$blob" | "$sum" 6 label)
         if [ -n "$cand" ]; then
           sl=" $(printf "%s" "$subj" | tr "A-Z" "a-z" | tr -cs "a-z0-9" " ") "
@@ -186,16 +205,31 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
             [ "${#w}" -gt 3 ] || continue
             case "$sl" in *" $w "*) ov=1; break ;; esac
           done
-          if [ -z "$ov" ]; then
-            # Real drift (candidate shares no >3-char content word with the
-            # current anchor): REPLACE the anchor with the fresh single-phrase
-            # candidate. Appending "subj; cand" accreted stale slices into soup
-            # (e.g. "modal focus ring; siteexit...; redirecting click handlers").
-            subj="$cand"
-            printf "%s" "$subj" > "$sf"
-            # Re-anchor the digest offset so done/now/next cover only the new
-            # slice, not the whole session.
-            wc -l < "$tp" 2>/dev/null | tr -d " " > "$ssf"
+          if [ -n "$ov" ]; then
+            rm -f "$dcf"
+          else
+            dc=$(cat "$dcf" 2>/dev/null); case "$dc" in ""|*[!0-9]*) dc=0 ;; esac
+            dc=$((dc + 1))
+            if [ "$dc" -ge "${AGENTMUX_SUM_DRIFT:-3}" ]; then
+              # Sustained drift: re-derive the subject from the broad GOAL
+              # context. Only replace + re-anchor the digest window when the
+              # goal actually CHANGED (a real pivot). A long subtask dive within
+              # the same goal re-derives to the same subject, so keep the
+              # trajectory window intact and just clear the counter.
+              new=$(printf "%s" "$goal" | "$sum" 6 label)
+              if [ -n "$new" ]; then
+                if [ "$new" != "$subj" ]; then
+                  subj="$new"
+                  printf "%s" "$subj" > "$sf"
+                  # Re-anchor the digest offset so done/now/next cover only the
+                  # new slice, not the whole session.
+                  wc -l < "$tp" 2>/dev/null | tr -d " " > "$ssf"
+                fi
+                rm -f "$dcf"
+              fi
+            else
+              printf "%s" "$dc" > "$dcf"
+            fi
           fi
         fi
       fi
@@ -225,7 +259,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
         fi
       fi
       rmdir "$lock" 2>/dev/null
-    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" \
+    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" "$driftfile" \
       >/dev/null 2>&1 </dev/null &
   fi
 elif [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ -x "$SUM" ]; then
