@@ -5,20 +5,23 @@
 #   AGENTMUX_AGENT_NAME       agent label used in tab and temp-file names (default: agent)
 #   AGENTMUX_CTX_BIN          path to transcript context extractor (no default)
 #   AGENTMUX_DIGEST_BIN       path to transcript digest builder (no default)
-#   AGENTMUX_HOOK_PROMPT      (working state only) latest user prompt
-#   AGENTMUX_HOOK_TRANSCRIPT  (working state only) path to the agent's session transcript
+#   AGENTMUX_HOOK_PROMPT      (UserPromptSubmit only) latest user prompt; optional supplement
+#   AGENTMUX_HOOK_TRANSCRIPT  (every working hook) session transcript path; drives the summary
 # Two jobs:
 #  1. Tab label = "<emoji> <agent>" — a STABLE, state-only tab.
 #     State tokens: start working permission notify done
 #     Emojis:       🤖     ⚡       🔐         📣     ✅  (👀 derived internally)
 #  2. AI summary: stable subject + done/now/next trajectory, re-derived on
-#     every working hook from AGENTMUX_DIGEST_BIN + summarise.sh stand mode.
+#     every working hook (UserPromptSubmit AND PostToolUse) from the transcript
+#     via AGENTMUX_DIGEST_BIN + summarise.sh stand mode — so it refreshes
+#     mid-turn during long autonomous runs, not only when a prompt arrives.
 #
 # /tmp/agentmux-status-<pane>.txt       done/now/next summary (status lines 1-3; each working hook)
 # /tmp/agentmux-diag-<pane>.txt         pipeline diagnostic shown when no summary yet
 # /tmp/<agent_name>-subject-<pane>.txt  stable subject label (derived once, re-anchored on shift)
 # /tmp/<agent_name>-substart-<pane>.txt subject-start line offset (scope B; written on re-anchor)
 # /tmp/agentmux-sum-<pane>.lock.d       summariser overlap lock
+# /tmp/agentmux-sum-<pane>.ts           last-refresh stamp (throttles prompt-less PostToolUse refreshes)
 # start state removes all of the above. Needs jq, AGENTMUX_CTX_BIN, AGENTMUX_DIGEST_BIN,
 # summarise.sh, and a reachable LLM endpoint; without it diag shows "llm: unreachable".
 
@@ -49,6 +52,7 @@ longfile="/tmp/agentmux-status-${pane_key}.txt"
 diagfile="/tmp/agentmux-diag-${pane_key}.txt"
 subjectfile="/tmp/${agent_name}-subject-${pane_key}.txt"
 substartfile="/tmp/${agent_name}-substart-${pane_key}.txt"
+sumtsfile="/tmp/agentmux-sum-${pane_key}.ts"
 TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
 label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
 # Target our own pane explicitly: an un-targeted display-message resolves against
@@ -72,7 +76,7 @@ case "$(git rev-parse --absolute-git-dir 2>/dev/null)" in
 esac
 
 if [ "$emoji" = "🤖" ]; then
-  rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" 2>/dev/null
+  rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" "$sumtsfile" 2>/dev/null
   rmdir "/tmp/agentmux-sum-${pane_key}.lock.d" 2>/dev/null
 fi
 
@@ -105,16 +109,36 @@ tmux rename-window -t "$TMUX_PANE" "$render $label"
 
 # working → AI summary: a stable SUBJECT (derived once from early turns,
 # re-anchored when work shifts topic) + done/now/next from AGENTMUX_DIGEST_BIN
-# piped into summarise.sh stand mode. Detached: never blocks the hook
-# (cosmetic-hook contract); the foreground already did exec >/dev/null and will
-# exit 0. Spawned nohup ... >/dev/null 2>&1 </dev/null & so it shares no fd
-# with the agent. Up to 3 LM calls (subject-derive OR shift-candidate, then stand);
-# detached + per-pane lock so latency is invisible.
+# piped into summarise.sh stand mode. Built from the TRANSCRIPT — the user
+# prompt is only an optional supplement — so it runs on every working hook,
+# including the prompt-less PostToolUse that fires throughout a long autonomous
+# turn (gating on $prompt would freeze the summary between user messages).
+# Detached: never blocks the hook (cosmetic-hook contract); the foreground
+# already did exec >/dev/null and will exit 0. Spawned nohup ... >/dev/null
+# 2>&1 </dev/null & so it shares no fd with the agent. Up to 3 LM calls
+# (subject-derive OR shift-candidate, then stand); detached + per-pane lock so
+# latency is invisible.
 SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
 CTX="${AGENTMUX_CTX_BIN:-}"
 DIG="${AGENTMUX_DIGEST_BIN:-}"
 GATE="${AGENTMUX_STRIP_GATE_BIN:-$HOME/.agentmux/scripts/strip_unbacked_done.sh}"
-if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] && [ -x "$DIG" ]; then
+
+# Refresh cadence + throttle. A new user prompt (UserPromptSubmit, $prompt set)
+# always refreshes immediately. PostToolUse carries no $prompt and fires per
+# tool call, so throttle those prompt-less refreshes to at most once per
+# AGENTMUX_SUM_THROTTLE seconds (default 30) — the per-pane lock only prevents
+# overlap, not frequency, and each refresh costs ~2 local-LM calls.
+sum_ok=1
+if [ "$emoji" = "⚡" ] && [ -z "$prompt" ]; then
+  _now=$(date +%s 2>/dev/null || echo 0)
+  _last=$(stat -f %m "$sumtsfile" 2>/dev/null || stat -c %Y "$sumtsfile" 2>/dev/null || echo 0)
+  [ "$((_now - _last))" -lt "${AGENTMUX_SUM_THROTTLE:-30}" ] && sum_ok=0
+fi
+
+if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$SUM" ] && [ -x "$CTX" ] && [ -x "$DIG" ]; then
+  # Stamp the attempt up front so the throttle covers failures too (don't retry
+  # the LM on every tool call when it's down).
+  : > "$sumtsfile" 2>/dev/null || true
   # Resolve the configured LLM URL (used for the diag-ping fallback inside the
   # detached subshell). env > [llm] in amux.toml > default.
   . "$SCRIPT_DIR/llm-config.sh"
@@ -204,7 +228,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ] && [ -x "$CTX" ] &&
     ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" \
       >/dev/null 2>&1 </dev/null &
   fi
-elif [ "$emoji" = "⚡" ] && [ -n "$prompt" ] && [ -x "$SUM" ]; then
+elif [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ -x "$SUM" ]; then
   [ -x "$CTX" ] || printf 'ctx: AGENTMUX_CTX_BIN not set\n' > "$diagfile"
   [ -x "$DIG" ] || printf 'digest: AGENTMUX_DIGEST_BIN not set\n' > "$diagfile"
 fi
