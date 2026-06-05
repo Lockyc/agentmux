@@ -28,6 +28,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `config/amux.toml.example` | Example agent config |
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
+| `docs/ai-summary.md` | AI summary design rationale: invariants, ruled-out approaches, eval method — **start here when revisiting the summary feature** |
 | `VERSION` | Semver version string |
 
 ## Install
