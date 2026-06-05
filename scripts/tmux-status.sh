@@ -159,17 +159,18 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       lock="/tmp/agentmux-sum-${pane}.lock.d"
       mkdir "$lock" 2>/dev/null || exit 0
 
-      # GOAL context for the subject: early intent + the agent task list (the
-      # umbrella goal) + recent work. Deliberately broad so the subject names
-      # the GOAL, not the current subtask. The task list is the strongest, most
-      # stable goal signal; recent is included so a genuine pivot can still be
-      # named. "plan:" is a process word the label prompt is told to ignore, so
-      # it cues the model without leaking into the title.
+      # GOAL context for the subject: early intent (read from the session START,
+      # so it captures the stated goal even on long sessions) + the agent task
+      # list (the umbrella goal). Deliberately EXCLUDES recent activity: folding
+      # recent in narrows the subject to the current subtask (the exact drift we
+      # are avoiding — e.g. "tiptap editor" degrading to "init destroy race
+      # guard"). Recent is used only for the drift probe below and for the
+      # done/now/next stand line. "plan:" is a process word the label prompt is
+      # told to ignore, so it cues the model without leaking into the title.
       early=$("$ctx" "$tp" 8 300 head 2>/dev/null)
       todos=$("$ctx" "$tp" 12 120 todos 2>/dev/null)
       goal="$early"
       [ -n "$todos" ] && goal="${goal:+$goal / }plan: $todos"
-      [ -n "$recent" ] && goal="${goal:+$goal / }$recent"
       [ -n "$goal" ] || goal="$blob"
 
       subj=$(cat "$sf" 2>/dev/null)

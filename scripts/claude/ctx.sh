@@ -50,8 +50,12 @@ _ctx() {
     return 0
   fi
 
-  # tail bounds work on very long sessions; we only ever need recent user turns.
-  tail -n 800 "$_tr" 2>/dev/null \
+  # Line bound for very long sessions. CRITICAL: head mode must read from the
+  # FILE START (the session's opening / stated goal), tail mode from the END
+  # (recent activity). Bounding both with `tail` would make "head" return the
+  # earliest of the last N lines — i.e. mid-session — so a >800-line session
+  # loses its real goal. Bound by _end accordingly.
+  { if [ "$_end" = head ]; then head -n 1500 "$_tr"; else tail -n 800 "$_tr"; fi; } 2>/dev/null \
   | jq -rR 'fromjson? // empty
       | select(.type=="user" or .type=="assistant")
       | (.message.content) as $c
