@@ -6,6 +6,11 @@ start a revisit: it records *why* the design is shaped this way and which
 approaches are already ruled out, so we measure and move forward instead of
 re-deriving and re-trying dead ends.
 
+> **Start every revisit by running the replay eval (see "How to evaluate"),
+> before forming any hypothesis.** A screenshot or a stale `/tmp` summary will
+> lead you to the wrong cause — that mistake has been made more than once here.
+> Reproduce the bad subject from a real transcript first, *then* theorize.
+
 It is **not** a changelog or a spec. The current *implementation* is documented
 in the code comments and in `CLAUDE.md`; this doc holds only the cross-cutting,
 slowly-evolving understanding that has no other home. When an open question is
