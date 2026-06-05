@@ -394,6 +394,11 @@ _amux_frame() {
   # run-shell; #{pane_id} resolves to the dead pane when the hook fires.
   tmux -L "$sock" set-hook -g pane-died \
     "run-shell \"$(_amux_shquote "$AGENTMUX_SCRIPTS/frame_reattach.sh") #{pane_id}\""
+  # Same shared-long-lived-server reasoning: focus-events must be ON so a single
+  # cross-pane click both switches the active pane AND wakes the inner (focus-aware)
+  # tmux to register that click — without it you click once to focus, again to land.
+  # frame.conf sets it for a fresh server; this keeps any pre-existing frame current.
+  tmux -L "$sock" set-option -g focus-events on
   tmux -L "$sock" attach-session -t "$fsess"
 }
 
