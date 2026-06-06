@@ -49,6 +49,16 @@ _amux_atmux() {
   if [ -n "$AGENTMUX_AGENT_SOCKET" ]; then tmux -L "$AGENTMUX_AGENT_SOCKET" "$@"; else tmux "$@"; fi
 }
 
+# tmux resolves a `-t` session target by exact → prefix → fnmatch, so a bare
+# `has-session -t reductable` is TRUE when only `reductable-www` exists and the
+# subsequent attach joins the WRONG session (and the create-vs-attach decision is
+# wrong both ways). Prefixing the target with `=` forces EXACT matching. It is
+# honoured by has-session/attach-session/switch-client/kill-session and window
+# targets (`=sess:0`), but NOT by set-option (target left bare there — tmux still
+# tries exact-match first, and those calls only run once the exact session is
+# known to exist) nor by split-window/list-panes. Don't drop the `=`.
+_amux_session_exists() { _amux_atmux has-session -t "=$1" 2>/dev/null; }
+
 # Newline-separated names of agentmux-managed sessions (@autoagent=1) on the agent
 # socket; empty if none. Backs --sessions, --kill-all, and --complete-sessions.
 _amux_agent_session_names() {
@@ -165,9 +175,9 @@ _amux_attach() {
   # Use switch-client if our TTY is already a tmux pane (check via list-panes,
   # not $TMUX which is inherited into subprocesses and gives false positives).
   if tmux list-panes -a -F '#{pane_tty}' 2>/dev/null | grep -qxF "$(tty 2>/dev/null)"; then
-    tmux switch-client -t "$name"
+    _amux_atmux switch-client -t "=$name"
   else
-    tmux attach-session -t "$name"
+    _amux_atmux attach-session -t "=$name"
   fi
 }
 
@@ -197,9 +207,9 @@ _amux_launch_window0() {
 
   cmd=$(agentmux_build_cmd "$idx")
 
-  tmux rename-window -t "$session:0" "$agent"
+  _amux_atmux rename-window -t "=$session:0" "$agent"
   agentmux_set_window_style "$agent" "$session:0"
-  tmux send-keys -t "$session:0" "$cmd" Enter
+  _amux_atmux send-keys -t "=$session:0" "$cmd" Enter
 }
 
 # Print a paste-ready `colour =` field for an agent (testable; no I/O loop).
@@ -306,13 +316,13 @@ _amux_frame() {
   # detached/killed agent leaves a DEAD pane rather than vanishing; count only
   # LIVE panes (#{pane_dead}=0) so such a frame still reads as stale and gets
   # rebuilt. Expected: 2 live panes, or 3 when the left split is enabled.
-  if tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
+  if tmux -L "$sock" has-session -t "=$fsess" 2>/dev/null; then
     local npanes want; want=2; [ -n "$top" ] && want=3
     npanes=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_dead}' 2>/dev/null | grep -c '^0$')
-    [ "${npanes:-0}" -lt "$want" ] && tmux -L "$sock" kill-session -t "$fsess" 2>/dev/null
+    [ "${npanes:-0}" -lt "$want" ] && tmux -L "$sock" kill-session -t "=$fsess" 2>/dev/null
   fi
 
-  if ! tmux -L "$sock" has-session -t "$fsess" 2>/dev/null; then
+  if ! tmux -L "$sock" has-session -t "=$fsess" 2>/dev/null; then
     local left right right_cmd left_cmd fprefix cols lines _sz focus status_pos
     # Start focus (agent|terminal) and status bar position (bottom|top), [frame] config.
     focus=$(_amux_frame_focus)
@@ -399,7 +409,7 @@ _amux_frame() {
   # tmux to register that click — without it you click once to focus, again to land.
   # frame.conf sets it for a fresh server; this keeps any pre-existing frame current.
   tmux -L "$sock" set-option -g focus-events on
-  tmux -L "$sock" attach-session -t "$fsess"
+  tmux -L "$sock" attach-session -t "=$fsess"
 }
 
 # List active frame wrappers (they live on their own socket, so a plain `tmux ls`
@@ -420,9 +430,9 @@ _amux_frame_kill() {
   case "$arg" in *-frame) base="${arg%-frame}" ;; *) base="$arg" ;; esac
   local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
   local fsess="${base}-frame" tsess="${base}-term"
-  if tmux -L "$fsock" has-session -t "$fsess" 2>/dev/null; then
-    tmux -L "$fsock" kill-session -t "$fsess" 2>/dev/null
-    tmux -L "$tsock" kill-session -t "$tsess" 2>/dev/null   # its scratch terminal
+  if tmux -L "$fsock" has-session -t "=$fsess" 2>/dev/null; then
+    tmux -L "$fsock" kill-session -t "=$fsess" 2>/dev/null
+    tmux -L "$tsock" kill-session -t "=$tsess" 2>/dev/null   # its scratch terminal
     echo "killed frame '$fsess' + terminal '$tsess' (agent session, if any, still runs)"
   else
     echo "amux: no frame '$fsess' (try: amux --frames)" >&2; return 1
@@ -479,15 +489,15 @@ _amux_kill() {
     *)       base="$arg" ;;
   esac
   local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET" parts=""
-  if _amux_atmux has-session -t "$base" 2>/dev/null; then
-    _amux_atmux kill-session -t "$base" 2>/dev/null; parts="agent '$base'"
+  if _amux_session_exists "$base"; then
+    _amux_atmux kill-session -t "=$base" 2>/dev/null; parts="agent '$base'"
   fi
-  if tmux -L "$fsock" has-session -t "${base}-frame" 2>/dev/null; then
-    tmux -L "$fsock" kill-session -t "${base}-frame" 2>/dev/null
+  if tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; then
+    tmux -L "$fsock" kill-session -t "=${base}-frame" 2>/dev/null
     parts="${parts:+$parts + }frame '${base}-frame'"
   fi
-  if tmux -L "$tsock" has-session -t "${base}-term" 2>/dev/null; then
-    tmux -L "$tsock" kill-session -t "${base}-term" 2>/dev/null
+  if tmux -L "$tsock" has-session -t "=${base}-term" 2>/dev/null; then
+    tmux -L "$tsock" kill-session -t "=${base}-term" 2>/dev/null
     parts="${parts:+$parts + }terminal '${base}-term'"
   fi
   if [ -n "$parts" ]; then
@@ -517,7 +527,7 @@ _amux_kill_all() {
     *) echo "aborted" >&2; return 1 ;;
   esac
   printf '%s\n' "$names" | while IFS= read -r s; do
-    [ -n "$s" ] && _amux_atmux kill-session -t "$s" 2>/dev/null
+    [ -n "$s" ] && _amux_atmux kill-session -t "=$s" 2>/dev/null
   done
   tmux -L "$fsock" kill-server 2>/dev/null
   tmux -L "$tsock" kill-server 2>/dev/null
@@ -646,21 +656,26 @@ EOF
 
   local name="$session_arg"
 
-  if ! tmux has-session -t "$name" 2>/dev/null; then
-    tmux new-session -d -s "$name" -c "$PWD"
-    tmux set-option -t "$name" "@agent-mode" "$agent_name"
+  # Exact-match check (see _amux_session_exists): without it, `name` would
+  # prefix-match a longer existing session and we'd attach to the wrong one
+  # instead of creating the session you asked for. set-option below targets the
+  # bare name — safe because by this point the exact session exists (just created,
+  # or confirmed by the exact check) and tmux matches exact before prefix.
+  if ! _amux_session_exists "$name"; then
+    _amux_atmux new-session -d -s "$name" -c "$PWD"
+    _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
     _amux_launch_window0 "$name" "$agent_name"
   else
-    tmux set-option -t "$name" "@agent-mode" "$agent_name"
+    _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
   fi
 
-  tmux set-option -t "$name" "@autoagent" "1"
+  _amux_atmux set-option -t "$name" "@autoagent" "1"
   # Optional per-session prefix ([amux] prefix). Set unconditionally (new and
   # reattached sessions) so a config change applies on the next launch, and as a
   # session option so it never touches other sessions' ~/.tmux.conf prefix. Empty
   # = unset/collided → leave the default prefix untouched.
   local _prefix; _prefix=$(_amux_prefix)
-  [ -n "$_prefix" ] && tmux set-option -t "$name" prefix "$_prefix"
+  [ -n "$_prefix" ] && _amux_atmux set-option -t "$name" prefix "$_prefix"
   _amux_attach "$name"
 }
 
@@ -916,6 +931,25 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "update non-clone message" "ok" "$_got"
   _assert "update non-clone exit"    "1"  "$_rc"
   rmdir "$_td"
+
+  # Exact-match session resolution (the reductable-www bug): tmux resolves a bare
+  # `-t name` by prefix/fnmatch, so without the `=` guard `_amux_session_exists
+  # proj` is TRUE when only `proj-www` exists and amux attaches to the wrong
+  # session. Drive _amux_session_exists on an isolated socket. Needs a real tmux;
+  # skip cleanly if absent.
+  if command -v tmux >/dev/null 2>&1; then
+    AGENTMUX_AGENT_SOCKET="amux-selftest-$$"
+    _amux_atmux kill-server 2>/dev/null
+    _amux_atmux new-session -d -s proj-www -c /tmp 2>/dev/null
+    if _amux_session_exists proj;     then _got=present; else _got=absent; fi
+    _assert "exact-match: 'proj' absent when only 'proj-www' exists" "absent" "$_got"
+    if _amux_session_exists proj-www; then _got=present; else _got=absent; fi
+    _assert "exact-match: 'proj-www' present exactly" "present" "$_got"
+    _amux_atmux kill-server 2>/dev/null
+    AGENTMUX_AGENT_SOCKET=""
+  else
+    echo "SKIP: exact-match session test (tmux not found)"
+  fi
 
   rm -rf "$_selftest_cache"
   echo "---"; echo "Passed: $pass  Failed: $fail"

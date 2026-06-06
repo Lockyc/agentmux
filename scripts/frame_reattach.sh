@@ -53,7 +53,10 @@ frame_reattach() {
   else
     _sess="$_base";        _sock="${AGENTMUX_AGENT_SOCKET:-}"
   fi
-  if sock_tmux "$_sock" has-session -t "$_sess" 2>/dev/null; then
+  # Exact-match (`=`): tmux resolves a bare `-t name` by prefix/fnmatch too, so a
+  # killed agent whose name is a prefix of another live session would falsely read
+  # as alive and get resurrected — defeating the no-resurrection guarantee.
+  if sock_tmux "$_sock" has-session -t "=$_sess" 2>/dev/null; then
     tmux respawn-pane -t "$_pane" 2>/dev/null
   fi
 }
@@ -78,7 +81,7 @@ if [ -n "${FRAME_REATTACH_SELFTEST:-}" ]; then
   # agent + alive -> respawn, checked on the default socket (empty), session=base
   _role_val=agent; _sess_val=proj-frame; _alive=1; _respawned=; _q_sock=x; _q_sess=
   frame_reattach %7
-  { [ "$_respawned" = %7 ] && [ -z "$_q_sock" ] && [ "$_q_sess" = proj ]; } \
+  { [ "$_respawned" = %7 ] && [ -z "$_q_sock" ] && [ "$_q_sess" = =proj ]; } \
     || { echo "FAIL: live agent respawn on default socket (resp='$_respawned' sock='$_q_sock' sess='$_q_sess')"; fail=1; }
 
   # agent + dead -> no respawn (no resurrection)
@@ -89,7 +92,7 @@ if [ -n "${FRAME_REATTACH_SELFTEST:-}" ]; then
   # term + alive -> respawn, checked on the term socket, session=base-term (spaces kept)
   _role_val=term; _sess_val="My Proj-frame"; _alive=1; _respawned=; _q_sock=; _q_sess=
   frame_reattach %3
-  { [ "$_respawned" = %3 ] && [ "$_q_sock" = agentmux-term ] && [ "$_q_sess" = "My Proj-term" ]; } \
+  { [ "$_respawned" = %3 ] && [ "$_q_sock" = agentmux-term ] && [ "$_q_sess" = "=My Proj-term" ]; } \
     || { echo "FAIL: live term respawn on term socket (resp='$_respawned' sock='$_q_sock' sess='$_q_sess')"; fail=1; }
 
   # term + dead (killed or fast-failed) -> no respawn (busy-loop guard)
