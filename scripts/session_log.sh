@@ -36,11 +36,15 @@ _sl_append() {
   printf '%s\n' "$1" >> "$dir/sessions.jsonl" 2>/dev/null || true
 }
 
-# Emit tmux context for [target] (default current pane) as one TSV line.
+# Emit tmux context for [target] as one TSV line. With no explicit target, fall
+# back to $TMUX_PANE (the pane THIS process runs in). A context-less
+# `display-message` resolves to the session's ACTIVE window, not our own — which
+# misattributes the resume hint to whatever window you happen to be viewing.
 _sl_ctx() {
   fmt="#{socket_path}${TAB}#{pid}${TAB}#{session_name}${TAB}#{window_id}${TAB}#{window_name}${TAB}#{pane_current_path}"
-  if [ -n "${1:-}" ]; then
-    tmux display-message -p -t "$1" "$fmt" 2>/dev/null
+  _t="${1:-${TMUX_PANE:-}}"
+  if [ -n "$_t" ]; then
+    tmux display-message -p -t "$_t" "$fmt" 2>/dev/null
   else
     tmux display-message -p "$fmt" 2>/dev/null
   fi
@@ -59,6 +63,9 @@ EOF
     --arg wid "$_wid" --arg wn "$_wname" --arg cwd "$_cwd" --arg ag "$_agent" \
     '{ts:$ts,event:"open",socket_path:$sp,server_pid:$pid,session:$s,window_id:$wid,window_name:$wn,cwd:$cwd,agent:$ag}')
   _sl_append "$_line"
+  # Launch is the natural trim point; sl_prune self-gates on the line cap, so
+  # this is a cheap `wc -l` no-op until the ledger actually grows large.
+  sl_prune
 }
 
 # Is the tmux server instance at <socket> still the one with <pid>?
@@ -73,10 +80,14 @@ _sl_server_live() {  # <socket> <pid>
 
 # Fold ledger → TSV of currently-open tuples. Input is chronological (append order);
 # a tuple is open iff its latest open/close event is an open.
+# Read line-by-line with `fromjson?` so a single torn/blank line (e.g. a
+# kill-server mid-append) is skipped, not fatal — the whole point is surviving
+# a crash, and a slurp (`-s`) aborts the entire roster on one bad line.
 _sl_fold() {  # <ledger>
   [ -s "$1" ] || return 0
-  jq -rs '
-    group_by([.socket_path, .server_pid, .window_id])
+  jq -rRn '
+    [ inputs | fromjson? ]
+    | group_by([.socket_path, .server_pid, .window_id])
     | map(
         . as $g
         | ($g | map(select(.event=="open" or .event=="close")) | last) as $oc
@@ -164,8 +175,9 @@ sl_prune() {
   _cutoff=$(( $(date +%s) - ${AGENTMUX_LOG_RETAIN_DAYS:-14} * 86400 ))
 
   # Per-server max ts, then build the KEEP set: live OR recent (maxts >= cutoff).
-  _servers=$(jq -rs '
-    group_by([.socket_path,.server_pid])
+  _servers=$(jq -rRn '
+    [ inputs | fromjson? ]
+    | group_by([.socket_path,.server_pid])
     | map([ .[0].socket_path, (.[0].server_pid|tostring), (map(.ts)|max|tostring) ] | @tsv) | .[]
   ' "$_ledger")
   _keep=$(printf '%s\n' "$_servers" | while IFS="$TAB" read -r socket pid maxts; do
@@ -176,13 +188,14 @@ sl_prune() {
   done | jq -R -s 'split("\n") | map(select(length>0))')
 
   _tmp=$(mktemp) || return 0
-  jq -c --argjson keep "$_keep" '
-    ((.socket_path + "|" + (.server_pid|tostring)) as $k | select($keep | index($k)))
+  jq -cRn --argjson keep "$_keep" '
+    inputs | fromjson?
+    | ((.socket_path + "|" + (.server_pid|tostring)) as $k | select($keep | index($k)))
   ' "$_ledger" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_ledger" || rm -f "$_tmp"
 
   # Best-effort marker sweep: drop seen/<pid>-* for pids no longer in the ledger.
   if [ -d "$(_sl_state_dir)/seen" ]; then
-    _livepids=$(jq -rs '[.[].server_pid] | unique | .[]' "$_ledger" 2>/dev/null)
+    _livepids=$(jq -rRn '[ inputs | fromjson? | .server_pid ] | unique | .[]' "$_ledger" 2>/dev/null)
     for m in "$(_sl_state_dir)"/seen/*; do
       [ -e "$m" ] || continue
       mp=$(basename "$m"); mp=${mp%%-*}
@@ -306,6 +319,38 @@ AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
 _assert "prune drops dead+old 111" "0" "$(grep -c '"server_pid":111' "$ledger")"
 _assert "prune keeps live 222"     "1" "$(grep -c '"server_pid":222' "$ledger")"
 _assert "prune keeps recent 333"   "1" "$(grep -c '"server_pid":333' "$ledger")"
+
+# --- fold tolerates a torn/corrupt line (kill-server mid-append) → roster survives ---
+rm -f "$ledger"
+printf '%s\n' \
+  '{"ts":1,"event":"open","socket_path":"/s/a","server_pid":111,"session":"x","window_id":"@1","window_name":"claude","cwd":"/w/keep1","agent":"claude"}' \
+  '{"ts":2,"event":"open","socket_path":"/s/b","server_pid":222,"session":"y","windo' \
+  '{"ts":3,"event":"open","socket_path":"/s/c","server_pid":333,"session":"z","window_id":"@1","window_name":"claude","cwd":"/w/keep2","agent":"claude"}' \
+  > "$ledger"
+_assert "fold survives torn line (keep1)" "1" "$(_sl_fold "$ledger" | grep -c '/w/keep1')"
+_assert "fold survives torn line (keep2)" "1" "$(_sl_fold "$ledger" | grep -c '/w/keep2')"
+
+# --- prune is WIRED into sl_open: a launch trims a dead+old server over the cap ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
+_veryold=$(( $(date +%s) - 60*86400 ))
+cat > "$ledger" <<JSON
+{"ts":$_veryold,"event":"open","socket_path":"/s/gone","server_pid":777,"session":"g","window_id":"@1","window_name":"claude","cwd":"/w/gone","agent":"claude"}
+JSON
+AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="4242" sl_open claude   # stub → live pid 4242
+_assert "sl_open triggers prune (drops dead+old)" "0" "$(grep -c '"server_pid":777' "$ledger")"
+_assert "sl_open logged its own open"             "1" "$(grep -c '"server_pid":4242' "$ledger")"
+
+# --- _sl_ctx uses $TMUX_PANE for the no-target (resume) path, not a context-less
+#     query (which tmux resolves to the ACTIVE window → resume misattribution).
+#     NOTE: redefines the tmux stub to capture args — keep this block LAST. ---
+_captured=""
+tmux() { _captured="$*"; printf '/s/x\t1\tsess\t@9\twin\t/w\n'; }
+TMUX_PANE='%7' _sl_ctx >/dev/null
+case "$_captured" in *"-t %7"*) _got=yes ;; *) _got=no ;; esac
+_assert "no-target ctx uses \$TMUX_PANE" "yes" "$_got"
+TMUX_PANE='%7' _sl_ctx '=s:0' >/dev/null
+case "$_captured" in *"-t =s:0"*) _got=yes ;; *) _got=no ;; esac
+_assert "explicit target overrides \$TMUX_PANE" "yes" "$_got"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
