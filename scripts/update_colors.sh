@@ -157,9 +157,10 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
   # Output: "name=idx" lines. Mirrors the live loop exactly, so it exercises the
   # real _amux_pick_slot and the frozen-vs-newcomer split.
   _sim() {
-    data=$1 oi=$IFS; IFS='
+    data=$1 reserved=$2 oi=$IFS; IFS='
 '
     u=' '
+    for _r in $reserved; do u="$u$_r "; done
     for ln in $data; do
       nm=${ln%%:*}; fi=${ln#*:}; [ "$fi" = "$ln" ] && fi=''
       case "$fi" in ''|*[!0-9]*) ;; *) u="$u$fi " ;; esac
@@ -188,6 +189,12 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
   # A lone newcomer takes its cksum-preferred slot.
   _assert "newcomer takes preferred slot" "$(_pref agentmux)" \
     "$(_get "$(_sim 'agentmux:')" agentmux)"
+
+  # Global reservation: a slot reserved via @l1reserved is avoided by a newcomer
+  # that prefers it, even though NO live session holds that slot.
+  _rp=$(_pref locus)
+  _assert "newcomer avoids reserved slot (no live holder)" "no" \
+    "$([ "$(_get "$(_sim 'locus:' "$_rp")" locus)" = "$_rp" ] && echo yes || echo no)"
 
   # De-dup at birth: agentmux & reductable both PREFER the same slot, but two
   # newcomers must still land on distinct slots.
