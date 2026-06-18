@@ -6,9 +6,14 @@
 # Subcommands:
 #   open  <agent> [target]   append an open record (target defaults to current pane)
 #   resume <label> <cmd>     append/refresh a generic resume hint for the current window
-#   close [target]           best-effort: append a close record
 #   list                     print the roster, partitioned live vs lost (dead server)
 #   prune                    trim the ledger (dead, old server instances)
+#
+# There is deliberately NO close event: tmux's pane-exit hooks cannot reliably
+# identify the exited pane (they fire with the ACTIVE pane's context once the
+# pane is gone), so a close hook would misattribute and hide live windows. We
+# reconcile instead at read time — a live server's rows are intersected with its
+# currently-open windows (see _sl_live_windows / sl_list).
 
 TAB=$(printf '\t')
 
@@ -78,37 +83,54 @@ _sl_server_live() {  # <socket> <pid>
   [ "$got" = "$2" ]
 }
 
-# Fold ledger → TSV of currently-open tuples. Input is chronological (append order);
-# a tuple is open iff its latest open/close event is an open.
+# Window ids currently open on the live server at <socket>. Used to intersect a
+# live server's ledger rows against reality (a window closed since its open was
+# logged is gone from this list), replacing the unreliable close hook.
+_sl_live_windows() {  # <socket>
+  if [ -n "${SESSION_LOG_LIVE_WINDOWS+x}" ]; then
+    printf '%s\n' "$SESSION_LOG_LIVE_WINDOWS"
+    return 0
+  fi
+  tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null
+}
+
+# Fold ledger → TSV, one row per opened window (latest open + latest resume per
+# (socket,pid,window_id) tuple). Columns: socket pid window_id session
+# window_name cwd agent resume_cmd. Whether a window is still open is decided at
+# read time by sl_list (live server → intersect with reality), not here.
 # Read line-by-line with `fromjson?` so a single torn/blank line (e.g. a
 # kill-server mid-append) is skipped, not fatal — the whole point is surviving
 # a crash, and a slurp (`-s`) aborts the entire roster on one bad line.
 _sl_fold() {  # <ledger>
   [ -s "$1" ] || return 0
   jq -rRn '
-    [ inputs | fromjson? ]
+    [ inputs | fromjson? | select(.event=="open" or .event=="resume") ]
     | group_by([.socket_path, .server_pid, .window_id])
     | map(
-        . as $g
-        | ($g | map(select(.event=="open" or .event=="close")) | last) as $oc
-        | select($oc != null and $oc.event == "open")
-        | ($g | map(select(.event=="open"))   | last) as $o
-        | ($g | map(select(.event=="resume")) | last) as $r
-        | [ $o.socket_path, ($o.server_pid|tostring), $o.session,
+        ( map(select(.event=="open"))   | last ) as $o
+        | select($o != null)
+        | ( map(select(.event=="resume")) | last ) as $r
+        | [ $o.socket_path, ($o.server_pid|tostring), $o.window_id, $o.session,
             $o.window_name, $o.cwd, $o.agent, ($r.resume_cmd // "") ] | @tsv )
     | .[]
   ' "$1"
 }
 
-# Print the rows for one server (already known live/lost).
-_sl_print_server() {  # <rowsfile> <socket> <pid> <state>
+# Print the rows for one server. Columns: socket pid window_id session
+# window_name cwd agent resume_cmd. For a LIVE server, <livewins> is the set of
+# window ids actually still open there — rows whose window is gone are skipped.
+# For a LOST (dead) server, <livewins> is empty and every recorded window shows
+# (the recovery roster — we cannot intersect a server that no longer exists).
+_sl_print_server() {  # <rowsfile> <socket> <pid> <state> <livewins>
   if [ "$4" = live ]; then printf '\n● live   server %s\n' "$3"
   else printf '\n✗ lost   server %s · died (kill-server or reboot)\n' "$3"; fi
-  awk -F"$TAB" -v sp="$2" -v pid="$3" '
-    $1==sp && $2==pid {
-      loc=$3":"$6
-      if ($7=="") cmd="cd " $5 "   (relaunch — no resume hint)"
-      else        cmd="cd " $5 "; " $7
+  awk -F"$TAB" -v sp="$2" -v pid="$3" -v state="$4" -v live="$5" '
+    BEGIN { n = split(live, a, /[ \n]+/); for (i = 1; i <= n; i++) if (a[i] != "") L[a[i]] = 1 }
+    $1 == sp && $2 == pid {
+      if (state == "live" && !($3 in L)) next
+      loc = $4 ":" $7
+      if ($8 == "") cmd = "cd " $6 "   (relaunch — no resume hint)"
+      else          cmd = "cd " $6 "; " $8
       printf "   %-22s %s\n", loc, cmd
     }' "$1"
 }
@@ -125,7 +147,12 @@ sl_list() {
     printf '%s\n' "$servers" | while IFS="$TAB" read -r socket pid; do
       [ -n "$pid" ] || continue
       if _sl_server_live "$socket" "$pid"; then state=live; else state=lost; fi
-      [ "$state" = "$want" ] && _sl_print_server "$rows" "$socket" "$pid" "$state"
+      [ "$state" = "$want" ] || continue
+      if [ "$state" = live ]; then
+        _sl_print_server "$rows" "$socket" "$pid" live "$(_sl_live_windows "$socket")"
+      else
+        _sl_print_server "$rows" "$socket" "$pid" lost ""
+      fi
     done
   done
   rm -f "$rows"
@@ -151,18 +178,6 @@ EOF
     --argjson ts "$(date +%s)" --arg sp "$_socket" --argjson pid "$_pid" \
     --arg wid "$_wid" --arg label "$_label" --arg rc "$_rcmd" \
     '{ts:$ts,event:"resume",socket_path:$sp,server_pid:$pid,window_id:$wid,label:$label,resume_cmd:$rc}')
-  _sl_append "$_line"
-}
-
-sl_close() {  # [target]
-  _sl_enabled || return 0
-  IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
-$(_sl_ctx "${1:-}")
-EOF
-  [ -n "$_pid" ] || return 0
-  _line=$(jq -cn --argjson ts "$(date +%s)" \
-    --arg sp "$_socket" --argjson pid "$_pid" --arg wid "$_wid" \
-    '{ts:$ts,event:"close",socket_path:$sp,server_pid:$pid,window_id:$wid}')
   _sl_append "$_line"
 }
 
@@ -214,7 +229,6 @@ if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
   case "$cmd" in
     open)   sl_open   "$@" ;;
     resume) sl_resume "$@" ;;
-    close)  sl_close  "$@" ;;
     list)   sl_list   "$@" ;;
     prune)  sl_prune  "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
@@ -260,29 +274,29 @@ rm -f "$ledger"
 AGENTMUX_SESSION_LOG=0 sl_open claude
 _assert "disabled: no ledger" "0" "$([ -f "$ledger" ] && echo 1 || echo 0)"
 
-# --- fold + list reconcile, with stubbed liveness ---
+# --- fold + list reconcile, with stubbed liveness + live-window intersection ---
 rm -f "$ledger"; unset AGENTMUX_SESSION_LOG; AGENTMUX_SESSION_LOG=1
-# server 4242 live (one window), server 9981 dead (two windows; one later closed)
+# server 4242 live (two windows: @1 still open, @5 since closed); 9981 dead (one window)
 cat > "$ledger" <<'JSON'
 {"ts":1,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"claude"}
-{"ts":2,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"red","window_id":"@1","window_name":"claude","cwd":"/w/red","agent":"claude"}
-{"ts":3,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
-{"ts":4,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"scr","window_id":"@2","window_name":"claude","cwd":"/w/scr","agent":"claude"}
-{"ts":5,"event":"close","socket_path":"/s/b","server_pid":9981,"window_id":"@2"}
+{"ts":2,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"scratch","window_id":"@5","window_name":"claude","cwd":"/w/scratch","agent":"claude"}
+{"ts":3,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"red","window_id":"@1","window_name":"claude","cwd":"/w/red","agent":"claude"}
+{"ts":4,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
 JSON
 
 foldout=$(_sl_fold "$ledger")
-_assert "fold drops closed @2"   "0" "$(printf '%s\n' "$foldout" | grep -c '/w/scr')"
-_assert "fold keeps live @1"     "1" "$(printf '%s\n' "$foldout" | grep -c '/w/locus')"
-_assert "fold keeps dead open"   "1" "$(printf '%s\n' "$foldout" | grep -c '/w/red')"
+_assert "fold lists every opened window" "3" "$(printf '%s\n' "$foldout" | grep -c .)"
+_assert "fold spans 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
 
-out=$(SESSION_LOG_LIVE_PIDS="4242" sl_list)
-_assert "list flags 9981 lost"   "1" "$(printf '%s\n' "$out" | grep -c 'lost   server 9981')"
-_assert "list flags 4242 live"   "1" "$(printf '%s\n' "$out" | grep -c 'live   server 4242')"
-_assert "list shows resume cmd"  "1" "$(printf '%s\n' "$out" | grep -c 'claude --resume a1b2')"
-
-# window-id reuse across servers stays distinct (both @1, different pids → both kept)
-_assert "win-id reuse → 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
+# live server 4242 intersects with its currently-open windows (@1 only → @5 dropped);
+# dead server 9981 shows its full roster (no intersection possible)
+out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_LIVE_WINDOWS="@1" sl_list)
+_assert "list flags 9981 lost"          "1" "$(printf '%s\n' "$out" | grep -c 'lost   server 9981')"
+_assert "list flags 4242 live"          "1" "$(printf '%s\n' "$out" | grep -c 'live   server 4242')"
+_assert "live: shows still-open window" "1" "$(printf '%s\n' "$out" | grep -c '/w/locus')"
+_assert "live: hides closed window"     "0" "$(printf '%s\n' "$out" | grep -c '/w/scratch')"
+_assert "lost: full roster shown"       "1" "$(printf '%s\n' "$out" | grep -c '/w/red')"
+_assert "lost: shows resume cmd"        "1" "$(printf '%s\n' "$out" | grep -c 'claude --resume a1b2')"
 
 # --- resume enrichment + dedup (uses the stubbed tmux: pid 4242, @3) ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
@@ -300,13 +314,6 @@ cat > "$seedl" <<'JSON'
 {"ts":3,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@3","label":"new","resume_cmd":"claude --resume new"}
 JSON
 _assert "fold takes latest resume" "1" "$(_sl_fold "$seedl" | grep -c 'claude --resume new')"
-
-# --- close ---
-rm -f "$ledger"
-sl_open claude            # stub → pid 4242, @3
-sl_close
-_assert "close appends record" "1" "$(grep -c '"event":"close"' "$ledger")"
-_assert "fold hides closed win" "0" "$(_sl_fold "$ledger" | grep -c '/tmp/work')"
 
 # --- prune: dead+old server dropped, live kept, recent-dead kept ---
 now=$(date +%s); old=$(( now - 30*86400 ))
