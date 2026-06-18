@@ -88,7 +88,10 @@ _sl_server_live() {  # <socket> <pid>
 # logged is gone from this list), replacing the unreliable close hook.
 _sl_live_windows() {  # <socket>
   if [ -n "${SESSION_LOG_LIVE_WINDOWS+x}" ]; then
-    printf '%s\n' "$SESSION_LOG_LIVE_WINDOWS"
+    # Unquoted on purpose: emit one window id per line, mirroring tmux's output
+    # (so tests exercise the real newline-separated shape).
+    # shellcheck disable=SC2086
+    printf '%s\n' $SESSION_LOG_LIVE_WINDOWS
     return 0
   fi
   tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null
@@ -137,7 +140,10 @@ _sl_fold() {  # <ledger>
 _sl_print_server() {  # <rowsfile> <socket> <pid> <state> <livewins>
   if [ "$4" = live ]; then printf '\n● live   server %s\n' "$3"
   else printf '\n✗ lost   server %s · died (kill-server or reboot)\n' "$3"; fi
-  awk -F"$TAB" -v sp="$2" -v pid="$3" -v state="$4" -v live="$5" '
+  # <livewins> arrives newline-separated (one window id per line, from tmux
+  # list-windows); flatten to spaces — awk -v rejects a value with newlines.
+  _live=$(printf '%s' "$5" | tr '\n' ' ')
+  awk -F"$TAB" -v sp="$2" -v pid="$3" -v state="$4" -v live="$_live" '
     BEGIN { n = split(live, a, /[ \n]+/); for (i = 1; i <= n; i++) if (a[i] != "") L[a[i]] = 1 }
     $1 == sp && $2 == pid {
       if (state == "live" && !($3 in L)) next
@@ -338,25 +344,29 @@ _assert "disabled: no ledger" "0" "$([ -f "$ledger" ] && echo 1 || echo 0)"
 
 # --- fold + list reconcile, with stubbed liveness + live-window intersection ---
 rm -f "$ledger"; unset AGENTMUX_SESSION_LOG; AGENTMUX_SESSION_LOG=1
-# server 4242 live (two windows: @1 still open, @5 since closed); 9981 dead (one window)
+# server 4242 live (@1 & @9 still open, @5 since closed); 9981 dead (one window)
 cat > "$ledger" <<'JSON'
 {"ts":1,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"claude"}
 {"ts":2,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"scratch","window_id":"@5","window_name":"claude","cwd":"/w/scratch","agent":"claude"}
-{"ts":3,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"red","window_id":"@1","window_name":"claude","cwd":"/w/red","agent":"claude"}
-{"ts":4,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
+{"ts":3,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"build","window_id":"@9","window_name":"claude","cwd":"/w/build","agent":"claude"}
+{"ts":4,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"red","window_id":"@1","window_name":"claude","cwd":"/w/red","agent":"claude"}
+{"ts":5,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
 JSON
 
 foldout=$(_sl_fold "$ledger")
-_assert "fold lists every opened window" "3" "$(printf '%s\n' "$foldout" | grep -c .)"
+_assert "fold lists every opened window" "4" "$(printf '%s\n' "$foldout" | grep -c .)"
 _assert "fold spans 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
 
-# live server 4242 intersects with its currently-open windows (@1 only → @5 dropped);
-# dead server 9981 shows its full roster (no intersection possible)
-out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_LIVE_WINDOWS="@1" sl_list)
+# live server 4242 intersects with its currently-open windows. MULTIPLE live
+# windows (@1 @9) exercise the newline-separated list from tmux — @5 (closed)
+# drops off. Dead server 9981 shows its full roster (no intersection possible).
+out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_LIVE_WINDOWS="@1 @9" sl_list 2>&1)
+_assert "no awk error on multi-window live" "0" "$(printf '%s\n' "$out" | grep -c 'awk:')"
 _assert "list flags 9981 lost"          "1" "$(printf '%s\n' "$out" | grep -c 'lost   server 9981')"
 _assert "list flags 4242 live"          "1" "$(printf '%s\n' "$out" | grep -c 'live   server 4242')"
-_assert "live: shows still-open window" "1" "$(printf '%s\n' "$out" | grep -c '/w/locus')"
-_assert "live: hides closed window"     "0" "$(printf '%s\n' "$out" | grep -c '/w/scratch')"
+_assert "live: shows open window @1"    "1" "$(printf '%s\n' "$out" | grep -c '/w/locus')"
+_assert "live: shows open window @9"    "1" "$(printf '%s\n' "$out" | grep -c '/w/build')"
+_assert "live: hides closed window @5"  "0" "$(printf '%s\n' "$out" | grep -c '/w/scratch')"
 _assert "lost: full roster shown"       "1" "$(printf '%s\n' "$out" | grep -c '/w/red')"
 _assert "lost: shows resume cmd"        "1" "$(printf '%s\n' "$out" | grep -c 'claude --resume a1b2')"
 
