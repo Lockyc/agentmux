@@ -228,7 +228,7 @@ tmux() {
     "display-message -p")
       # honour an optional -t TARGET (ignored — fixed context) by shifting it off
       shift 2; [ "$1" = "-t" ] && shift 2
-      printf '/tmp/tmux-501/default\t4242\tlocus\t@3\tclaude\t/Users/lockyc/work\n' ;;
+      printf '/tmp/tmux-501/default\t4242\tlocus\t@3\tclaude\t/tmp/work\n' ;;
     *) return 0 ;;
   esac
 }
@@ -240,7 +240,7 @@ _assert "open writes one line" "1" "$(wc -l < "$ledger" | tr -d ' ')"
 _assert "open event"   "open"   "$(jq -r '.event' "$ledger")"
 _assert "open agent"   "claude" "$(jq -r '.agent' "$ledger")"
 _assert "open pid num" "4242"   "$(jq -r '.server_pid' "$ledger")"
-_assert "open cwd"     "/Users/lockyc/work" "$(jq -r '.cwd' "$ledger")"
+_assert "open cwd"     "/tmp/work" "$(jq -r '.cwd' "$ledger")"
 
 # --- disabled → no write ---
 rm -f "$ledger"
@@ -269,7 +269,7 @@ _assert "list flags 4242 live"   "1" "$(printf '%s\n' "$out" | grep -c 'live   s
 _assert "list shows resume cmd"  "1" "$(printf '%s\n' "$out" | grep -c 'claude --resume a1b2')"
 
 # window-id reuse across servers stays distinct (both @1, different pids → both kept)
-_assert "win-id reuse distinct"  "2" "$(printf '%s\n' "$foldout" | grep -c '@*claude' )"
+_assert "win-id reuse → 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
 
 # --- resume enrichment + dedup (uses the stubbed tmux: pid 4242, @3) ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
@@ -293,7 +293,7 @@ rm -f "$ledger"
 sl_open claude            # stub → pid 4242, @3
 sl_close
 _assert "close appends record" "1" "$(grep -c '"event":"close"' "$ledger")"
-_assert "fold hides closed win" "0" "$(_sl_fold "$ledger" | grep -c '/Users/lockyc/work')"
+_assert "fold hides closed win" "0" "$(_sl_fold "$ledger" | grep -c '/tmp/work')"
 
 # --- prune: dead+old server dropped, live kept, recent-dead kept ---
 now=$(date +%s); old=$(( now - 30*86400 ))
