@@ -215,6 +215,7 @@ _amux_launch_window0() {
   _amux_atmux rename-window -t "=$session:0" "$agent"
   agentmux_set_window_style "$agent" "$session:0"
   _amux_atmux send-keys -t "=$session:0" "$cmd" Enter
+  "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "=$session:0" 2>/dev/null || true
 }
 
 # Print a paste-ready `colour =` field for an agent (testable; no I/O loop).

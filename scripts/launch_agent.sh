@@ -40,3 +40,5 @@ CMD=$(agentmux_build_cmd "$idx")
 tmux rename-window "${tw[@]}" "$AGENT"
 agentmux_set_window_style "$AGENT" "$HOOK_WIN"
 tmux send-keys "${tp[@]}" "$CMD" Enter
+# Record this window in the durable session log (fails soft; respects [log] sessions).
+"$SCRIPT_DIR/session_log.sh" open "$AGENT" "$HOOK_WIN" 2>/dev/null || true
