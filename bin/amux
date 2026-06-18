@@ -44,9 +44,14 @@ _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 _amux_sanitize_session() { printf '%s' "$1" | tr '.:' '__'; }
 
 # tmux on the agent (default) socket, honouring AGENTMUX_AGENT_SOCKET for test
-# isolation. In production AGENTMUX_AGENT_SOCKET is empty → plain `tmux`.
+# isolation. In production AGENTMUX_AGENT_SOCKET is empty → default socket, but we
+# must clear $TMUX first: a bare `tmux` inherits the surrounding server's socket
+# from $TMUX, so when amux runs INSIDE the frame (its own server) every agent-socket
+# op would silently hit the frame server instead of the default one. That made
+# `amux --kill` skip the agent (has-session against the frame socket is false) while
+# still killing the frame. `env -u TMUX` forces the real default socket regardless.
 _amux_atmux() {
-  if [ -n "$AGENTMUX_AGENT_SOCKET" ]; then tmux -L "$AGENTMUX_AGENT_SOCKET" "$@"; else tmux "$@"; fi
+  if [ -n "$AGENTMUX_AGENT_SOCKET" ]; then tmux -L "$AGENTMUX_AGENT_SOCKET" "$@"; else env -u TMUX tmux "$@"; fi
 }
 
 # tmux resolves a `-t` session target by exact → prefix → fnmatch, so a bare
@@ -949,6 +954,26 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     AGENTMUX_AGENT_SOCKET=""
   else
     echo "SKIP: exact-match session test (tmux not found)"
+  fi
+
+  # $TMUX isolation (the --kill-only-killed-the-frame bug): a bare `tmux` inherits
+  # the surrounding server's socket from $TMUX, so when amux runs inside the frame
+  # an agent-socket op would hit the frame server. The production path
+  # (AGENTMUX_AGENT_SOCKET empty) must clear $TMUX and reach the DEFAULT socket. We
+  # put a uniquely-named probe session on an isolated "frame" server, point $TMUX at
+  # it, then assert _amux_session_exists (production path) does NOT find it — i.e. it
+  # ignored $TMUX. The only op against the real default socket is this read-only
+  # has-session for a name that cannot exist there.
+  if command -v tmux >/dev/null 2>&1; then
+    _fsock="amux-selftest-frame-$$"; _probe="amux-nested-probe-$$"
+    tmux -L "$_fsock" new-session -d -s "$_probe" -c /tmp 2>/dev/null
+    _spath=$(tmux -L "$_fsock" display-message -p '#{socket_path}' 2>/dev/null)
+    AGENTMUX_AGENT_SOCKET=""
+    if TMUX="$_spath,1,0" _amux_session_exists "$_probe"; then _got=leaked; else _got=isolated; fi
+    _assert "agent ops ignore inherited \$TMUX (reach default socket)" "isolated" "$_got"
+    tmux -L "$_fsock" kill-server 2>/dev/null
+  else
+    echo "SKIP: \$TMUX isolation test (tmux not found)"
   fi
 
   rm -rf "$_selftest_cache"
