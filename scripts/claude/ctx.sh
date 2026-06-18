@@ -45,7 +45,7 @@ _ctx() {
         | (.input.todos // empty) | @json' 2>/dev/null \
     | tail -n 1 \
     | jq -r --argjson n "$_n" --argjson pc "$_percap" '
-        map(.content // "" | gsub("\\s+";" ") | .[0:$pc])
+        map(.content // "" | .[0:2000] | gsub("\\s+";" ") | .[0:$pc])
         | map(select(length > 0)) | .[0:$n] | join(" / ")' 2>/dev/null
     return 0
   fi
@@ -62,6 +62,12 @@ _ctx() {
       | ( if   ($c|type)=="string" then $c
           elif ($c|type)=="array"  then ($c | map(select(.type=="text") | .text) | join(" "))
           else "" end )
+      | .[0:5000]            # CRITICAL: bound length BEFORE gsub. jq gsub on a
+                             # multi-MB string (one transcript line carrying a
+                             # base64 image / huge file dump) is near-quadratic
+                             # and spins for HOURS; the status line re-runs this
+                             # every refresh, piling up runaway jq+awk. Output
+                             # caps at percap downstream, so the slice is free.
       | gsub("\\s+";" ") | gsub("^ +| +$";"")
       | select(length > 0)' 2>/dev/null \
   | grep -viE '^[[:space:][:punct:]]*((y|n|k|ok|okay|yes|yep|yeah|ya|yup|no|nope|nah|sure|ta|thx|thanks|thank|cheers|continue|please|keep|going|carry|on|proceed|go|ahead|do|it|next|lgtm|looks|good|sounds|perfect|great|nice|cool|done|stop|wait|hold|hmm|huh|same|again|retry|right|fine|this|that)[[:space:][:punct:]]*)+$' \
@@ -148,6 +154,19 @@ JSONL
   # Missing/unreadable transcript exits silently with empty output.
   miss=$(_ctx "/tmp/does-not-exist-agentmux-ctx-$$" 5 240 tail)
   [ -z "$miss" ] || { echo "ctx14 FAIL (missing file) got=[$miss]" >&2; fail=1; }
+
+  # Regression guard: a single huge-content line (here ~340KB of prose) must be
+  # handled near-instantly and bounded. Without the .[0:N] pre-slice, jq gsub is
+  # near-quadratic and spins for HOURS, the awk filter chokes too, and the status
+  # line re-runs pile up runaway processes. The line after it must still survive.
+  big=$(awk 'BEGIN{for(i=0;i<20000;i++) printf "alpha beta gamma "}')
+  printf '{"type":"user","message":{"content":"%s"}}\n' "$big" > "$tmp"
+  printf '%s\n' '{"type":"user","message":{"content":"final short line here"}}' >> "$tmp"
+  huge=$(_ctx "$tmp" 5 240 tail)
+  case "$huge" in *"alpha beta gamma"*) ;; *) echo "ctx15 FAIL (large line dropped) got len=${#huge}" >&2; fail=1 ;; esac
+  case "$huge" in *"final short line here"*) ;; *) echo "ctx16 FAIL (line after large dropped) got=[$huge]" >&2; fail=1 ;; esac
+  bigseg=${huge%% / *}
+  [ "${#bigseg}" -le 244 ] || { echo "ctx17 FAIL (large segment not capped, len=${#bigseg})" >&2; fail=1; }
 
   rm -f "$tmp"
   [ "$fail" = 0 ] && echo "selftest OK"

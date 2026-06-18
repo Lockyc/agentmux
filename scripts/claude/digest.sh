@@ -38,14 +38,17 @@ _digest() {
       | fromjson? // empty
       | (.message.content) as $c
       | if .type=="user" then
-          ( if ($c|type)=="string" then "U\t"+($c|gsub("\\s+";" "))
+          # .[0:N] before every gsub: jq gsub is near-quadratic and hangs for
+          # HOURS on a multi-MB transcript line (base64/file dump); output is
+          # capped downstream so the slice is free. See ctx.sh for the full note.
+          ( if ($c|type)=="string" then "U\t"+($c|.[0:5000]|gsub("\\s+";" "))
             elif ($c|type)=="array" then
-              (($c|map(select(.type=="text")|.text)|join(" "))|gsub("\\s+";" ")) as $t
+              (($c|map(select(.type=="text")|.text)|join(" "))|.[0:5000]|gsub("\\s+";" ")) as $t
               | if ($t|gsub("^ +| +$";"")|length)>0 then "U\t"+$t else empty end
             else empty end )
         elif .type=="assistant" and ($c|type)=="array" then
           ( $c[]
-            | if .type=="text" then "A\t"+(.text|gsub("\\s+";" "))
+            | if .type=="text" then "A\t"+(.text|.[0:5000]|gsub("\\s+";" "))
               elif .type=="tool_use" then
                 ( .name as $n | .input as $in | (.id // "") as $id
                   | ( if   ($n=="Edit" or $n=="MultiEdit" or $n=="NotebookEdit")
@@ -55,7 +58,7 @@ _digest() {
                         then (($in.file_path // "")|gsub("\\s+";" ")|split("/")|last) as $b
                           | if ($b|length)>0 then "wrote "+$b else empty end
                       elif $n=="Bash"
-                        then (($in.command // "")|gsub("\\s+";" ")|.[0:60]) as $cmd
+                        then (($in.command // "")|.[0:2000]|gsub("\\s+";" ")|.[0:60]) as $cmd
                           | if ($cmd|length)>0 then "ran: "+$cmd else empty end
                       else empty end ) as $line
                   | if ($line|type)=="string" and (($line|length)>0)
@@ -113,9 +116,9 @@ _digest() {
         ( map(select(.status=="completed"))
           + map(select(.status=="in_progress"))
           + map(select(.status=="pending")) )
-        | map( if .status=="completed"    then "todo-done: " + ((.content // "")|gsub("\\s+";" ")|.[0:240])
-               elif .status=="in_progress" then "todo-now: "  + ((.activeForm // .content // "")|gsub("\\s+";" ")|.[0:240])
-               else "todo-next: " + ((.content // "")|gsub("\\s+";" ")|.[0:240]) end )
+        | map( if .status=="completed"    then "todo-done: " + ((.content // "")|.[0:2000]|gsub("\\s+";" ")|.[0:240])
+               elif .status=="in_progress" then "todo-now: "  + ((.activeForm // .content // "")|.[0:2000]|gsub("\\s+";" ")|.[0:240])
+               else "todo-next: " + ((.content // "")|.[0:2000]|gsub("\\s+";" ")|.[0:240]) end )
         | join(" / ")' 2>/dev/null)
   fi
 
@@ -166,6 +169,15 @@ JSONL
   # start_line skips earlier turns.
   tail2=$(_digest "$tmp" 5 10000)
   case "$tail2" in *"refactor the auth module"*) echo "selftest8 FAIL (start_line ignored) got=[$tail2]" >&2; fail=1 ;; esac
+
+  # Regression guard: a single huge-content line (~340KB of prose) must be handled
+  # near-instantly and bounded. Without the .[0:N] pre-slice, jq gsub is near-
+  # quadratic and spins for HOURS, piling up runaway processes via the status line.
+  big=$(awk 'BEGIN{for(i=0;i<20000;i++) printf "alpha beta gamma "}')
+  printf '{"type":"user","message":{"content":"%s"}}\n' "$big" > "$tmp"
+  huge=$(_digest "$tmp" 1 10000)
+  case "$huge" in *"alpha beta gamma"*) ;; *) echo "selftest10 FAIL (large line dropped) got len=${#huge}" >&2; fail=1 ;; esac
+  [ "${#huge}" -le 244 ] || { echo "selftest11 FAIL (large line not capped, len=${#huge})" >&2; fail=1; }
 
   rm -f "$tmp"
   [ "$fail" = 0 ] && echo "selftest OK"
