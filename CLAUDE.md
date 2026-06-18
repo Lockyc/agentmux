@@ -19,6 +19,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `bin/amux` | The `amux` launcher — standalone bash, single source of truth for amux logic |
 | `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`) |
+| `scripts/session_log.sh` | Durable roster of agent windows amux opens (`amux --log`); recovery after a server/reboot kill |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
@@ -55,6 +56,8 @@ Updating an installed clone: `amux --update` (= `git -C ~/.agentmux pull --ff-on
 
 The Claude Code hook path is `~/.agentmux/scripts/claude/status.sh`. Scripts do **not** need to be copied to `~/.claude/hooks/`.
 
+Session-log state lives at `${XDG_STATE_HOME:-~/.local/state}/agentmux/sessions.jsonl` — **not** inside the `~/.agentmux` clone (that's repo content; the ledger is runtime state).
+
 ## Branches
 
 `dev` is the working branch — do day-to-day work here, and default to it. `main` is the release branch: merge `dev` into `main` to cut a release. Don't commit directly to `main`. Cutting a release means publishing it: after merging to `main`, push `main` to `origin` (this is the one push that isn't "backup only" — it's how a release ships, so do it as part of the release rather than waiting to be asked).
@@ -83,6 +86,7 @@ CLAUDE_CTX_SELFTEST=1        scripts/claude/ctx.sh
 CLAUDE_DIGEST_SELFTEST=1     scripts/claude/digest.sh
 AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
+SESSION_LOG_SELFTEST=1       sh scripts/session_log.sh
 AMUX_SELFTEST=1              bash bin/amux
 VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
 COLOURS_SELFTEST=1           sh scripts/colours.sh

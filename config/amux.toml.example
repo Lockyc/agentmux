@@ -16,6 +16,11 @@
 #   reattach:   wrap in reattach-to-user-namespace (macOS clipboard inside tmux);
 #               requires keep_alive = true, else it's ignored with a warning
 
+[log]
+# Durable session log: record each agent window amux opens so you can recover
+# the roster after a tmux server is killed or the machine reboots (amux --log).
+sessions = true
+
 [update]
 # Opt-in: once-daily check for a newer agentmux on GitHub. Notify-only — when a
 # newer version exists, amux prints a one-line notice; run `amux --update` to apply.
