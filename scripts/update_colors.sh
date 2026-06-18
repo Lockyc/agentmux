@@ -31,22 +31,38 @@
 # _colour_palette), or an inactive window tab blends into the bar. colour60
 # (vs slate) and colour99 (vs blue/purple) are deliberately omitted for that
 # reason; the "tab bases clear of bar palette" selftest in colours.sh enforces it.
-palette='24 231
-30 231
-25 231
-31 231
-28 231
-90 231
-127 231
-132 231
-130 231
-166 231
-94 231
-100 231
-136 16
-178 16'
+#
+# Each line is `bg fg name`. The trailing `name` lets a project pin this slot via
+# [amux.dirs."<dir>"].colour; names are appended LAST so every positional `bg fg`
+# parse (and the colours.sh cross-palette selftest's `awk '{print $1}'`) is
+# unaffected.
+palette='24 231 blue
+30 231 teal
+25 231 cobalt
+31 231 cyan
+28 231 green
+90 231 purple
+127 231 magenta
+132 231 rose
+130 231 rust
+166 231 orange
+94 231 brown
+100 231 olive
+136 16 amber
+178 16 gold'
 
 count=$(printf '%s\n' "$palette" | wc -l | tr -d ' ')
+
+# Bar-palette name -> 0-based slot index (empty if unknown). Slot = line number-1,
+# matching @l1idx and _amux_pick_slot's index space.
+_bar_name_to_slot() {
+  printf '%s\n' "$palette" | awk -v want="$1" '$3 == want { print NR - 1; exit }'
+}
+
+# Bar-palette slot index -> name (empty if out of range).
+_bar_slot_name() {
+  printf '%s\n' "$palette" | awk -v i="$1" 'NR == i + 1 { print $3; exit }'
+}
 
 # Pick a palette slot for a newcomer: probe from its cksum-preferred slot past
 # every slot already taken, returning the first free one. <used> is a space-padded
@@ -71,8 +87,7 @@ _amux_pick_slot() {
 _amux_apply_colour() {
   s=$1 i=$2
   pair=$(printf '%s\n' "$palette" | sed -n "$((i + 1))p")
-  bg=${pair% *}
-  fg=${pair#* }
+  bg=${pair%% *}; rest=${pair#* }; fg=${rest%% *}
   tmux set -t "$s" status-style "bg=colour${bg},fg=colour${fg}"
 
   # The summary rows (status-format[1..3]) get a SHADE of the same hue: keep
@@ -163,6 +178,13 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
   }
   _get() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
+  # Bar palette names resolve to stable slots and round-trip.
+  _assert "name->slot blue is 0"   "0"  "$(_bar_name_to_slot blue)"
+  _assert "name->slot gold is last" "$((count - 1))" "$(_bar_name_to_slot gold)"
+  _assert "name->slot unknown empty" ""  "$(_bar_name_to_slot nosuchcolour)"
+  _assert "slot->name 0 is blue"   "blue" "$(_bar_slot_name 0)"
+  _assert "slot->name round-trip"  "teal" "$(_bar_slot_name "$(_bar_name_to_slot teal)")"
+
   # A lone newcomer takes its cksum-preferred slot.
   _assert "newcomer takes preferred slot" "$(_pref agentmux)" \
     "$(_get "$(_sim 'agentmux:')" agentmux)"
@@ -202,49 +224,73 @@ reductable:')
   [ "$fail" -eq 0 ]; exit $?
 fi
 
-# Triggering session, passed by the hook (#{session_name}). NOT resolved with an
-# un-targeted display-message: that picks the most recently active client, so the
-# wrong session would be cleared when several agent sessions share the socket. The
-# reconcile loop below colours every session regardless; $session only scopes the
-# demote-cleanup, which is simply skipped when no session was passed (manual runs).
-session="${1:-}"
+# The hook body: reconcile every coloured session's bar colour. Exposed as a
+# function so bin/amux can SOURCE this file for _bar_name_to_slot without running
+# it — the dispatch guard below only calls this when the file is executed directly.
+_amux_reconcile() {
+  # Triggering session, passed by the hook (#{session_name}). NOT resolved with an
+  # un-targeted display-message: that picks the most recently active client, so the
+  # wrong session would be cleared when several agent sessions share the socket. The
+  # reconcile loop below colours every session regardless; $session only scopes the
+  # demote-cleanup, which is simply skipped when no session was passed (manual runs).
+  session="${1:-}"
 
-# Coloured (autoagent) sessions, sorted so a batch of simultaneous newcomers picks
-# slots in a stable order. Iterated with IFS=newline so names with spaces survive.
-names=$(tmux list-sessions -F '#{?@autoagent,#S,}' 2>/dev/null | grep . | sort)
-oldifs=$IFS
-IFS='
+  # Coloured (autoagent) sessions, sorted so a batch of simultaneous newcomers picks
+  # slots in a stable order. Iterated with IFS=newline so names with spaces survive.
+  names=$(tmux list-sessions -F '#{?@autoagent,#S,}' 2>/dev/null | grep . | sort)
+  oldifs=$IFS
+  IFS='
 '
 
-# Pass 1: collect the slots already FROZEN onto live sessions. These are fixed
-# points — never recomputed — which is what keeps a session's colour stable for
-# its whole life regardless of who else starts or stops.
-used=' '
-for s in $names; do
-  [ -n "$s" ] || continue
-  fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
-  case "$fi" in ''|*[!0-9]*) ;; *) used="$used$fi " ;; esac
-done
+  # Pass 1: collect the slots already FROZEN onto live sessions plus the globally
+  # RESERVED slots (pins from [amux.dirs.*].colour, published by bin/amux as the
+  # global @l1reserved). Both are fixed points the newcomer probe must avoid — the
+  # reserved set keeps a pinned colour out of the pool even when its project is not
+  # running.
+  used=' '
+  res=$(tmux show-options -gqv @l1reserved 2>/dev/null)
+  for r in $res; do
+    case "$r" in ''|*[!0-9]*) ;; *) used="$used$r " ;; esac
+  done
+  for s in $names; do
+    [ -n "$s" ] || continue
+    fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
+    case "$fi" in ''|*[!0-9]*) ;; *) used="$used$fi " ;; esac
+  done
 
-# Pass 2: repaint everyone. A session with a frozen slot is painted from it as-is;
-# a newcomer (no @l1idx, or one whose creation hook raced) de-dups against every
-# claimed slot, stores its pick, and joins the fixed points.
-for s in $names; do
-  [ -n "$s" ] || continue
-  fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
-  case "$fi" in
-    ''|*[!0-9]*)
-      idx=$(_amux_pick_slot "$s" "$count" "$used")
-      used="$used$idx "
-      tmux set -t "$s" @l1idx "$idx"
-      ;;
-    *) idx=$fi ;;
-  esac
-  _amux_apply_colour "$s" "$idx"
-done
-IFS=$oldifs
+  # Pass 2: repaint everyone. A session with a frozen slot is painted from it as-is;
+  # a newcomer (no @l1idx, or one whose creation hook raced) de-dups against every
+  # claimed/reserved slot, stores its pick, and joins the fixed points.
+  for s in $names; do
+    [ -n "$s" ] || continue
+    fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
+    case "$fi" in
+      ''|*[!0-9]*)
+        idx=$(_amux_pick_slot "$s" "$count" "$used")
+        used="$used$idx "
+        tmux set -t "$s" @l1idx "$idx"
+        ;;
+      *) idx=$fi ;;
+    esac
+    _amux_apply_colour "$s" "$idx"
+  done
+  IFS=$oldifs
 
-# If the triggering session is not (or no longer) autoagent, clear its overrides.
-if [ -n "$session" ] && [ "$(tmux show-options -t "$session" -qv @autoagent 2>/dev/null)" != "1" ]; then
-  _amux_clear_colour "$session"
-fi
+  # If the triggering session is not (or no longer) autoagent, clear its overrides.
+  if [ -n "$session" ] && [ "$(tmux show-options -t "$session" -qv @autoagent 2>/dev/null)" != "1" ]; then
+    _amux_clear_colour "$session"
+  fi
+}
+
+# Dispatch only when executed directly, never when sourced (so bin/amux can source
+# this file for its resolvers). Mirror colours.sh's guard: under bash/sh a sourced
+# file keeps $0 as the parent, so the basename guard suffices — but zsh sets $0 to
+# the sourced file, so also bail on a zsh ':file' eval context.
+case "${0##*/}" in
+  update_colors.sh)
+    case "${ZSH_EVAL_CONTEXT:-}" in
+      *:file) : ;;
+      *) _amux_reconcile "$@" ;;
+    esac
+    ;;
+esac
