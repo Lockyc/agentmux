@@ -295,8 +295,9 @@ _amux_colours() {
     names) "$AGENTMUX_SCRIPTS/colours.sh" names ;;
     pick)  shift; _amux_colour_pick "$@" ;;
     ''|render)
+      printf '  Agent window-tab colours (per agent via [[agents]].colour):\n'
       "$AGENTMUX_SCRIPTS/colours.sh" render
-      printf '\n  Session bar colours (pin via [amux.dirs."<dir>"].session_colour):\n'
+      printf '\n  Session bar colours (per dir via [amux.dirs."<dir>"].session_colour):\n'
       # shellcheck source=/dev/null
       ( . "$AGENTMUX_SCRIPTS/update_colors.sh"; colour_bar_render )
       ;;
