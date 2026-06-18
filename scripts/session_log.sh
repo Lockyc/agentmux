@@ -120,11 +120,35 @@ sl_list() {
   rm -f "$rows"
 }
 
+# Generic resume-hint enrichment. Runs inside the agent's own pane.
+# Marker check is FIRST so steady-state calls are cheap (no toml read, no append).
+sl_resume() {  # <label> <resume_cmd>
+  _label="$1"; _rcmd="$2"
+  IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
+$(_sl_ctx)
+EOF
+  [ -n "$_pid" ] && [ -n "$_label" ] || return 0
+  _dir=$(_sl_state_dir)
+  _marker="$_dir/seen/${_pid}-$(printf '%s' "$_wid" | tr -d '@')"
+  if [ -f "$_marker" ] && [ "$(cat "$_marker" 2>/dev/null)" = "$_label" ]; then
+    return 0
+  fi
+  _sl_enabled || return 0
+  mkdir -p "$_dir/seen" 2>/dev/null || return 0
+  printf '%s' "$_label" > "$_marker" 2>/dev/null || true
+  _line=$(jq -cn \
+    --argjson ts "$(date +%s)" --arg sp "$_socket" --argjson pid "$_pid" \
+    --arg wid "$_wid" --arg label "$_label" --arg rc "$_rcmd" \
+    '{ts:$ts,event:"resume",socket_path:$sp,server_pid:$pid,window_id:$wid,label:$label,resume_cmd:$rc}')
+  _sl_append "$_line"
+}
+
 # ---- dispatch ----
 if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
   cmd="${1:-}"; [ $# -gt 0 ] && shift
   case "$cmd" in
     open)   sl_open   "$@" ;;
+    resume) sl_resume "$@" ;;
     list)   sl_list   "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
   esac
@@ -192,6 +216,23 @@ _assert "list shows resume cmd"  "1" "$(printf '%s\n' "$out" | grep -c 'claude -
 
 # window-id reuse across servers stays distinct (both @1, different pids → both kept)
 _assert "win-id reuse distinct"  "2" "$(printf '%s\n' "$foldout" | grep -c '@*claude' )"
+
+# --- resume enrichment + dedup (uses the stubbed tmux: pid 4242, @3) ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
+sl_resume "9f3c" "claude --resume 9f3c"
+_assert "resume writes one" "1" "$(grep -c '"event":"resume"' "$ledger")"
+sl_resume "9f3c" "claude --resume 9f3c"
+_assert "resume dedups same label" "1" "$(grep -c '"event":"resume"' "$ledger")"
+sl_resume "abcd" "claude --resume abcd"
+_assert "resume writes on new label" "2" "$(grep -c '"event":"resume"' "$ledger")"
+# fold must surface the LATEST resume cmd for that window
+seedl="$AGENTMUX_STATE_DIR/seed.jsonl"
+cat > "$seedl" <<'JSON'
+{"ts":1,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@3","window_name":"claude","cwd":"/w/locus","agent":"claude"}
+{"ts":2,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@3","label":"old","resume_cmd":"claude --resume old"}
+{"ts":3,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@3","label":"new","resume_cmd":"claude --resume new"}
+JSON
+_assert "fold takes latest resume" "1" "$(_sl_fold "$seedl" | grep -c 'claude --resume new')"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
