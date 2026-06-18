@@ -18,4 +18,12 @@ if [ "$1" = "working" ] && [ ! -t 0 ] && command -v jq >/dev/null 2>&1; then
   export AGENTMUX_HOOK_PROMPT AGENTMUX_HOOK_TRANSCRIPT
 fi
 
+# Durable session log: contribute Claude's precise-resume hint (uuid = transcript
+# basename). The resume subcommand dedups per window, so calling on every working
+# hook is cheap. Claude-specific data only; the log core stays agent-agnostic.
+if [ -n "${AGENTMUX_HOOK_TRANSCRIPT:-}" ]; then
+  _uuid=$(basename "$AGENTMUX_HOOK_TRANSCRIPT" .jsonl)
+  "$SCRIPT_DIR/../session_log.sh" resume "$_uuid" "claude --resume $_uuid" 2>/dev/null || true
+fi
+
 exec "$SCRIPT_DIR/../tmux-status.sh" "$@"
