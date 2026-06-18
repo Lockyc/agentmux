@@ -94,6 +94,19 @@ _sl_live_windows() {  # <socket>
   tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null
 }
 
+# Epoch of the last boot, to tell a reboot from a same-boot kill (a server whose
+# newest record predates boot is gone even if a new server reused its pid). Linux
+# /proc/stat btime; macOS sysctl kern.boottime. Empty if unavailable → callers
+# fall back to the pid check alone, which already covers same-boot kills.
+_sl_boot_epoch() {
+  [ -n "${SESSION_LOG_BOOT_EPOCH+x}" ] && { printf '%s' "$SESSION_LOG_BOOT_EPOCH"; return 0; }
+  if [ -r /proc/stat ]; then
+    awk '/^btime /{print $2; exit}' /proc/stat 2>/dev/null
+  elif command -v sysctl >/dev/null 2>&1; then
+    sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*{ sec = \([0-9]*\).*/\1/p'
+  fi
+}
+
 # Fold ledger → TSV, one row per opened window (latest open + latest resume per
 # (socket,pid,window_id) tuple). Columns: socket pid window_id session
 # window_name cwd agent resume_cmd. Whether a window is still open is decided at
@@ -156,6 +169,54 @@ sl_list() {
     done
   done
   rm -f "$rows"
+}
+
+# One-time recovery nudge. Prints a single line iff a previous tmux server died
+# with agent windows still open (crash/reboot) and hasn't been announced yet —
+# marking those servers announced so it fires once per dead server, not every
+# launch. A server is lost if its pid no longer answers on its socket, OR its
+# newest record predates boot (a reboot that reused the pid). Silent otherwise.
+sl_notice() {
+  _sl_enabled || return 0
+  _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
+  _boot=$(_sl_boot_epoch)
+  _dir=$(_sl_state_dir)
+  _notmark="$_dir/notified"
+
+  # Per server: socket, pid, newest ts, distinct-window count (from open events).
+  _servers=$(jq -rRn '
+    [ inputs | fromjson? | select(.event=="open") ]
+    | group_by([.socket_path, .server_pid])
+    | map([ .[0].socket_path, (.[0].server_pid|tostring),
+            (map(.ts)|max|tostring), ([.[].window_id]|unique|length|tostring) ] | @tsv) | .[]
+  ' "$_ledger")
+  [ -n "$_servers" ] || return 0
+
+  _total=0; _new=""; _reboot=0; _killed=0
+  while IFS="$TAB" read -r _socket _pid _maxts _wcount; do
+    [ -n "$_pid" ] || continue
+    # Live iff the pid still answers AND the records aren't from before boot.
+    if _sl_server_live "$_socket" "$_pid" && { [ -z "$_boot" ] || [ "$_maxts" -ge "$_boot" ] 2>/dev/null; }; then
+      continue
+    fi
+    _key="$_socket|$_pid"
+    if [ -f "$_notmark" ] && grep -qxF "$_key" "$_notmark" 2>/dev/null; then continue; fi
+    _total=$((_total + _wcount))
+    _new="$_new$_key
+"
+    if [ -n "$_boot" ] && [ "$_maxts" -lt "$_boot" ] 2>/dev/null; then _reboot=1; else _killed=1; fi
+  done <<EOF
+$_servers
+EOF
+
+  [ "$_total" -gt 0 ] || return 0
+  mkdir -p "$_dir" 2>/dev/null && printf '%s' "$_new" >> "$_notmark" 2>/dev/null || true
+
+  _cause="a previous tmux server"
+  if [ "$_reboot" = 1 ] && [ "$_killed" = 0 ]; then _cause="a reboot"
+  elif [ "$_killed" = 1 ] && [ "$_reboot" = 0 ]; then _cause="a server kill"; fi
+  _s=s; [ "$_total" = 1 ] && _s=""
+  printf '⚠ %d agent session%s lost to %s — recover with: amux --log\n' "$_total" "$_s" "$_cause"
 }
 
 # Generic resume-hint enrichment. Runs inside the agent's own pane.
@@ -230,6 +291,7 @@ if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
     open)   sl_open   "$@" ;;
     resume) sl_resume "$@" ;;
     list)   sl_list   "$@" ;;
+    notice) sl_notice "$@" ;;
     prune)  sl_prune  "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
   esac
@@ -358,6 +420,28 @@ _assert "no-target ctx uses \$TMUX_PANE" "yes" "$_got"
 TMUX_PANE='%7' _sl_ctx '=s:0' >/dev/null
 case "$_captured" in *"-t =s:0"*) _got=yes ;; *) _got=no ;; esac
 _assert "explicit target overrides \$TMUX_PANE" "yes" "$_got"
+
+# --- notice: dead server fires a one-time recovery nudge; live ignored ---
+rm -f "$ledger" "$AGENTMUX_STATE_DIR/notified"
+_now=$(date +%s)
+cat > "$ledger" <<JSON
+{"ts":$_now,"event":"open","socket_path":"/s/dead","server_pid":555,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/a","agent":"claude"}
+{"ts":$_now,"event":"open","socket_path":"/s/dead","server_pid":555,"session":"b","window_id":"@2","window_name":"claude","cwd":"/w/b","agent":"claude"}
+{"ts":$_now,"event":"open","socket_path":"/s/live","server_pid":999,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/c","agent":"claude"}
+JSON
+n1=$(SESSION_LOG_LIVE_PIDS="999" SESSION_LOG_BOOT_EPOCH=$((_now - 3600)) sl_notice)
+_assert "notice counts dead server's 2 windows" "1" "$(printf '%s\n' "$n1" | grep -c '2 agent sessions lost')"
+_assert "notice ignores the live server"        "1" "$(printf '%s\n' "$n1" | grep -c 'a server kill')"
+n2=$(SESSION_LOG_LIVE_PIDS="999" SESSION_LOG_BOOT_EPOCH=$((_now - 3600)) sl_notice)
+_assert "notice is once-per-dead-server (then silent)" "" "$n2"
+
+# --- notice: a pre-boot server is lost even if its pid was reused (reboot) ---
+rm -f "$ledger" "$AGENTMUX_STATE_DIR/notified"
+cat > "$ledger" <<JSON
+{"ts":$((_now - 100000)),"event":"open","socket_path":"/s/old","server_pid":777,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/old","agent":"claude"}
+JSON
+n3=$(SESSION_LOG_LIVE_PIDS="777" SESSION_LOG_BOOT_EPOCH=$_now sl_notice)
+_assert "notice catches pre-boot reboot (pid reused)" "1" "$(printf '%s\n' "$n3" | grep -c 'lost to a reboot')"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

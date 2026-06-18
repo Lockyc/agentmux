@@ -19,7 +19,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `bin/amux` | The `amux` launcher — standalone bash, single source of truth for amux logic |
 | `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`) |
-| `scripts/session_log.sh` | Durable roster of agent windows amux opens (`amux --log`); recovery after a server/reboot kill |
+| `scripts/session_log.sh` | Durable roster of agent windows amux opens (`amux --log`); recovery after a server/reboot kill, with a one-time launch nudge when a dead server left sessions open |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |

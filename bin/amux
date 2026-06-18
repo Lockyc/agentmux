@@ -694,6 +694,18 @@ EOF
   # = unset/collided → leave the default prefix untouched.
   local _prefix; _prefix=$(_amux_prefix)
   [ -n "$_prefix" ] && _amux_atmux set-option -t "$name" prefix "$_prefix"
+
+  # One-time recovery nudge: if a previous tmux server died with agent windows
+  # still open (crash/reboot), flash it on the status line ~1s after the client
+  # attaches. A plain echo here would be wiped when tmux paints on attach; the
+  # message goes through a server option so its text needs no shell-escaping.
+  local _crash_notice
+  _crash_notice=$("$AGENTMUX_SCRIPTS/session_log.sh" notice 2>/dev/null)
+  if [ -n "$_crash_notice" ]; then
+    _amux_atmux set-option -g "@amux_session_notice" "$_crash_notice"
+    _amux_atmux run-shell -d 1 'tmux display-message -d 5000 "#{@amux_session_notice}"' 2>/dev/null || true
+  fi
+
   _amux_attach "$name"
 }
 
