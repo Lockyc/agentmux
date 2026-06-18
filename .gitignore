@@ -5,3 +5,6 @@
 # User's live config lives at the clone root (~/.agentmux/amux.toml); never track it.
 /amux.toml
 .DS_Store
+
+# harness-native git worktrees
+.claude/worktrees/
