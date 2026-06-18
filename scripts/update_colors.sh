@@ -64,6 +64,14 @@ _bar_slot_name() {
   printf '%s\n' "$palette" | awk -v i="$1" 'NR == i + 1 { print $3; exit }'
 }
 
+# Render the bar palette as named swatches (for `amux --colours`). Pure ANSI.
+colour_bar_render() {
+  printf '%s\n' "$palette" | while read -r bg fg nm; do
+    printf '  %-8s \033[48;5;%sm\033[38;5;%sm  %3s  \033[0m   colour = "%s"\n' \
+      "$nm" "$bg" "$fg" "$bg" "$nm"
+  done
+}
+
 # Pick a palette slot for a newcomer: probe from its cksum-preferred slot past
 # every slot already taken, returning the first free one. <used> is a space-padded
 # list of claimed slots (" 2 5 "); if all <cnt> slots are taken the palette is

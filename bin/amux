@@ -292,7 +292,12 @@ _amux_colours() {
     grid)  "$AGENTMUX_SCRIPTS/colours.sh" grid ;;
     names) "$AGENTMUX_SCRIPTS/colours.sh" names ;;
     pick)  shift; _amux_colour_pick "$@" ;;
-    ''|render) "$AGENTMUX_SCRIPTS/colours.sh" render ;;
+    ''|render)
+      "$AGENTMUX_SCRIPTS/colours.sh" render
+      printf '\n  Session bar colours (pin via [amux.dirs."<dir>"].colour):\n'
+      # shellcheck source=/dev/null
+      ( . "$AGENTMUX_SCRIPTS/update_colors.sh"; colour_bar_render )
+      ;;
     *) echo "usage: amux --colours [grid|names|pick [agent]]" >&2; return 1 ;;
   esac
 }
@@ -887,6 +892,11 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   line=$(_amux_colour_line work teal)
   case "$line" in *'colour = "teal"'*) _got=ok ;; *) _got=bad ;; esac
   _assert "colour line paste field" "ok" "$_got"
+
+  # --colours preview also lists the session bar palette (so pins are discoverable).
+  # 'cobalt' is bar-only (not a tab name), so this genuinely needs the bar render.
+  case "$cols" in *"Session bar colours"*cobalt*) _got=present ;; *) _got=absent ;; esac
+  _assert "colours preview lists bar names" "present" "$_got"
 
   # _amux_shquote wraps and escapes embedded single quotes.
   _assert "shquote plain"  "'work'"      "$(_amux_shquote work)"
