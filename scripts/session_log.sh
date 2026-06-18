@@ -143,13 +143,67 @@ EOF
   _sl_append "$_line"
 }
 
+sl_close() {  # [target]
+  _sl_enabled || return 0
+  IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
+$(_sl_ctx "${1:-}")
+EOF
+  [ -n "$_pid" ] || return 0
+  _line=$(jq -cn --argjson ts "$(date +%s)" \
+    --arg sp "$_socket" --argjson pid "$_pid" --arg wid "$_wid" \
+    '{ts:$ts,event:"close",socket_path:$sp,server_pid:$pid,window_id:$wid}')
+  _sl_append "$_line"
+}
+
+sl_prune() {
+  _sl_enabled || return 0
+  _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
+  _max=${AGENTMUX_LOG_MAX_LINES:-2000}
+  _lines=$(wc -l < "$_ledger" 2>/dev/null | tr -d ' ')
+  [ "${_lines:-0}" -gt "$_max" ] 2>/dev/null || return 0
+  _cutoff=$(( $(date +%s) - ${AGENTMUX_LOG_RETAIN_DAYS:-14} * 86400 ))
+
+  # Per-server max ts, then build the KEEP set: live OR recent (maxts >= cutoff).
+  _servers=$(jq -rs '
+    group_by([.socket_path,.server_pid])
+    | map([ .[0].socket_path, (.[0].server_pid|tostring), (map(.ts)|max|tostring) ] | @tsv) | .[]
+  ' "$_ledger")
+  _keep=$(printf '%s\n' "$_servers" | while IFS="$TAB" read -r socket pid maxts; do
+    [ -n "$pid" ] || continue
+    if _sl_server_live "$socket" "$pid" || [ "$maxts" -ge "$_cutoff" ] 2>/dev/null; then
+      printf '%s|%s\n' "$socket" "$pid"
+    fi
+  done | jq -R -s 'split("\n") | map(select(length>0))')
+
+  _tmp=$(mktemp) || return 0
+  jq -c --argjson keep "$_keep" '
+    ((.socket_path + "|" + (.server_pid|tostring)) as $k | select($keep | index($k)))
+  ' "$_ledger" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_ledger" || rm -f "$_tmp"
+
+  # Best-effort marker sweep: drop seen/<pid>-* for pids no longer in the ledger.
+  if [ -d "$(_sl_state_dir)/seen" ]; then
+    _livepids=$(jq -rs '[.[].server_pid] | unique | .[]' "$_ledger" 2>/dev/null)
+    for m in "$(_sl_state_dir)"/seen/*; do
+      [ -e "$m" ] || continue
+      mp=$(basename "$m"); mp=${mp%%-*}
+      case "
+$_livepids
+" in *"
+$mp
+"*) : ;; *) rm -f "$m" ;; esac
+    done
+  fi
+}
+
 # ---- dispatch ----
 if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
   cmd="${1:-}"; [ $# -gt 0 ] && shift
   case "$cmd" in
     open)   sl_open   "$@" ;;
     resume) sl_resume "$@" ;;
+    close)  sl_close  "$@" ;;
     list)   sl_list   "$@" ;;
+    prune)  sl_prune  "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
   esac
   exit 0
@@ -233,6 +287,25 @@ cat > "$seedl" <<'JSON'
 {"ts":3,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@3","label":"new","resume_cmd":"claude --resume new"}
 JSON
 _assert "fold takes latest resume" "1" "$(_sl_fold "$seedl" | grep -c 'claude --resume new')"
+
+# --- close ---
+rm -f "$ledger"
+sl_open claude            # stub → pid 4242, @3
+sl_close
+_assert "close appends record" "1" "$(grep -c '"event":"close"' "$ledger")"
+_assert "fold hides closed win" "0" "$(_sl_fold "$ledger" | grep -c '/Users/lockyc/work')"
+
+# --- prune: dead+old server dropped, live kept, recent-dead kept ---
+now=$(date +%s); old=$(( now - 30*86400 ))
+cat > "$ledger" <<JSON
+{"ts":$old,"event":"open","socket_path":"/s/dead","server_pid":111,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/a","agent":"claude"}
+{"ts":$now,"event":"open","socket_path":"/s/live","server_pid":222,"session":"b","window_id":"@1","window_name":"claude","cwd":"/w/b","agent":"claude"}
+{"ts":$now,"event":"open","socket_path":"/s/recent","server_pid":333,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/c","agent":"claude"}
+JSON
+AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
+_assert "prune drops dead+old 111" "0" "$(grep -c '"server_pid":111' "$ledger")"
+_assert "prune keeps live 222"     "1" "$(grep -c '"server_pid":222' "$ledger")"
+_assert "prune keeps recent 333"   "1" "$(grep -c '"server_pid":333' "$ledger")"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
