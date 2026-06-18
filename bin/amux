@@ -481,6 +481,13 @@ _amux_sessions() {
   fi
 }
 
+# amux --log — durable roster of agent windows amux has opened, for recovery
+# after a tmux server died (kill-server / reboot). Distinct from --sessions,
+# which lists only sessions on the *live* server.
+_amux_log() {
+  "$AGENTMUX_SCRIPTS/session_log.sh" list
+}
+
 # Kill ONE project completely: the agent session (agent socket) plus its paired
 # <base>-frame and <base>-term. Default target is the current dir's session; an
 # explicit arg is sanitised, and a trailing -frame/-term is stripped to the base.
@@ -593,6 +600,10 @@ amux() {
         _amux_sessions
         return $?
         ;;
+      --log)
+        _amux_log
+        return $?
+        ;;
       --kill)
         shift
         _amux_kill "$@"
@@ -624,6 +635,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   session_name   defaults to basename of $PWD (dots → underscores)
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
+  --log          durable roster of past/open agent sessions, incl. ones lost to a server crash
   --kill         kill an agent session [session] + its frame/term (default: current dir)
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
   --update       update to the latest agentmux (git pull)
@@ -797,6 +809,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --help advertises the agent-session lifecycle commands + the renamed kill-all.
   case "$help" in *"--sessions"*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --sessions" "present" "$_got"
+  case "$help" in *"--log"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help shows --log" "present" "$_got"
   case "$help" in *"--kill "*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --kill" "present" "$_got"
   case "$help" in *"--kill-all"*) _got=present ;; *) _got=absent ;; esac
