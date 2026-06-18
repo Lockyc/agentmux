@@ -136,23 +136,24 @@ _amux_prefix() {
   printf '%s' "$p"
 }
 
-# Pinned bar-colour slot for a directory, via [amux.dirs."<dir>"].colour. Empty
-# when unpinned or the name is unknown. update_colors.sh is sourced in a subshell
-# so its palette/count globals don't leak into amux's namespace and its dispatch
-# guard (basename check) stays a no-op.
+# Pinned bar-colour slot for a directory, via [amux.dirs."<dir>"].session_colour.
+# Empty when unpinned or the name is unknown. update_colors.sh is sourced in a
+# subshell so its palette/count globals don't leak into amux's namespace and its
+# dispatch guard (basename check) stays a no-op.
 _amux_bar_pin_slot() {
-  local nm; nm=$(agentmux_amux_field colour "$1")
+  local nm; nm=$(agentmux_amux_field session_colour "$1")
   [ -z "$nm" ] && return 0
   # shellcheck source=/dev/null
   ( . "$AGENTMUX_SCRIPTS/update_colors.sh"; _bar_name_to_slot "$nm" )
 }
 
-# Space-separated unique reserved slots for every pinned [amux.dirs.*].colour.
+# Space-separated unique reserved slots for every pinned
+# [amux.dirs.*].session_colour (insertion order; the reconcile is order-agnostic).
 # Warns (stderr) on an unknown colour name or two dirs pinning the same slot.
 # Published as the global @l1reserved so update_colors.sh excludes these slots
 # from the newcomer pool even when the pinned project is not running.
 _amux_bar_reserved() {
-  local names; names=$(_amux_json | jq -r '(.amux.dirs // {}) | to_entries[] | .value.colour // empty')
+  local names; names=$(_amux_json | jq -r '(.amux.dirs // {}) | to_entries[] | .value.session_colour // empty')
   [ -z "$names" ] && return 0
   # shellcheck source=/dev/null
   (
@@ -294,7 +295,7 @@ _amux_colours() {
     pick)  shift; _amux_colour_pick "$@" ;;
     ''|render)
       "$AGENTMUX_SCRIPTS/colours.sh" render
-      printf '\n  Session bar colours (pin via [amux.dirs."<dir>"].colour):\n'
+      printf '\n  Session bar colours (pin via [amux.dirs."<dir>"].session_colour):\n'
       # shellcheck source=/dev/null
       ( . "$AGENTMUX_SCRIPTS/update_colors.sh"; colour_bar_render )
       ;;
@@ -725,10 +726,16 @@ EOF
   local _prefix; _prefix=$(_amux_prefix)
   [ -n "$_prefix" ] && _amux_atmux set-option -t "$name" prefix "$_prefix"
 
-  # Pin this project's bar colour (if [amux.dirs."$PWD"].colour set) by pre-freezing
-  # @l1idx to the named slot, and publish every pinned slot globally so the hook
-  # keeps them out of the auto-assign pool. Set before attach so the hook's
-  # attach-time repaint reads the pinned slot.
+  # Pin this project's bar colour (if [amux.dirs."$PWD"].session_colour set) by
+  # pre-freezing @l1idx to the named slot, and publish every pinned slot globally
+  # so the hook keeps them out of the auto-assign pool.
+  #
+  # ORDERING IS LOAD-BEARING: @autoagent (above) and @l1reserved (here) must both
+  # be set BEFORE _amux_attach. update_colors.sh only paints @autoagent sessions,
+  # so the session-created hook is a no-op while this session is still un-flagged;
+  # the first real paint happens on attach, by which point the reservation is
+  # published. Move either set after the attach and a colliding newcomer can steal
+  # a reserved colour before the reservation exists. Don't reorder.
   local _pin_slot _reserved
   _pin_slot=$(_amux_bar_pin_slot "$PWD")
   [ -n "$_pin_slot" ] && _amux_atmux set-option -t "$name" @l1idx "$_pin_slot"
@@ -978,9 +985,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _fp=$(mktemp)
   cat > "$_fp" <<'EOF'
 [amux.dirs."/tmp/amux-pin-blue"]
-colour = "blue"
+session_colour = "blue"
 [amux.dirs."/tmp/amux-pin-cyan"]
-colour = "cyan"
+session_colour = "cyan"
 [[agents]]
 name = "x"
 cmd = "true"
@@ -993,10 +1000,46 @@ EOF
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-cyan)"
   _assert "pin slot unpinned empty" "" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-unpinned)"
-  # The reserved set lists every pinned slot, sorted/unique, space-separated.
+  # The reserved set lists every pinned slot, unique, space-separated.
   _assert "reserved set" "0 3" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
   rm -f "$_fp"
+
+  # Unknown colour name warns and is skipped (not added to the reserved set).
+  _fpu=$(mktemp)
+  cat > "$_fpu" <<'EOF'
+[amux.dirs."/tmp/amux-pin-bad"]
+session_colour = "chartreuse"
+[[agents]]
+name = "x"
+cmd = "true"
+EOF
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _uw=$(AGENTMUX_CONFIG="$_fpu" _amux_json_cache="" _amux_bar_reserved 2>&1 >/dev/null)
+  case "$_uw" in *"unknown bar colour 'chartreuse'"*) _got=warns ;; *) _got="silent:$_uw" ;; esac
+  _assert "reserved warns on unknown colour" "warns" "$_got"
+  _assert "reserved skips unknown colour" "" \
+    "$(AGENTMUX_CONFIG="$_fpu" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
+  rm -f "$_fpu"
+
+  # Two dirs pinning the same colour warn, and the slot appears once (rose = 7).
+  _fpd=$(mktemp)
+  cat > "$_fpd" <<'EOF'
+[amux.dirs."/tmp/amux-pin-a"]
+session_colour = "rose"
+[amux.dirs."/tmp/amux-pin-b"]
+session_colour = "rose"
+[[agents]]
+name = "x"
+cmd = "true"
+EOF
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _dw=$(AGENTMUX_CONFIG="$_fpd" _amux_json_cache="" _amux_bar_reserved 2>&1 >/dev/null)
+  case "$_dw" in *"pinned by more than one dir"*) _got=warns ;; *) _got="silent:$_dw" ;; esac
+  _assert "reserved warns on duplicate pin" "warns" "$_got"
+  _assert "reserved dedups duplicate pin" "7" \
+    "$(AGENTMUX_CONFIG="$_fpd" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
+  rm -f "$_fpd"
 
   AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"; _amux_json_cache=""
 

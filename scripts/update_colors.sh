@@ -33,9 +33,9 @@
 # reason; the "tab bases clear of bar palette" selftest in colours.sh enforces it.
 #
 # Each line is `bg fg name`. The trailing `name` lets a project pin this slot via
-# [amux.dirs."<dir>"].colour; names are appended LAST so every positional `bg fg`
-# parse (and the colours.sh cross-palette selftest's `awk '{print $1}'`) is
-# unaffected.
+# [amux.dirs."<dir>"].session_colour; names are appended LAST so every positional
+# `bg fg` parse (and the colours.sh cross-palette selftest's `awk '{print $1}'`)
+# is unaffected.
 palette='24 231 blue
 30 231 teal
 25 231 cobalt
@@ -258,8 +258,8 @@ _amux_reconcile() {
 '
 
   # Pass 1: collect the slots already FROZEN onto live sessions plus the globally
-  # RESERVED slots (pins from [amux.dirs.*].colour, published by bin/amux as the
-  # global @l1reserved). Both are fixed points the newcomer probe must avoid — the
+  # RESERVED slots (pins from [amux.dirs.*].session_colour, published by bin/amux as
+  # the global @l1reserved). Both are fixed points the newcomer probe must avoid — the
   # reserved set keeps a pinned colour out of the pool even when its project is not
   # running.
   used=' '

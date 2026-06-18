@@ -49,10 +49,11 @@ timeout = 20
 # from the auto-assign pool — no other project gets it, even when this one is
 # closed. Without a pin, a session's bar colour is a stable hash of its name, but
 # two projects can collide and swap colours depending on launch order; a pin makes
-# it deterministic. Run `amux --colours` for the bar colour names. e.g.:
+# it deterministic. This is the SESSION bar colour, distinct from an agent's tab
+# `colour` above. Run `amux --colours` for the bar colour names. e.g.:
 #
 # [amux.dirs."~/Developer/github.com/lockyc/locus"]
-# colour = "blue"
+# session_colour = "blue"
 
 [frame]
 # `amux --frame` layout: a bare scratch terminal in the left pane beside amux in
