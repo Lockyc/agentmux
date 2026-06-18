@@ -136,6 +136,45 @@ _amux_prefix() {
   printf '%s' "$p"
 }
 
+# Pinned bar-colour slot for a directory, via [amux.dirs."<dir>"].session_colour.
+# Empty when unpinned or the name is unknown. update_colors.sh is sourced in a
+# subshell so its palette/count globals don't leak into amux's namespace and its
+# dispatch guard (basename check) stays a no-op.
+_amux_bar_pin_slot() {
+  local nm; nm=$(agentmux_amux_field session_colour "$1")
+  [ -z "$nm" ] && return 0
+  # shellcheck source=/dev/null
+  ( . "$AGENTMUX_SCRIPTS/update_colors.sh"; _bar_name_to_slot "$nm" )
+}
+
+# Space-separated unique reserved slots for every pinned
+# [amux.dirs.*].session_colour (insertion order; the reconcile is order-agnostic).
+# Warns (stderr) on an unknown colour name or two dirs pinning the same slot.
+# Published as the global @l1reserved so update_colors.sh excludes these slots
+# from the newcomer pool even when the pinned project is not running.
+_amux_bar_reserved() {
+  local names; names=$(_amux_json | jq -r '(.amux.dirs // {}) | to_entries[] | .value.session_colour // empty')
+  [ -z "$names" ] && return 0
+  # shellcheck source=/dev/null
+  (
+    . "$AGENTMUX_SCRIPTS/update_colors.sh"
+    seen=' '
+    for nm in $names; do
+      s=$(_bar_name_to_slot "$nm")
+      if [ -z "$s" ]; then
+        echo "agentmux: unknown bar colour '$nm' in [amux.dirs] — run 'amux --colours' for names" >&2
+        continue
+      fi
+      case "$seen" in
+        *" $s "*) echo "agentmux: bar colour '$nm' (slot $s) is pinned by more than one dir — last wins" >&2 ;;
+        *) seen="$seen$s " ;;
+      esac
+    done
+    set -- $seen
+    echo "$*"
+  )
+}
+
 # Whether --frame may run inside an existing tmux: [frame] allow_nested = true.
 # Off by default — the frame is itself a tmux server, so nesting it inside your
 # tmux stacks prefixes and is normally refused. Advanced users already living in
@@ -255,7 +294,12 @@ _amux_colours() {
     grid)  "$AGENTMUX_SCRIPTS/colours.sh" grid ;;
     names) "$AGENTMUX_SCRIPTS/colours.sh" names ;;
     pick)  shift; _amux_colour_pick "$@" ;;
-    ''|render) "$AGENTMUX_SCRIPTS/colours.sh" render ;;
+    ''|render)
+      "$AGENTMUX_SCRIPTS/colours.sh" render
+      printf '\n  Session bar colours (pin via [amux.dirs."<dir>"].session_colour):\n'
+      # shellcheck source=/dev/null
+      ( . "$AGENTMUX_SCRIPTS/update_colors.sh"; colour_bar_render )
+      ;;
     *) echo "usage: amux --colours [grid|names|pick [agent]]" >&2; return 1 ;;
   esac
 }
@@ -695,6 +739,22 @@ EOF
   local _prefix; _prefix=$(_amux_prefix)
   [ -n "$_prefix" ] && _amux_atmux set-option -t "$name" prefix "$_prefix"
 
+  # Pin this project's bar colour (if [amux.dirs."$PWD"].session_colour set) by
+  # pre-freezing @l1idx to the named slot, and publish every pinned slot globally
+  # so the hook keeps them out of the auto-assign pool.
+  #
+  # ORDERING IS LOAD-BEARING: @autoagent (above) and @l1reserved (here) must both
+  # be set BEFORE _amux_attach. update_colors.sh only paints @autoagent sessions,
+  # so the session-created hook is a no-op while this session is still un-flagged;
+  # the first real paint happens on attach, by which point the reservation is
+  # published. Move either set after the attach and a colliding newcomer can steal
+  # a reserved colour before the reservation exists. Don't reorder.
+  local _pin_slot _reserved
+  _pin_slot=$(_amux_bar_pin_slot "$PWD")
+  [ -n "$_pin_slot" ] && _amux_atmux set-option -t "$name" @l1idx "$_pin_slot"
+  _reserved=$(_amux_bar_reserved)
+  _amux_atmux set-option -g @l1reserved "$_reserved"
+
   # One-time recovery nudge: if a previous tmux server died with agent windows
   # still open (crash/reboot), flash it on the status line ~1s after the client
   # attaches. A plain echo here would be wiped when tmux paints on attach; the
@@ -866,6 +926,11 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$line" in *'colour = "teal"'*) _got=ok ;; *) _got=bad ;; esac
   _assert "colour line paste field" "ok" "$_got"
 
+  # --colours preview also lists the session bar palette (so pins are discoverable).
+  # 'cobalt' is bar-only (not a tab name), so this genuinely needs the bar render.
+  case "$cols" in *"Session bar colours"*cobalt*) _got=present ;; *) _got=absent ;; esac
+  _assert "colours preview lists bar names" "present" "$_got"
+
   # _amux_shquote wraps and escapes embedded single quotes.
   _assert "shquote plain"  "'work'"      "$(_amux_shquote work)"
   _assert "shquote squote" "'a'\\''b'"   "$(_amux_shquote "a'b")"
@@ -941,6 +1006,67 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "amux_prefix collide default" "" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_prefix 2>/dev/null)"
 
   rm -f "$_fw"
+
+  # --- pinned bar colours ---
+  _fp=$(mktemp)
+  cat > "$_fp" <<'EOF'
+[amux.dirs."/tmp/amux-pin-blue"]
+session_colour = "blue"
+[amux.dirs."/tmp/amux-pin-cyan"]
+session_colour = "cyan"
+[[agents]]
+name = "x"
+cmd = "true"
+EOF
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null  # disk cache is mtime-keyed; clear it
+  # A pinned dir resolves to its palette slot; an unpinned dir resolves to empty.
+  _assert "pin slot blue=0" "0" \
+    "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-blue)"
+  _assert "pin slot cyan=3" "3" \
+    "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-cyan)"
+  _assert "pin slot unpinned empty" "" \
+    "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-unpinned)"
+  # The reserved set lists every pinned slot, unique, space-separated.
+  _assert "reserved set" "0 3" \
+    "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
+  rm -f "$_fp"
+
+  # Unknown colour name warns and is skipped (not added to the reserved set).
+  _fpu=$(mktemp)
+  cat > "$_fpu" <<'EOF'
+[amux.dirs."/tmp/amux-pin-bad"]
+session_colour = "chartreuse"
+[[agents]]
+name = "x"
+cmd = "true"
+EOF
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _uw=$(AGENTMUX_CONFIG="$_fpu" _amux_json_cache="" _amux_bar_reserved 2>&1 >/dev/null)
+  case "$_uw" in *"unknown bar colour 'chartreuse'"*) _got=warns ;; *) _got="silent:$_uw" ;; esac
+  _assert "reserved warns on unknown colour" "warns" "$_got"
+  _assert "reserved skips unknown colour" "" \
+    "$(AGENTMUX_CONFIG="$_fpu" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
+  rm -f "$_fpu"
+
+  # Two dirs pinning the same colour warn, and the slot appears once (rose = 7).
+  _fpd=$(mktemp)
+  cat > "$_fpd" <<'EOF'
+[amux.dirs."/tmp/amux-pin-a"]
+session_colour = "rose"
+[amux.dirs."/tmp/amux-pin-b"]
+session_colour = "rose"
+[[agents]]
+name = "x"
+cmd = "true"
+EOF
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _dw=$(AGENTMUX_CONFIG="$_fpd" _amux_json_cache="" _amux_bar_reserved 2>&1 >/dev/null)
+  case "$_dw" in *"pinned by more than one dir"*) _got=warns ;; *) _got="silent:$_dw" ;; esac
+  _assert "reserved warns on duplicate pin" "warns" "$_got"
+  _assert "reserved dedups duplicate pin" "7" \
+    "$(AGENTMUX_CONFIG="$_fpd" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
+  rm -f "$_fpd"
+
   AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"; _amux_json_cache=""
 
   # _amux_resolve_target: flag/name/session precedence (explicit session = deterministic).

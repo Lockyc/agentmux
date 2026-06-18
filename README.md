@@ -378,4 +378,13 @@ export AGENTMUX_LLM_TIMEOUT=20   # seconds
 
 ## Session colours
 
-Each session gets a colour derived deterministically from its name — same directory, same colour, on every machine. The summary rows use a matching shade of the same hue. Colours update automatically on attach; no config needed.
+Each session gets a status-bar colour seeded from a stable hash of its name, so the same project usually lands on the same colour with no config. The summary rows use a matching shade of the same hue, and colours update automatically on attach. The colour is frozen for a session's lifetime — it never moves while the session lives, regardless of what else starts or stops.
+
+Because two names can hash to the same slot, a newcomer that collides de-dups onto the next free slot. Which one wins is launch-order-dependent, so two colliding projects can swap colours between runs. To make a project's colour fixed, **pin it**:
+
+```toml
+[amux.dirs."~/Developer/github.com/lockyc/locus"]
+session_colour = "blue"
+```
+
+A pinned colour is frozen for that directory and removed from the auto-assign pool entirely — no other project is ever assigned it, even when the pinned project isn't running. Run `amux --colours` for the bar colour names (this is the **session bar** palette, distinct from an agent's tab `colour`).
