@@ -89,6 +89,7 @@ Normal shell commands — type them at a prompt.
 | `amux <agent>` | New/attach session, agent by name |
 | `amux <agent> <session>` | New/attach named session with specified agent |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
+| `amux --log` | Durable roster of agent windows amux has opened, grouped by project — recover sessions lost to a server kill or reboot. Prints one `cd` per project, then a resume command per window tagged `● live` / `✗ lost` |
 | `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir) |
 | `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
@@ -250,6 +251,7 @@ The new agent appears in the `prefix m` cycle immediately (no reload needed).
 | `colour_inactive` / `colour_active` | — | Escape hatch: full raw tmux styles for total control (e.g. `"fg=black,bg=colour56"` / `"fg=black,bg=colour93,bold"`). Set **both** as a pair — they override `colour`, and setting only one is a misconfiguration (agentmux warns) |
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
+| `resume` | — | Resume program shown by `amux --log` for this agent's windows. Overrides just the executable of the recorded resume command (e.g. `resume = "claude-work"` → `claude-work --resume <id>`); omit to use the program the adapter recorded |
 
 ## Adding an agent integration
 
