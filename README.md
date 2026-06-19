@@ -322,7 +322,7 @@ No other agentmux code needs to change — `bin/amux` and every `scripts/` helpe
 
 ## AI tab states (Claude Code)
 
-`claude/status.sh` updates the tmux tab label with an emoji reflecting Claude's current state:
+The `claude/status.sh` hook drives an emoji on the tmux tab label reflecting Claude's current state:
 
 | Emoji | State |
 |---|---|
