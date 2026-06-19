@@ -26,31 +26,40 @@
 # dark-on-dark. Add/remove lines freely; order only affects which name maps
 # where, not correctness.
 
-# bg fg — one pair per line. Keep backgrounds saturated, not near-black.
-# Must stay >=2 cube-distance from every agent tab base (colours.sh
-# _colour_palette), or an inactive window tab blends into the bar. colour60
-# (vs slate) and colour99 (vs blue/purple) are deliberately omitted for that
-# reason; the "tab bases clear of bar palette" selftest in colours.sh enforces it.
+# bg fg name — one entry per line. Keep backgrounds saturated, not near-black.
 #
-# Each line is `bg fg name`. The trailing `name` lets a project pin this slot via
+# Bases are confined to the {0,2,4} cube sub-lattice (every channel level in
+# {0,2,4}), and THAT is load-bearing. The summary rows show a SHADE of the bar
+# (@l2bg) derived by a per-channel cube transform (see _amux_l2bg) that collapses
+# adjacent levels: {0,1}->0, {2,3}->1, {4,5}->2 (and the mirror when lightening).
+# That summary shade is the prominent colour you glance at. An off-lattice bar (a
+# stray odd channel level) collapses onto a NEIGHBOUR's shade, so two sessions end
+# up with the SAME summary colour even though their slots differ — the bug this
+# guards against. Staying on {0,2,4} keeps the transform injective: 0/2/4 map to
+# distinct 0/1/2 (and distinct 3/4/5 lightening), so distinct bars always derive
+# distinct shades. The agent tab palette (colours.sh) uses the sibling {1,3,5}
+# lattice for the same injectivity reason; the two lattices interleave, which also
+# keeps every bar >=2 cube-distance from every tab base for free (so an inactive
+# window tab never blends into the bar). The "summary shades unique" and "bar bases
+# on {0,2,4} lattice" selftests below enforce this; colours.sh's "tab bases clear
+# of bar palette" enforces the cross-palette gap.
+#
+# The trailing `name` lets a project pin this slot via
 # [amux.dirs."<dir>"].session_colour; names are appended LAST so every positional
-# `bg fg` parse (and the colours.sh cross-palette selftest's `awk '{print $1}'`)
-# is unaffected.
+# `bg fg` parse (and colours.sh's `awk '{print $1}'`) is unaffected.
 # Bar colours are intentionally NON-blue except `blue` itself (pinned/reserved for
-# locus): the agent tab palette already owns the cool region, so any extra bar
-# blues (the old teal/cobalt/cyan) could only cluster next to `blue` and read as
-# it. Keeping one blue means an unpinned session never auto-lands on a near-blue.
-palette='24 231 blue
+# locus): the agent tab palette already owns the cool region.
+palette='20 231 blue
+42 16 teal
 28 231 green
-90 231 purple
-127 231 magenta
-132 231 rose
-130 231 rust
-166 231 orange
-94 231 brown
+112 16 lime
 100 231 olive
-136 16 amber
-178 16 gold'
+184 16 amber
+172 16 orange
+160 231 red
+164 231 magenta
+90 231 purple
+92 231 violet'
 
 count=$(printf '%s\n' "$palette" | wc -l | tr -d ' ')
 
@@ -92,6 +101,34 @@ _amux_pick_slot() {
   printf '%s' "$i"
 }
 
+# Derive the summary-row shade (@l2bg) from a bar bg+fg. Keep the proven legible
+# fg, shift the bg lightness so contrast is >= line 0 — darker when the fg is light
+# (231), lighter when the fg is dark (16). Decompose the 6x6x6 cube
+# (idx = 16 + 36r + 6g + b), scale each channel, recompose. The fg=16 (lighten)
+# branch mirrors colours.sh `_colour_lighten`; keep them in step if you change the
+# cube math. Pure (no tmux): _amux_apply_colour uses it for the live shade, and the
+# "summary shades unique" selftest exercises it directly. Empty for a non-cube bg.
+_amux_l2bg() {
+  bg=$1 fg=$2
+  case "$bg" in ''|*[!0-9]*) printf ''; return ;; esac
+  if [ "$bg" -ge 16 ] && [ "$bg" -le 231 ]; then
+    c=$((bg - 16)); b=$((c % 6)); g=$(((c / 6) % 6)); r=$(((c / 36) % 6))
+    if [ "$fg" = 16 ]; then
+      r=$((r + (6 - r) / 2)); g=$((g + (6 - g) / 2)); b=$((b + (6 - b) / 2))
+      [ "$r" -gt 5 ] && r=5; [ "$g" -gt 5 ] && g=5; [ "$b" -gt 5 ] && b=5
+    else
+      r=$((r / 2)); g=$((g / 2)); b=$((b / 2))
+    fi
+    bg2=$((16 + 36 * r + 6 * g + b))
+    if [ "$bg2" -eq "$bg" ]; then
+      [ "$fg" = 16 ] && bg2=252 || bg2=234
+    fi
+    printf '%s' "$bg2"
+  else
+    printf ''
+  fi
+}
+
 # Apply the bar colour for session $1 using palette slot $2.
 _amux_apply_colour() {
   s=$1 i=$2
@@ -99,31 +136,9 @@ _amux_apply_colour() {
   bg=${pair%% *}; rest=${pair#* }; fg=${rest%% *}
   tmux set -t "$s" status-style "bg=colour${bg},fg=colour${fg}"
 
-  # The summary rows (status-format[1..3]) get a SHADE of the same hue: keep
-  # the proven legible fg, shift the bg lightness so contrast is >= line 0 —
-  # darker when the fg is light (231), lighter when the fg is dark (16).
-  # Decompose the 6x6x6 colour cube (idx = 16 + 36r + 6g + b), scale, recompose.
-  # The fg=16 (lighten) branch mirrors colours.sh `_colour_lighten`; keep them in
-  # step if you change the cube math. Exposed as per-session @l2bg/@l2fg, consumed
-  # by status-format[1..3] in .tmux.conf.
-  case "$bg" in
-    ''|*[!0-9]*) bg2='' ;;
-    *) if [ "$bg" -ge 16 ] && [ "$bg" -le 231 ]; then
-         c=$((bg - 16)); b=$((c % 6)); g=$(((c / 6) % 6)); r=$(((c / 36) % 6))
-         if [ "$fg" = 16 ]; then
-           r=$((r + (6 - r) / 2)); g=$((g + (6 - g) / 2)); b=$((b + (6 - b) / 2))
-           [ "$r" -gt 5 ] && r=5; [ "$g" -gt 5 ] && g=5; [ "$b" -gt 5 ] && b=5
-         else
-           r=$((r / 2)); g=$((g / 2)); b=$((b / 2))
-         fi
-         bg2=$((16 + 36 * r + 6 * g + b))
-         if [ "$bg2" -eq "$bg" ]; then
-           [ "$fg" = 16 ] && bg2=252 || bg2=234
-         fi
-       else
-         bg2=''
-       fi ;;
-  esac
+  # Summary rows (status-format[1..3]) get a shade of the same hue (@l2bg/@l2fg),
+  # derived purely from bg+fg — see _amux_l2bg. Consumed by .tmux.conf.
+  bg2=$(_amux_l2bg "$bg" "$fg")
 
   if [ -n "$bg2" ]; then
     tmux set -t "$s" @l2bg "colour${bg2}"
@@ -188,10 +203,26 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
 
   # Bar palette names resolve to stable slots and round-trip.
   _assert "name->slot blue is 0"   "0"  "$(_bar_name_to_slot blue)"
-  _assert "name->slot gold is last" "$((count - 1))" "$(_bar_name_to_slot gold)"
+  _assert "name->slot violet is last" "$((count - 1))" "$(_bar_name_to_slot violet)"
   _assert "name->slot unknown empty" ""  "$(_bar_name_to_slot nosuchcolour)"
   _assert "slot->name 0 is blue"   "blue" "$(_bar_slot_name 0)"
   _assert "slot->name round-trip"  "green" "$(_bar_slot_name "$(_bar_name_to_slot green)")"
+
+  # Two sessions must never share the colour you glance at. The bar bgs are obviously
+  # unique (distinct slots), but the SUMMARY shade is what matters and a lossy cube
+  # transform can collapse neighbours onto one shade — the regression this guards.
+  # The {0,2,4} lattice keeps the transform injective; assert all three invariants.
+  _dupbg=$(printf '%s\n' "$palette" | awk '{print $1}' | sort | uniq -d | tr '\n' ' ')
+  _assert "bar bgs unique" "" "$_dupbg"
+  _dupshade=$(printf '%s\n' "$palette" \
+    | while read -r _bg _fg _nm; do _amux_l2bg "$_bg" "$_fg"; echo; done \
+    | grep . | sort | uniq -d | tr '\n' ' ')
+  _assert "summary shades unique" "" "$_dupshade"
+  # Every base must sit on the {0,2,4} cube lattice — a stray odd channel level is
+  # what would collapse a shade onto a neighbour's. (idx = 16 + 36r + 6g + b.)
+  _offlat=$(printf '%s\n' "$palette" | awk '{c=$1-16; r=int(c/36)%6; g=int(c/6)%6; b=c%6;
+    if(r%2 || g%2 || b%2) printf "%s ", $1}')
+  _assert "bar bases on {0,2,4} lattice" "" "$_offlat"
 
   # A lone newcomer takes its cksum-preferred slot.
   _assert "newcomer takes preferred slot" "$(_pref agentmux)" \

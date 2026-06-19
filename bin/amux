@@ -1023,12 +1023,12 @@ EOF
   # A pinned dir resolves to its palette slot; an unpinned dir resolves to empty.
   _assert "pin slot blue=0" "0" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-blue)"
-  _assert "pin slot magenta=3" "3" \
+  _assert "pin slot magenta=8" "8" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-magenta)"
   _assert "pin slot unpinned empty" "" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-unpinned)"
   # The reserved set lists every pinned slot, unique, space-separated.
-  _assert "reserved set" "0 3" \
+  _assert "reserved set" "0 8" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
   rm -f "$_fp"
 
@@ -1049,13 +1049,13 @@ EOF
     "$(AGENTMUX_CONFIG="$_fpu" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
   rm -f "$_fpu"
 
-  # Two dirs pinning the same colour warn, and the slot appears once (rose = 4).
+  # Two dirs pinning the same colour warn, and the slot appears once (olive = 4).
   _fpd=$(mktemp)
   cat > "$_fpd" <<'EOF'
 [amux.dirs."/tmp/amux-pin-a"]
-session_colour = "rose"
+session_colour = "olive"
 [amux.dirs."/tmp/amux-pin-b"]
-session_colour = "rose"
+session_colour = "olive"
 [[agents]]
 name = "x"
 cmd = "true"
