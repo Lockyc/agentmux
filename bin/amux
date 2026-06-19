@@ -928,8 +928,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "colour line paste field" "ok" "$_got"
 
   # --colours preview also lists the session bar palette (so pins are discoverable).
-  # 'cobalt' is bar-only (not a tab name), so this genuinely needs the bar render.
-  case "$cols" in *"Session bar colours"*cobalt*) _got=present ;; *) _got=absent ;; esac
+  # 'amber' is bar-only (not a tab name), so this genuinely needs the bar render.
+  case "$cols" in *"Session bar colours"*amber*) _got=present ;; *) _got=absent ;; esac
   _assert "colours preview lists bar names" "present" "$_got"
 
   # _amux_shquote wraps and escapes embedded single quotes.
@@ -1013,8 +1013,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   cat > "$_fp" <<'EOF'
 [amux.dirs."/tmp/amux-pin-blue"]
 session_colour = "blue"
-[amux.dirs."/tmp/amux-pin-cyan"]
-session_colour = "cyan"
+[amux.dirs."/tmp/amux-pin-magenta"]
+session_colour = "magenta"
 [[agents]]
 name = "x"
 cmd = "true"
@@ -1023,8 +1023,8 @@ EOF
   # A pinned dir resolves to its palette slot; an unpinned dir resolves to empty.
   _assert "pin slot blue=0" "0" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-blue)"
-  _assert "pin slot cyan=3" "3" \
-    "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-cyan)"
+  _assert "pin slot magenta=3" "3" \
+    "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-pin-magenta)"
   _assert "pin slot unpinned empty" "" \
     "$(AGENTMUX_CONFIG="$_fp" _amux_json_cache="" _amux_bar_pin_slot /tmp/amux-unpinned)"
   # The reserved set lists every pinned slot, unique, space-separated.
@@ -1049,7 +1049,7 @@ EOF
     "$(AGENTMUX_CONFIG="$_fpu" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
   rm -f "$_fpu"
 
-  # Two dirs pinning the same colour warn, and the slot appears once (rose = 7).
+  # Two dirs pinning the same colour warn, and the slot appears once (rose = 4).
   _fpd=$(mktemp)
   cat > "$_fpd" <<'EOF'
 [amux.dirs."/tmp/amux-pin-a"]
@@ -1064,7 +1064,7 @@ EOF
   _dw=$(AGENTMUX_CONFIG="$_fpd" _amux_json_cache="" _amux_bar_reserved 2>&1 >/dev/null)
   case "$_dw" in *"pinned by more than one dir"*) _got=warns ;; *) _got="silent:$_dw" ;; esac
   _assert "reserved warns on duplicate pin" "warns" "$_got"
-  _assert "reserved dedups duplicate pin" "7" \
+  _assert "reserved dedups duplicate pin" "4" \
     "$(AGENTMUX_CONFIG="$_fpd" _amux_json_cache="" _amux_bar_reserved 2>/dev/null)"
   rm -f "$_fpd"
 

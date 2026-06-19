@@ -36,10 +36,11 @@
 # [amux.dirs."<dir>"].session_colour; names are appended LAST so every positional
 # `bg fg` parse (and the colours.sh cross-palette selftest's `awk '{print $1}'`)
 # is unaffected.
+# Bar colours are intentionally NON-blue except `blue` itself (pinned/reserved for
+# locus): the agent tab palette already owns the cool region, so any extra bar
+# blues (the old teal/cobalt/cyan) could only cluster next to `blue` and read as
+# it. Keeping one blue means an unpinned session never auto-lands on a near-blue.
 palette='24 231 blue
-30 231 teal
-25 231 cobalt
-31 231 cyan
 28 231 green
 90 231 purple
 127 231 magenta
@@ -171,15 +172,13 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
     for _r in $reserved; do u="$u$_r "; done
     for ln in $data; do
       nm=${ln%%:*}; fi=${ln#*:}; [ "$fi" = "$ln" ] && fi=''
-      case "$fi" in ''|*[!0-9]*) ;; *) u="$u$fi " ;; esac
+      case "$fi" in ''|*[!0-9]*) ;; *) [ "$fi" -lt "$count" ] && u="$u$fi " ;; esac
     done
     out=''
     for ln in $data; do
       nm=${ln%%:*}; fi=${ln#*:}; [ "$fi" = "$ln" ] && fi=''
-      case "$fi" in
-        ''|*[!0-9]*) idx=$(_amux_pick_slot "$nm" "$count" "$u"); u="$u$idx " ;;
-        *) idx=$fi ;;
-      esac
+      case "$fi" in ''|*[!0-9]*) fi='' ;; *) [ "$fi" -ge "$count" ] && fi='' ;; esac
+      if [ -z "$fi" ]; then idx=$(_amux_pick_slot "$nm" "$count" "$u"); u="$u$idx "; else idx=$fi; fi
       out="$out$nm=$idx
 "
     done
@@ -192,7 +191,7 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
   _assert "name->slot gold is last" "$((count - 1))" "$(_bar_name_to_slot gold)"
   _assert "name->slot unknown empty" ""  "$(_bar_name_to_slot nosuchcolour)"
   _assert "slot->name 0 is blue"   "blue" "$(_bar_slot_name 0)"
-  _assert "slot->name round-trip"  "teal" "$(_bar_slot_name "$(_bar_name_to_slot teal)")"
+  _assert "slot->name round-trip"  "green" "$(_bar_slot_name "$(_bar_name_to_slot green)")"
 
   # A lone newcomer takes its cksum-preferred slot.
   _assert "newcomer takes preferred slot" "$(_pref agentmux)" \
@@ -204,14 +203,15 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
   _assert "newcomer avoids reserved slot (no live holder)" "no" \
     "$([ "$(_get "$(_sim 'locus:' "$_rp")" locus)" = "$_rp" ] && echo yes || echo no)"
 
-  # De-dup at birth: agentmux & reductable both PREFER the same slot, but two
-  # newcomers must still land on distinct slots.
-  _assert "agentmux & reductable collide (pure hash)" "yes" \
-    "$([ "$(_pref agentmux)" = "$(_pref reductable)" ] && echo yes || echo no)"
-  o=$(_sim 'agentmux:
-reductable:')
+  # De-dup at birth: two names that PREFER the same slot must still land on
+  # distinct slots. (The colliding pair is tied to the palette size — dev & test
+  # collide at the current count; re-pick from `cksum % count` if it changes.)
+  _assert "dev & test collide (pure hash)" "yes" \
+    "$([ "$(_pref dev)" = "$(_pref test)" ] && echo yes || echo no)"
+  o=$(_sim 'dev:
+test:')
   _assert "newcomers de-dup at birth" "no" \
-    "$([ "$(_get "$o" agentmux)" = "$(_get "$o" reductable)" ] && echo yes || echo no)"
+    "$([ "$(_get "$o" dev)" = "$(_get "$o" test)" ] && echo yes || echo no)"
 
   # The whole point: a FROZEN slot never moves when other sessions come or go.
   # agentmux is pinned to 0; adding two newcomers must not budge it, and they must
@@ -229,6 +229,12 @@ reductable:')
   # to 0 stays at 0 whether or not reductable is present.
   solo=$(_get "$(_sim 'agentmux:0')" agentmux)
   _assert "survivor unmoved when peer removed" "0" "$solo"
+
+  # An out-of-range stored slot (e.g. left over from a larger palette before a
+  # shrink) is treated as a newcomer and reassigned into range, never kept as-is.
+  oor=$(_get "$(_sim 'stale:99')" stale)
+  _assert "out-of-range slot reassigned in range" "yes" \
+    "$([ "$oor" -lt "$count" ] 2>/dev/null && echo yes || echo no)"
 
   # A full palette of distinct newcomers fills every slot exactly once.
   big=$(i=0; while [ "$i" -lt "$count" ]; do echo "s$i:"; i=$((i + 1)); done)
@@ -270,7 +276,7 @@ _amux_reconcile() {
   for s in $names; do
     [ -n "$s" ] || continue
     fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
-    case "$fi" in ''|*[!0-9]*) ;; *) used="$used$fi " ;; esac
+    case "$fi" in ''|*[!0-9]*) ;; *) [ "$fi" -lt "$count" ] && used="$used$fi " ;; esac
   done
 
   # Pass 2: repaint everyone. A session with a frozen slot is painted from it as-is;
@@ -279,14 +285,16 @@ _amux_reconcile() {
   for s in $names; do
     [ -n "$s" ] || continue
     fi=$(tmux show-options -t "$s" -qv @l1idx 2>/dev/null)
-    case "$fi" in
-      ''|*[!0-9]*)
-        idx=$(_amux_pick_slot "$s" "$count" "$used")
-        used="$used$idx "
-        tmux set -t "$s" @l1idx "$idx"
-        ;;
-      *) idx=$fi ;;
-    esac
+    # Empty, non-numeric, OR out-of-range (e.g. a slot left over from a larger
+    # palette) → treat as a newcomer and reassign, never paint a missing slot.
+    case "$fi" in ''|*[!0-9]*) fi='' ;; *) [ "$fi" -ge "$count" ] && fi='' ;; esac
+    if [ -z "$fi" ]; then
+      idx=$(_amux_pick_slot "$s" "$count" "$used")
+      used="$used$idx "
+      tmux set -t "$s" @l1idx "$idx"
+    else
+      idx=$fi
+    fi
     _amux_apply_colour "$s" "$idx"
   done
   IFS=$oldifs
