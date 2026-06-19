@@ -364,7 +364,7 @@ The coloured status bar and 3 extra summary rows only appear in `amux` sessions 
 **Pipeline** (runs detached on every `working` hook):
 1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
 2. `claude/digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
-3. `summarise.sh stand` — sends the digest to a local OpenAI-compatible endpoint; receives `"<subject>. done: …; now: …; next: …"`
+3. `summarise.sh` (stand mode) — sends the digest to a local OpenAI-compatible endpoint; receives `"<subject>. done: …; now: …; next: …"`
 4. Result written to `/tmp/agentmux-status-<pane_key>.txt`
 5. `summary_rows.sh` (called by tmux `status-format[1-3]`) splits that into three display rows
 
