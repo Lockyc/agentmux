@@ -62,7 +62,7 @@ timeout = 20
 # it deterministic. This is the SESSION bar colour, distinct from an agent's tab
 # `colour` above. Run `amux --colours` for the bar colour names. e.g.:
 #
-# [amux.dirs."~/Developer/github.com/lockyc/locus"]
+# [amux.dirs."~/Developer/github.com/you/myproject"]
 # session_colour = "blue"
 
 [frame]

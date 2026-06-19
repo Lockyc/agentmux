@@ -385,7 +385,7 @@ Each session gets a status-bar colour seeded from a stable hash of its name, so 
 Because two names can hash to the same slot, a newcomer that collides de-dups onto the next free slot. Which one wins is launch-order-dependent, so two colliding projects can swap colours between runs. To make a project's colour fixed, **pin it**:
 
 ```toml
-[amux.dirs."~/Developer/github.com/lockyc/locus"]
+[amux.dirs."~/Developer/github.com/you/myproject"]
 session_colour = "blue"
 ```
 
