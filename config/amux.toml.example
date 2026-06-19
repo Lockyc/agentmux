@@ -15,6 +15,11 @@
 #   keep_alive: keep the pane open after the agent exits (re-exec's your shell)
 #   reattach:   wrap in reattach-to-user-namespace (macOS clipboard inside tmux);
 #               requires keep_alive = true, else it's ignored with a warning
+#   resume:     resume program for `amux --log`. The log records a default resume
+#               command per window (e.g. `claude --resume <id>`); set `resume` to
+#               override just the executable, so windows this agent opened show
+#               `<resume> --resume <id>`. Useful when an agent runs a wrapper —
+#               e.g. resume = "claude-work" → `claude-work --resume <id>`.
 
 [log]
 # Durable session log: record each agent window amux opens so you can recover
@@ -127,6 +132,10 @@ flag = "w"
 cmd = "CLAUDE_CONFIG_DIR=~/.claude-work claude"
 dirs = ["~/work", "~/clients"]
 colour = "teal"
+# `amux --log` resumes this agent's windows with `claude-work --resume <id>`
+# instead of the default `claude --resume <id>` (e.g. a wrapper that pins the
+# work config dir). Omit to use the default program the adapter recorded.
+resume = "claude-work"
 
 [[agents]]
 name = "ollama"

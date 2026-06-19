@@ -112,8 +112,10 @@ _sl_boot_epoch() {
 
 # Fold ledger → TSV, one row per opened window (latest open + latest resume per
 # (socket,pid,window_id) tuple). Columns: socket pid window_id session
-# window_name cwd agent resume_cmd. Whether a window is still open is decided at
-# read time by sl_list (live server → intersect with reality), not here.
+# window_name cwd agent resume_cmd maxts. `maxts` (the newest event ts for the
+# window) drives sl_list's most-recent-first ordering. Whether a window is still
+# open is decided at read time by sl_list (live server → intersect with reality),
+# not here.
 # Read line-by-line with `fromjson?` so a single torn/blank line (e.g. a
 # kill-server mid-append) is skipped, not fatal — the whole point is surviving
 # a crash, and a slurp (`-s`) aborts the entire roster on one bad line.
@@ -127,31 +129,27 @@ _sl_fold() {  # <ledger>
         | select($o != null)
         | ( map(select(.event=="resume")) | last ) as $r
         | [ $o.socket_path, ($o.server_pid|tostring), $o.window_id, $o.session,
-            $o.window_name, $o.cwd, $o.agent, ($r.resume_cmd // "") ] | @tsv )
+            $o.window_name, $o.cwd, $o.agent, ($r.resume_cmd // ""),
+            (map(.ts) | max | tostring) ] | @tsv )
     | .[]
   ' "$1"
 }
 
-# Print the rows for one server. Columns: socket pid window_id session
-# window_name cwd agent resume_cmd. For a LIVE server, <livewins> is the set of
-# window ids actually still open there — rows whose window is gone are skipped.
-# For a LOST (dead) server, <livewins> is empty and every recorded window shows
-# (the recovery roster — we cannot intersect a server that no longer exists).
-_sl_print_server() {  # <rowsfile> <socket> <pid> <state> <livewins>
-  if [ "$4" = live ]; then printf '\n● live   server %s\n' "$3"
-  else printf '\n✗ lost   server %s · died (kill-server or reboot)\n' "$3"; fi
-  # <livewins> arrives newline-separated (one window id per line, from tmux
-  # list-windows); flatten to spaces — awk -v rejects a value with newlines.
-  _live=$(printf '%s' "$5" | tr '\n' ' ')
-  awk -F"$TAB" -v sp="$2" -v pid="$3" -v state="$4" -v live="$_live" '
-    BEGIN { n = split(live, a, /[ \n]+/); for (i = 1; i <= n; i++) if (a[i] != "") L[a[i]] = 1 }
-    $1 == sp && $2 == pid {
-      if (state == "live" && !($3 in L)) next
-      loc = $4 ":" $7
-      if ($8 == "") cmd = "cd " $6 "   (relaunch — no resume hint)"
-      else          cmd = "cd " $6 "; " $8
-      printf "   %-22s %s\n", loc, cmd
-    }' "$1"
+# Map of agent name → resume program, from amux.toml's [[agents]] `resume` fields.
+# Emits `agent<TAB>program` lines. The program replaces the leading token of a
+# window's stored resume_cmd at display time (claude → claude-work), letting the
+# log stay agent-agnostic (the adapter owns the `--resume <id>` syntax) while
+# amux config overrides just the executable. SESSION_LOG_RESUME_MAP overrides for
+# tests (mirrors the SESSION_LOG_LIVE_* hooks), bypassing toml2json.
+_sl_resume_map() {
+  if [ -n "${SESSION_LOG_RESUME_MAP+x}" ]; then
+    printf '%s\n' "$SESSION_LOG_RESUME_MAP"
+    return 0
+  fi
+  cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
+  [ -f "$cfg" ] || return 0
+  toml2json < "$cfg" 2>/dev/null \
+    | jq -r '.agents[]? | select(.resume) | [.name, .resume] | @tsv' 2>/dev/null
 }
 
 sl_list() {
@@ -160,21 +158,72 @@ sl_list() {
   _sl_fold "$(_sl_ledger)" > "$rows"
   if [ ! -s "$rows" ]; then echo "amux: no logged sessions"; rm -f "$rows"; return 0; fi
 
-  servers=$(cut -f1,2 "$rows" | sort -u)
-  # Lost first (the recovery roster), then live.
-  for want in lost live; do
-    printf '%s\n' "$servers" | while IFS="$TAB" read -r socket pid; do
-      [ -n "$pid" ] || continue
-      if _sl_server_live "$socket" "$pid"; then state=live; else state=lost; fi
-      [ "$state" = "$want" ] || continue
-      if [ "$state" = live ]; then
-        _sl_print_server "$rows" "$socket" "$pid" live "$(_sl_live_windows "$socket")"
-      else
-        _sl_print_server "$rows" "$socket" "$pid" lost ""
-      fi
+  # Per-server liveness, computed once. For a LIVE server, capture its still-open
+  # window ids (space-flattened); a row whose window is gone is omitted at read
+  # time (deliberately closed, not a crash). A LOST server's full roster shows —
+  # the recovery list — since we cannot intersect a server that no longer exists.
+  state=$(mktemp) || { rm -f "$rows"; return 1; }
+  cut -f1,2 "$rows" | sort -u | while IFS="$TAB" read -r socket pid; do
+    [ -n "$pid" ] || continue
+    if _sl_server_live "$socket" "$pid"; then
+      _lw=$(_sl_live_windows "$socket" | tr '\n' ' ')
+      printf 'S\t%s\t%s\tlive\t%s\n' "$socket" "$pid" "$_lw"
+    else
+      printf 'S\t%s\t%s\tlost\t\n' "$socket" "$pid"
+    fi
+  done > "$state"
+
+  # Annotate each folded window (tag live/lost, drop closed-on-live, swap the
+  # resume program), then group by project: cd printed once, projects ordered
+  # most-recent-first, windows within likewise. Side tables (S = server state,
+  # P = resume map) precede the R rows so they're seen first by the join awk.
+  {
+    cat "$state"
+    _sl_resume_map | while IFS="$TAB" read -r _ag _prog; do
+      [ -n "$_ag" ] || continue
+      printf 'P\t%s\t%s\n' "$_ag" "$_prog"
     done
-  done
-  rm -f "$rows"
+    awk '{ print "R\t" $0 }' "$rows"
+  } | awk -F"$TAB" -v OFS="$TAB" '
+      $1 == "S" { st[$2 SUBSEP $3] = $4; lw[$2 SUBSEP $3] = $5; next }
+      $1 == "P" { prog[$2] = $3; next }
+      $1 == "R" {
+        socket=$2; pid=$3; wid=$4; cwd=$7; agent=$8; rcmd=$9; ts=$10
+        key = socket SUBSEP pid
+        if (st[key] == "live") {
+          n = split(lw[key], a, " "); open = 0
+          for (i = 1; i <= n; i++) if (a[i] == wid) { open = 1; break }
+          if (!open) next                       # closed-on-live → omit
+          tag = "● live"
+        } else tag = "✗ lost"
+        if (rcmd == "") { hint = 0; cmd = "" }
+        else {
+          hint = 1; p = prog[agent]
+          if (p != "") { sp = index(rcmd, " "); rcmd = (sp > 0) ? p substr(rcmd, sp) : p }
+          cmd = rcmd
+        }
+        idx++; C[idx]=cwd; T[idx]=ts; G[idx]=tag; A[idx]=agent; H[idx]=hint; M[idx]=cmd
+        if (!(cwd in mx) || ts+0 > mx[cwd]+0) mx[cwd] = ts
+      }
+      END { for (i = 1; i <= idx; i++) print mx[C[i]], C[i], T[i], G[i], A[i], H[i], M[i] }
+    ' \
+  | sort -t"$TAB" -k1,1nr -k2,2 -k3,3nr \
+  | awk -F"$TAB" -v home="$HOME" '
+      {
+        cwd=$2; tag=$4; agent=$5; hint=$6; cmd=$7
+        disp = cwd
+        if (home != "" && (cwd == home || index(cwd, home "/") == 1)) disp = "~" substr(cwd, length(home) + 1)
+        if (cwd != last) {
+          print ""
+          print disp "  (" agent ")"
+          print "   cd " disp
+          last = cwd
+        }
+        if (hint == "1") printf "   %s   %s\n", cmd, tag
+        else             print  "   (relaunch — no resume hint)"
+      }'
+
+  rm -f "$rows" "$state"
 }
 
 # One-time recovery nudge. Prints a single line iff a previous tmux server died
@@ -342,33 +391,71 @@ rm -f "$ledger"
 AGENTMUX_SESSION_LOG=0 sl_open claude
 _assert "disabled: no ledger" "0" "$([ -f "$ledger" ] && echo 1 || echo 0)"
 
-# --- fold + list reconcile, with stubbed liveness + live-window intersection ---
+# --- fold carries the latest-ts column (recency ordering) ---
 rm -f "$ledger"; unset AGENTMUX_SESSION_LOG; AGENTMUX_SESSION_LOG=1
-# server 4242 live (@1 & @9 still open, @5 since closed); 9981 dead (one window)
 cat > "$ledger" <<'JSON'
-{"ts":1,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"claude"}
-{"ts":2,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"scratch","window_id":"@5","window_name":"claude","cwd":"/w/scratch","agent":"claude"}
-{"ts":3,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"build","window_id":"@9","window_name":"claude","cwd":"/w/build","agent":"claude"}
-{"ts":4,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"red","window_id":"@1","window_name":"claude","cwd":"/w/red","agent":"claude"}
-{"ts":5,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
+{"ts":10,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":42,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
+{"ts":20,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"red","window_id":"@1","window_name":"claude","cwd":"/w/red","agent":"personal"}
+JSON
+foldout=$(_sl_fold "$ledger")
+_assert "fold lists every opened window" "2" "$(printf '%s\n' "$foldout" | grep -c .)"
+_assert "fold spans 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
+# trailing column is max(ts) over the window's events: locus = max(10,42) = 42
+_assert "fold trailing col is max ts"    "42" "$(printf '%s\n' "$foldout" | awk -F'\t' '$6=="/w/locus"{print $NF}')"
+
+# --- project-grouped list: group by cwd, cd once, per-line live/lost tags,
+#     per-agent resume-program swap, recency order, closed-on-live omission ---
+rm -f "$ledger"
+# Resume map (stubbed, bypassing toml2json): work->claude-work, personal->claude-personal.
+# 'ollama' is intentionally absent → its resume cmd prints verbatim (no swap).
+RMAP="work$(printf '\t')claude-work
+personal$(printf '\t')claude-personal"
+cat > "$ledger" <<JSON
+{"ts":200,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":201,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@1","label":"c3d4","resume_cmd":"claude --resume c3d4"}
+{"ts":60,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"scratch","window_id":"@5","window_name":"claude","cwd":"/w/scratch","agent":"personal"}
+{"ts":61,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@5","label":"zzz","resume_cmd":"claude --resume zzz"}
+{"ts":100,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
+{"ts":50,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"notes","window_id":"@2","window_name":"claude","cwd":"/w/notes","agent":"personal"}
+{"ts":51,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@2","label":"e5f6","resume_cmd":"claude --resume e5f6"}
+{"ts":40,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"tools","window_id":"@3","window_name":"claude","cwd":"/w/tools","agent":"ollama"}
+{"ts":41,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@3","label":"xyz","resume_cmd":"claude --resume xyz"}
+{"ts":30,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"bare","window_id":"@4","window_name":"claude","cwd":"/w/bare","agent":"personal"}
+{"ts":71,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"home","window_id":"@6","window_name":"claude","cwd":"$HOME/proj","agent":"personal"}
+{"ts":72,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@6","label":"h1","resume_cmd":"claude --resume h1"}
 JSON
 
-foldout=$(_sl_fold "$ledger")
-_assert "fold lists every opened window" "4" "$(printf '%s\n' "$foldout" | grep -c .)"
-_assert "fold spans 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
-
-# live server 4242 intersects with its currently-open windows. MULTIPLE live
-# windows (@1 @9) exercise the newline-separated list from tmux — @5 (closed)
-# drops off. Dead server 9981 shows its full roster (no intersection possible).
-out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_LIVE_WINDOWS="@1 @9" sl_list 2>&1)
-_assert "no awk error on multi-window live" "0" "$(printf '%s\n' "$out" | grep -c 'awk:')"
-_assert "list flags 9981 lost"          "1" "$(printf '%s\n' "$out" | grep -c 'lost   server 9981')"
-_assert "list flags 4242 live"          "1" "$(printf '%s\n' "$out" | grep -c 'live   server 4242')"
-_assert "live: shows open window @1"    "1" "$(printf '%s\n' "$out" | grep -c '/w/locus')"
-_assert "live: shows open window @9"    "1" "$(printf '%s\n' "$out" | grep -c '/w/build')"
-_assert "live: hides closed window @5"  "0" "$(printf '%s\n' "$out" | grep -c '/w/scratch')"
-_assert "lost: full roster shown"       "1" "$(printf '%s\n' "$out" | grep -c '/w/red')"
-_assert "lost: shows resume cmd"        "1" "$(printf '%s\n' "$out" | grep -c 'claude --resume a1b2')"
+# server 4242 live, only @1 still open (@5 since closed → omit); 9981 dead.
+out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_LIVE_WINDOWS="@1" SESSION_LOG_RESUME_MAP="$RMAP" sl_list 2>&1)
+_assert "no awk error"                   "0" "$(printf '%s\n' "$out" | grep -c 'awk:')"
+# cd printed ONCE per project even though locus has two windows (live + lost)
+_assert "cd printed once per project"    "1" "$(printf '%s\n' "$out" | grep -c '^   cd /w/locus$')"
+# locus heading carries its (newest window's) agent
+_assert "project heading shows agent"    "1" "$(printf '%s\n' "$out" | grep -c '^/w/locus  (work)$')"
+# program swap: work -> claude-work, tagged by per-line state
+_assert "live line: swapped + tagged"    "1" "$(printf '%s\n' "$out" | grep -c 'claude-work --resume c3d4   ● live')"
+_assert "lost line: swapped + tagged"    "1" "$(printf '%s\n' "$out" | grep -c 'claude-work --resume a1b2   ✗ lost')"
+_assert "personal swap"                  "1" "$(printf '%s\n' "$out" | grep -c 'claude-personal --resume e5f6   ✗ lost')"
+# no resume config for ollama → verbatim, NOT swapped
+_assert "unconfigured agent: verbatim"   "1" "$(printf '%s\n' "$out" | grep -c 'claude --resume xyz   ✗ lost')"
+# closed-on-live window omitted entirely (its label never surfaces)
+_assert "closed-on-live omitted"         "0" "$(printf '%s\n' "$out" | grep -c 'zzz')"
+_assert "closed-on-live project omitted" "0" "$(printf '%s\n' "$out" | grep -c '/w/scratch')"
+# window with no resume hint → cd-only relaunch note, no resume command
+_assert "no-hint window: relaunch note"  "1" "$(printf '%s\n' "$out" | grep -c 'relaunch — no resume hint')"
+# $HOME abbreviated to ~ in heading and cd
+_assert "home dir abbreviated in cd"     "1" "$(printf '%s\n' "$out" | grep -c '^   cd ~/proj$')"
+_assert "home dir abbreviated heading"   "1" "$(printf '%s\n' "$out" | grep -c '^~/proj  (personal)$')"
+# recency order: locus (max ts 201) heading precedes notes (max ts 51) heading
+_locus_ln=$(printf '%s\n' "$out" | grep -n '^/w/locus' | head -1 | cut -d: -f1)
+_notes_ln=$(printf '%s\n' "$out" | grep -n '^/w/notes' | head -1 | cut -d: -f1)
+_assert "projects ordered by recency"    "yes" "$([ "${_locus_ln:-0}" -lt "${_notes_ln:-0}" ] 2>/dev/null && echo yes || echo no)"
+# within locus, the newer window (c3d4, ts 201) precedes the older (a1b2, ts 101)
+_c3d4_ln=$(printf '%s\n' "$out" | grep -n 'c3d4' | head -1 | cut -d: -f1)
+_a1b2_ln=$(printf '%s\n' "$out" | grep -n 'a1b2' | head -1 | cut -d: -f1)
+_assert "windows ordered by recency"     "yes" "$([ "${_c3d4_ln:-0}" -lt "${_a1b2_ln:-0}" ] 2>/dev/null && echo yes || echo no)"
 
 # --- resume enrichment + dedup (uses the stubbed tmux: pid 4242, @3) ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
