@@ -59,7 +59,7 @@ _vc_stale() {
   # "fresh" and the refresh is skipped — acceptable, since that only happens
   # with a broken base toolchain, in which case the curl fetch would fail too.
   _now=$(date +%s 2>/dev/null || echo 0)
-  _then=$(stat -f %m "$VC_STAMP" 2>/dev/null || stat -c %Y "$VC_STAMP" 2>/dev/null || echo 0)
+  _then=$(stat -c %Y "$VC_STAMP" 2>/dev/null || stat -f %m "$VC_STAMP" 2>/dev/null || echo 0)
   [ "$((_now - _then))" -ge "$VC_MAX_AGE" ]
 }
 

@@ -12,6 +12,8 @@ Shell scripts only — split between bash, POSIX sh, and (for the fish integrati
 
 When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
 
+**Footgun — portable file mtime:** read it as `stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0` — GNU form FIRST, BSD form as fallback. Do not flip to BSD-first even though the project targets macOS: when a GNU-semantics `stat` (Homebrew coreutils/uutils) shadows BSD `stat` in PATH, `stat -f %m` reads `-f` as `--file-system`, exits nonzero *and* leaks a `File: …` block to stdout, so a BSD-first `||` chain concatenates that block with the fallback's mtime into a non-numeric value that breaks later arithmetic. GNU-first sidesteps it (`-c %Y` works under GNU, fails cleanly to stderr under BSD).
+
 ## Layout
 
 | Path | Purpose |

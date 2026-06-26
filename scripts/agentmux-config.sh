@@ -25,8 +25,8 @@ _amux_json() {
   # Avoids toml2json on every hook invocation (in-memory cache only lives per-process).
   local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux"
   local mtime
-  mtime=$(stat -f %m "$AGENTMUX_CONFIG" 2>/dev/null \
-       || stat -c %Y "$AGENTMUX_CONFIG" 2>/dev/null \
+  mtime=$(stat -c %Y "$AGENTMUX_CONFIG" 2>/dev/null \
+       || stat -f %m "$AGENTMUX_CONFIG" 2>/dev/null \
        || echo "0")
   local cache_file="$cache_dir/config-${mtime}.json"
 
@@ -283,7 +283,7 @@ TOML
   _assert "build_cmd bare"                 'myagent'                                                 "$(agentmux_build_cmd 3)"
   # Tidy: mktemp file + the disk cache entry it produced. The mtime-keyed
   # cache cleanup runs on next access anyway, but explicit is friendlier.
-  _tmp_mtime=$(stat -f %m "$_tmpcfg" 2>/dev/null || stat -c %Y "$_tmpcfg" 2>/dev/null || echo 0)
+  _tmp_mtime=$(stat -c %Y "$_tmpcfg" 2>/dev/null || stat -f %m "$_tmpcfg" 2>/dev/null || echo 0)
   rm -f "$_tmpcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_tmp_mtime}.json"
 
   # Self-contained coverage for agentmux_agent_for_dir's resolution rules —
@@ -318,7 +318,7 @@ TOML
   _assert "dir broad subtree"       "broad"  "$(agentmux_agent_for_dir /tmp/amux-route/other)"
   _assert "dir tie first in file"   "tieA"   "$(agentmux_agent_for_dir /tmp/amux-tie/z)"
   _assert "dir routing no match"    ""       "$(agentmux_agent_for_dir /tmp/elsewhere)"
-  _dir_mtime=$(stat -f %m "$_dircfg" 2>/dev/null || stat -c %Y "$_dircfg" 2>/dev/null || echo 0)
+  _dir_mtime=$(stat -c %Y "$_dircfg" 2>/dev/null || stat -f %m "$_dircfg" 2>/dev/null || echo 0)
   rm -f "$_dircfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_dir_mtime}.json"
 
   # Directory-scoped [frame] overrides. Same match rules as agentmux_agent_for_dir
@@ -364,7 +364,7 @@ TOML
   _assert "frame base default true" "true"  "$(agentmux_frame_field default /tmp/amux-frame)"
   # ~ key expands to $HOME and matches a subdir.
   _assert "frame tilde key"         "45" "$(agentmux_frame_field left "$HOME/amux-fr-home/proj")"
-  _fr_mtime=$(stat -f %m "$_frcfg" 2>/dev/null || stat -c %Y "$_frcfg" 2>/dev/null || echo 0)
+  _fr_mtime=$(stat -c %Y "$_frcfg" 2>/dev/null || stat -f %m "$_frcfg" 2>/dev/null || echo 0)
   rm -f "$_frcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_fr_mtime}.json"
 
   # [amux] shares the same dir-scoped engine as [frame]. Cover a base read, a
@@ -387,7 +387,7 @@ TOML
   _assert "amux fallback prefix"  "C-a"     "$(agentmux_amux_field prefix /tmp/elsewhere)"
   _assert "amux tilde prefix"     "C-o"     "$(agentmux_amux_field prefix "$HOME/amux-pfx-home/x")"
   _assert "amux absent field"     ""        "$(agentmux_amux_field nonexistent)"
-  _am_mtime=$(stat -f %m "$_amcfg" 2>/dev/null || stat -c %Y "$_amcfg" 2>/dev/null || echo 0)
+  _am_mtime=$(stat -c %Y "$_amcfg" 2>/dev/null || stat -f %m "$_amcfg" 2>/dev/null || echo 0)
   rm -f "$_amcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_am_mtime}.json"
 
   echo "---"; echo "Passed: $pass  Failed: $fail"

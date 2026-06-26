@@ -133,7 +133,13 @@ GATE="${AGENTMUX_STRIP_GATE_BIN:-$HOME/.agentmux/scripts/strip_unbacked_done.sh}
 sum_ok=1
 if [ "$emoji" = "⚡" ] && [ -z "$prompt" ]; then
   _now=$(date +%s 2>/dev/null || echo 0)
-  _last=$(stat -f %m "$sumtsfile" 2>/dev/null || stat -c %Y "$sumtsfile" 2>/dev/null || echo 0)
+  # GNU `stat -c %Y` is tried BEFORE BSD `stat -f %m` on purpose — do not flip.
+  # When a GNU-semantics stat (coreutils/uutils) shadows BSD stat in PATH,
+  # `stat -f %m` reads `-f` as --file-system, exits nonzero (triggering the ||)
+  # AND leaks a "File: …" block to stdout, so the two outputs concatenate into a
+  # non-numeric value that breaks the arithmetic below. GNU-first avoids it:
+  # `-c %Y` works under GNU, and fails cleanly (stderr only) under BSD.
+  _last=$(stat -c %Y "$sumtsfile" 2>/dev/null || stat -f %m "$sumtsfile" 2>/dev/null || echo 0)
   [ "$((_now - _last))" -lt "${AGENTMUX_SUM_THROTTLE:-30}" ] && sum_ok=0
 fi
 
@@ -276,8 +282,8 @@ if [ "$2" = "--notify" ]; then
 
   if [ -d "$lockdir" ]; then
     now=$(date +%s)
-    last=$(stat -f %m "$lockdir" 2>/dev/null \
-        || stat -c %Y "$lockdir" 2>/dev/null \
+    last=$(stat -c %Y "$lockdir" 2>/dev/null \
+        || stat -f %m "$lockdir" 2>/dev/null \
         || echo 0)
     if [ "$((now - last))" -lt "$cooldown" ]; then
       exit 0

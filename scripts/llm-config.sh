@@ -17,7 +17,7 @@
 _amux_config_json() {
   _cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
   [ -f "$_cfg" ] || return 1
-  _mtime=$(stat -f %m "$_cfg" 2>/dev/null || stat -c %Y "$_cfg" 2>/dev/null || echo 0)
+  _mtime=$(stat -c %Y "$_cfg" 2>/dev/null || stat -f %m "$_cfg" 2>/dev/null || echo 0)
   _cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_mtime}.json"
   if [ -f "$_cache" ]; then
     cat "$_cache"
