@@ -288,10 +288,11 @@ if [ "$2" = "--notify" ]; then
   # came from. We're inside tmux, so wrap it in tmux's passthrough envelope (needs `allow-passthrough
   # on`, set in agentmux.conf): DCS `tmux;` + the payload with every ESC doubled + ST. Write it to the
   # pane's own tty (#{pane_tty}) so it flows up through tmux regardless of where the hook's stdout
-  # points. `;` is the OSC field separator, so strip it from the title/body. A non-warden / non-OSC-777
-  # terminal simply ignores the sequence (the trade-off for dropping osascript).
-  title=$(printf '%s · %s' "$agent_name" "$project" | tr ';' ',')
-  body=$(printf '%s' "$3" | tr ';' ',')
+  # points. `;` is the OSC field separator, and control chars (ESC/BEL/…) could terminate the OSC
+  # early or inject their own escapes — strip both from title/body so an arbitrary message can't
+  # break out of the sequence. A non-warden / non-OSC-777 terminal just ignores it (osascript trade-off).
+  title=$(printf '%s · %s' "$agent_name" "$project" | LC_ALL=C tr -d ';[:cntrl:]')
+  body=$(printf '%s' "$3" | LC_ALL=C tr -d ';[:cntrl:]')
   pane_tty=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_tty}' 2>/dev/null)
   if [ -n "$pane_tty" ]; then
     printf '\033Ptmux;\033\033]777;notify;%s;%s\007\033\\' "$title" "$body" > "$pane_tty"
