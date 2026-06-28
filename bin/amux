@@ -421,16 +421,6 @@ _amux_frame() {
     # Per-session (not -g): the frame socket can host several frames, each in its own
     # project, and a global option would let the last launch clobber the others.
     tmux -L "$sock" set -t "$fsess" @amux_project "$(basename "$PWD")"
-    # Reset-split data ([frame] '=' binding in frame.conf): the configured left %
-    # and the term (left-column) pane id, so a dragged divider can snap back to
-    # $left%. Per-session like @amux_project — each frame on the shared socket has
-    # its own width and pane. @amux_left_pane is left_pid (the bottom scratch
-    # terminal even when the column is vertically split), so resizing its width
-    # resizes the whole left column. Both are set once at creation alongside the
-    # binding in frame.conf (also a fresh-server-only thing), so they activate
-    # together: an old frame predating this feature lacks both until rebuilt.
-    tmux -L "$sock" set -t "$fsess" @amux_left "$left"
-    tmux -L "$sock" set -t "$fsess" @amux_left_pane "$left_pid"
     # Status bar position ([frame] status_position): frame.conf relies on tmux's
     # default (bottom); override per-session here when "top" is requested.
     tmux -L "$sock" set -t "$fsess" status-position "$status_pos"
@@ -470,6 +460,24 @@ _amux_frame() {
   # tmux to register that click — without it you click once to focus, again to land.
   # frame.conf sets it for a fresh server; this keeps any pre-existing frame current.
   tmux -L "$sock" set-option -g focus-events on
+  # Reset-split binding + its per-session data, asserted here (not just frame.conf)
+  # for the same shared-long-lived-server reason as the hook above: a frame server
+  # predating this feature has no @amux_left/@amux_left_pane and no `0` override.
+  # Setting both on every launch makes a stale frame pick the reset up on the next
+  # relaunch, without a full rebuild. @amux_left = configured percent; @amux_left_pane
+  # = the left column's pane (tagged @amux_role=term at creation), so resizing its
+  # width snaps the whole left column back to left% of the window. Bound to `0` (reset
+  # to default, like Cmd+0): the frame is single-window (frame.conf unbinds `c`), so
+  # the default `0` = select-window 0 is inert here — overriding it shadows nothing.
+  # The binding computes absolute -x cols in the shell, so it doesn't need
+  # resize-pane's `-x N%` support.
+  local left_pct term_pane
+  left_pct=$(_amux_frame_width)
+  term_pane=$(tmux -L "$sock" list-panes -t "$fsess" -f '#{==:#{@amux_role},term}' -F '#{pane_id}' 2>/dev/null | head -1)
+  tmux -L "$sock" set -t "$fsess" @amux_left "$left_pct"
+  [ -n "$term_pane" ] && tmux -L "$sock" set -t "$fsess" @amux_left_pane "$term_pane"
+  tmux -L "$sock" bind-key 0 \
+    run-shell 'tmux resize-pane -t "#{@amux_left_pane}" -x "$(( #{window_width} * #{@amux_left} / 100 ))"'
   tmux -L "$sock" attach-session -t "=$fsess"
 }
 
