@@ -1,5 +1,10 @@
 # agentmux
 
+[![Release](https://img.shields.io/github/v/release/Lockyc/agentmux?sort=semver&label=release)](https://github.com/Lockyc/agentmux/releases/latest)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-555)
+![Built with tmux](https://img.shields.io/badge/built%20with-tmux-1BB91F?logo=tmux&logoColor=white)
+[![License](https://img.shields.io/github/license/Lockyc/agentmux)](LICENSE)
+
 Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix m` cycles through the list.
 
 ![agentmux overview](docs/overview.png)
