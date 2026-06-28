@@ -77,7 +77,7 @@ amux
 - `jq`: `brew install jq`
 - A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
 - `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in amux.toml)
-- `osascript` (optional, macOS — only for `--notify` desktop alerts in the Claude Code hooks)
+- A notification-aware host terminal (optional — for `--notify` alerts; the hook emits a standard OSC 777 desktop-notification escape, surfaced by hosts like [warden](https://github.com/lockyc/warden) or Ghostty)
 
 ## Usage
 
@@ -353,7 +353,7 @@ The `claude/status.sh` hook drives an emoji on the tmux tab label reflecting Cla
 }
 ```
 
-The `--notify` flag triggers a macOS notification via `osascript`. Remove it if you don't want desktop alerts.
+The `--notify` flag emits a standard **OSC 777 desktop-notification** escape *through the terminal* (tmux-passthrough-wrapped, so it needs `allow-passthrough on` — set in `agentmux.conf`). A notification-aware host such as [warden](https://github.com/lockyc/warden) ties the alert to the agent's own tab (badge + macOS banner); plain Ghostty raises a system notification. A host that doesn't understand OSC 777 simply ignores it. Remove `--notify` if you don't want alerts.
 
 ## AI summary status lines
 

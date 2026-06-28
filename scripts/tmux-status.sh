@@ -283,7 +283,19 @@ if [ "$2" = "--notify" ]; then
 
   mkdir "$lockdir" 2>/dev/null || exit 0
 
-  MSG="$3" PROJ="$project" AGENT="$agent_name" osascript -e 'display notification (system attribute "MSG") with title (system attribute "AGENT") subtitle (system attribute "PROJ") sound name "Submarine"' 2>/dev/null
+  # Notify *through the terminal*, not via osascript: emit an OSC 777 desktop-notification escape so
+  # a notification-aware host (warden) badges THIS agent's tab + raises a banner, tied to the pane it
+  # came from. We're inside tmux, so wrap it in tmux's passthrough envelope (needs `allow-passthrough
+  # on`, set in agentmux.conf): DCS `tmux;` + the payload with every ESC doubled + ST. Write it to the
+  # pane's own tty (#{pane_tty}) so it flows up through tmux regardless of where the hook's stdout
+  # points. `;` is the OSC field separator, so strip it from the title/body. A non-warden / non-OSC-777
+  # terminal simply ignores the sequence (the trade-off for dropping osascript).
+  title=$(printf '%s · %s' "$agent_name" "$project" | tr ';' ',')
+  body=$(printf '%s' "$3" | tr ';' ',')
+  pane_tty=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_tty}' 2>/dev/null)
+  if [ -n "$pane_tty" ]; then
+    printf '\033Ptmux;\033\033]777;notify;%s;%s\007\033\\' "$title" "$body" > "$pane_tty"
+  fi
 fi
 
 exit 0
