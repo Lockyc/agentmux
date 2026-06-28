@@ -421,6 +421,16 @@ _amux_frame() {
     # Per-session (not -g): the frame socket can host several frames, each in its own
     # project, and a global option would let the last launch clobber the others.
     tmux -L "$sock" set -t "$fsess" @amux_project "$(basename "$PWD")"
+    # Reset-split data ([frame] '=' binding in frame.conf): the configured left %
+    # and the term (left-column) pane id, so a dragged divider can snap back to
+    # $left%. Per-session like @amux_project — each frame on the shared socket has
+    # its own width and pane. @amux_left_pane is left_pid (the bottom scratch
+    # terminal even when the column is vertically split), so resizing its width
+    # resizes the whole left column. Both are set once at creation alongside the
+    # binding in frame.conf (also a fresh-server-only thing), so they activate
+    # together: an old frame predating this feature lacks both until rebuilt.
+    tmux -L "$sock" set -t "$fsess" @amux_left "$left"
+    tmux -L "$sock" set -t "$fsess" @amux_left_pane "$left_pid"
     # Status bar position ([frame] status_position): frame.conf relies on tmux's
     # default (bottom); override per-session here when "top" is requested.
     tmux -L "$sock" set -t "$fsess" status-position "$status_pos"

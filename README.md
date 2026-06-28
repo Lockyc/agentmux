@@ -166,8 +166,9 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   shell and it respawns. It's a bare tmux (not your `~/.tmux.conf`), kept isolated
   on purpose.
 - **Prefixes:** the frame uses `C-f` ("f" for frame — `C-f h`/`l` focus left/right,
-  `C-f j`/`k` move within the split left column, `C-f H`/`L` resize, `C-f Q` quit,
-  `C-f d` detach), overridable via `[frame] prefix`. The two inner tmuxes use their
+  `C-f j`/`k` move within the split left column, `C-f H`/`L` resize, `C-f =` reset the
+  split back to `[frame] left`, `C-f Q` quit, `C-f d` detach), overridable via
+  `[frame] prefix`. The two inner tmuxes use their
   own prefix (`C-b` by default, or amux's `[amux] prefix` for the right pane), which
   the frame passes through to whichever pane is focused: left → the terminal's tabs,
   right → amux. A stray `prefix d` on either pane is harmless — the pane re-attaches
