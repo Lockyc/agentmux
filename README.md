@@ -330,8 +330,7 @@ The `claude/status.sh` hook drives an emoji on the tmux tab label reflecting Cla
 | ⚡ | Working |
 | 🔐 | Awaiting permission |
 | 📣 | Waiting for input |
-| ✅ | Done (unseen) |
-| 👀 | Done (window active/seen) |
+| ✅ | Done |
 
 **Setup:** the clone includes `scripts/claude/`; wire the hooks in `~/.claude/settings.json`:
 

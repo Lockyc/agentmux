@@ -10,7 +10,7 @@
 # Two jobs:
 #  1. Tab label = "<emoji> <agent>" — a STABLE, state-only tab.
 #     State tokens: start working permission notify done
-#     Emojis:       🤖     ⚡       🔐         📣     ✅  (👀 derived internally)
+#     Emojis:       🤖     ⚡       🔐         📣     ✅
 #  2. AI summary: stable subject + done/now/next trajectory, re-derived on
 #     every working hook (UserPromptSubmit AND PostToolUse) from the transcript
 #     via AGENTMUX_DIGEST_BIN + summarise.sh stand mode — so it refreshes
@@ -88,26 +88,16 @@ prompt="${AGENTMUX_HOOK_PROMPT:-}"
 transcript="${AGENTMUX_HOOK_TRANSCRIPT:-}"
 
 # Precedence: notify fires AFTER a turn ends if you don't respond promptly, and
-# would otherwise overwrite the done/seen/permission tracking. A done or blocked
+# would otherwise overwrite the done/permission tracking. A done or blocked
 # window already means "your move", so notify must not clobber those states.
 # It still overwrites start/working. Also makes done-vs-notify race order-independent.
 if [ "$emoji" = "📣" ]; then
   case "$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null)" in
-    "✅ "*|"👀 "*|"🔐 "*) exit 0 ;;
+    "✅ "*|"🔐 "*) exit 0 ;;
   esac
 fi
 
-# done means "finished, you haven't looked". If you're already sitting on this
-# window (active window of an attached session) it's been seen the moment it
-# finished — emit 👀 directly; after-select-window/window_seen.sh covers the
-# "switch to it later" case.
-render="$emoji"
-if [ "$emoji" = "✅" ]; then
-  seen=$(tmux display-message -p -t "$TMUX_PANE" '#{window_active}#{?session_attached,1,0}' 2>/dev/null)
-  [ "$seen" = "11" ] && render="👀"
-fi
-
-tmux rename-window -t "$TMUX_PANE" "$render $label"
+tmux rename-window -t "$TMUX_PANE" "$emoji $label"
 
 # working → AI summary: a stable SUBJECT (derived once from early turns,
 # re-anchored when work shifts topic) + done/now/next from AGENTMUX_DIGEST_BIN
