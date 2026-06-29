@@ -353,7 +353,7 @@ The `claude/status.sh` hook drives an emoji on the tmux tab label reflecting Cla
 }
 ```
 
-The `--notify` flag emits a standard **OSC 777 desktop-notification** escape *through the terminal* (tmux-passthrough-wrapped, so it needs `allow-passthrough on` — set in `agentmux.conf`). A notification-aware host such as [warden](https://github.com/lockyc/warden) ties the alert to the agent's own tab (badge + macOS banner); plain Ghostty raises a system notification. A host that doesn't understand OSC 777 simply ignores it. Remove `--notify` if you don't want alerts.
+The `--notify` flag emits a standard **OSC 777 desktop-notification** escape *through the terminal* (tmux-passthrough-wrapped, so it needs `allow-passthrough on` — set in `agentmux.conf`). The hook wraps the escape **once per nested tmux layer**, so it reaches the host even under `--frame` (where the agent runs two tmux deep: frame → agent) — a single wrap would be unwrapped by the inner tmux and then dropped by the frame. A notification-aware host such as [warden](https://github.com/lockyc/warden) ties the alert to the agent's own tab (badge + macOS banner); plain Ghostty raises a system notification. A host that doesn't understand OSC 777 simply ignores it. Remove `--notify` if you don't want alerts.
 
 ## AI summary status lines
 

@@ -264,6 +264,41 @@ elif [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ -x "$SUM" ]; then
   [ -x "$DIG" ] || printf 'digest: AGENTMUX_DIGEST_BIN not set\n' > "$diagfile"
 fi
 
+# Count nested tmux layers between this pane and the real terminal. A single tmux
+# passthrough envelope only escapes ONE layer; under `amux --frame` the agent runs
+# inside two tmux servers (frame + agent), so an OSC wrapped once is unwrapped by
+# the inner (agent) tmux and then SWALLOWED by the outer (frame) tmux, never
+# reaching the host terminal. We must wrap once per layer. Walk outward: our
+# current tmux's client tty is a pane in the next tmux out; follow that until a
+# client tty belongs to no tmux (the real terminal). Falls back to 1 if anything
+# is unknown — i.e. the plain single-tmux behaviour.
+_tmux_nest_depth() {
+  [ -n "${TMUX:-}" ] || { echo 0; return; }
+  _nd_sock=${TMUX%%,*}
+  _nd_dir=$(dirname "$_nd_sock")
+  _nd_depth=1
+  _nd_client=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+  while [ -n "$_nd_client" ]; do
+    _nd_next=''
+    for _nd_s in "$_nd_dir"/*; do
+      [ -S "$_nd_s" ] || continue
+      [ "$_nd_s" = "$_nd_sock" ] && continue
+      # A pane in $_nd_s whose tty is our current client tty ⇒ we're displayed
+      # inside that tmux ⇒ one more layer. Exact tty match, so no false hits.
+      _nd_pane=$(tmux -S "$_nd_s" list-panes -a -F '#{pane_tty} #{pane_id}' 2>/dev/null \
+                 | awk -v t="$_nd_client" '$1==t{print $2; exit}')
+      [ -n "$_nd_pane" ] || continue
+      _nd_next=$(tmux -S "$_nd_s" display-message -p -t "$_nd_pane" '#{client_tty}' 2>/dev/null)
+      _nd_sock=$_nd_s
+      break
+    done
+    [ -n "$_nd_next" ] || break
+    _nd_depth=$((_nd_depth + 1))
+    _nd_client=$_nd_next
+  done
+  echo "$_nd_depth"
+}
+
 if [ "$2" = "--notify" ]; then
   # Dedupe across hook types (done + notify fire ~simultaneously at end of turn).
   # mkdir is atomic — only one concurrent hook process wins the claim per cooldown window.
@@ -286,16 +321,29 @@ if [ "$2" = "--notify" ]; then
   # Notify *through the terminal*, not via osascript: emit an OSC 777 desktop-notification escape so
   # a notification-aware host (warden) badges THIS agent's tab + raises a banner, tied to the pane it
   # came from. We're inside tmux, so wrap it in tmux's passthrough envelope (needs `allow-passthrough
-  # on`, set in agentmux.conf): DCS `tmux;` + the payload with every ESC doubled + ST. Write it to the
-  # pane's own tty (#{pane_tty}) so it flows up through tmux regardless of where the hook's stdout
-  # points. `;` is the OSC field separator, and control chars (ESC/BEL/…) could terminate the OSC
-  # early or inject their own escapes — strip both from title/body so an arbitrary message can't
-  # break out of the sequence. A non-warden / non-OSC-777 terminal just ignores it (osascript trade-off).
+  # on`, set in agentmux.conf): DCS `tmux;` + the payload with every ESC doubled + ST. Wrap ONCE PER
+  # NESTED TMUX LAYER (see _tmux_nest_depth) — each layer strips one envelope, so under `--frame`
+  # (frame tmux → agent tmux) a single wrap is unwrapped by the agent tmux and then dropped by the
+  # frame tmux before it can reach the host. Write to the pane's own tty (#{pane_tty}) so it flows up
+  # through tmux regardless of where the hook's stdout points. `;` is the OSC field separator, and
+  # control chars (ESC/BEL/…) could terminate the OSC early or inject their own escapes — strip both
+  # from title/body so an arbitrary message can't break out of the sequence (this also keeps the
+  # payload ESC-free, so only the wrap envelopes carry ESCs to double). A non-warden / non-OSC-777
+  # terminal just ignores it (osascript trade-off).
   title=$(printf '%s · %s' "$agent_name" "$project" | LC_ALL=C tr -d ';[:cntrl:]')
   body=$(printf '%s' "$3" | LC_ALL=C tr -d ';[:cntrl:]')
   pane_tty=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_tty}' 2>/dev/null)
   if [ -n "$pane_tty" ]; then
-    printf '\033Ptmux;\033\033]777;notify;%s;%s\007\033\\' "$title" "$body" > "$pane_tty"
+    osc=$(printf '\033]777;notify;%s;%s\007' "$title" "$body")
+    depth=$(_tmux_nest_depth)
+    [ "${depth:-1}" -ge 1 ] || depth=1
+    while [ "$depth" -gt 0 ]; do
+      # Double the ESCs already in $osc (data to this layer), then wrap in this
+      # layer's passthrough envelope (its own ESCs stay single).
+      osc=$(printf '%s' "$osc" | awk 'BEGIN{E=sprintf("%c",27); RS="\1"; ORS=""}{gsub(E,E E); printf "\033Ptmux;%s\033\\", $0}')
+      depth=$((depth - 1))
+    done
+    printf '%s' "$osc" > "$pane_tty"
   fi
 fi
 
