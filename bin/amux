@@ -460,6 +460,13 @@ _amux_frame() {
   # tmux to register that click — without it you click once to focus, again to land.
   # frame.conf sets it for a fresh server; this keeps any pre-existing frame current.
   tmux -L "$sock" set-option -g focus-events on
+  # Likewise allow-passthrough: the frame is the OUTERMOST tmux, so a desktop
+  # notification (OSC 777) the agent emits arrives here wrapped in a passthrough
+  # envelope and must be forwarded to the host terminal. With passthrough off (the
+  # tmux default, and what frame.conf historically lacked) the frame silently drops
+  # it and notifications never reach warden/Ghostty. frame.conf sets it for a fresh
+  # server; this line keeps any pre-existing frame current.
+  tmux -L "$sock" set-option -g allow-passthrough on
   # Reset-split binding + its per-session data, asserted here (not just frame.conf)
   # for the same shared-long-lived-server reason as the hook above: a frame server
   # predating this feature has no @amux_left/@amux_left_pane and no `0` override.
