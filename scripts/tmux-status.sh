@@ -277,7 +277,10 @@ _tmux_nest_depth() {
   _nd_sock=${TMUX%%,*}
   _nd_dir=$(dirname "$_nd_sock")
   _nd_depth=1
-  _nd_client=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+  # Target our own pane explicitly (same reason as `project` above): an un-targeted
+  # display-message resolves against the most recently active client, which is the
+  # wrong session when several agent panes share the default socket.
+  _nd_client=$(tmux display-message -t "$TMUX_PANE" -p '#{client_tty}' 2>/dev/null)
   while [ -n "$_nd_client" ]; do
     _nd_next=''
     for _nd_s in "$_nd_dir"/*; do
