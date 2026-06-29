@@ -11,6 +11,8 @@ Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; session
 
 ![agentmux overview with sidebar](docs/overview-sidebar.png)
 
+> **Companion project: [warden](https://github.com/lockyc/warden)** — a notification-aware terminal built for this workflow. agentmux's `--notify` hook emits a standard OSC 777 escape *through* tmux; warden surfaces it as a per-tab badge plus a macOS banner tied to the agent that raised it (see [AI tab states](#ai-tab-states-claude-code)). agentmux works in any terminal — warden just makes the notifications first-class.
+
 ## Install
 
 ### Claude Code (interactive — recommended)
