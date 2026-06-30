@@ -559,6 +559,29 @@ _amux_log() {
   "$AGENTMUX_SCRIPTS/session_log.sh" list
 }
 
+# Presence query for a single project: exit 0 if its agent session (agent socket)
+# OR a lingering frame (<base>-frame on the frame socket) exists, non-zero if
+# neither does. Silent — meant to back a status indicator (e.g. warden's cyan
+# presence dot) on its exit code alone. The frame leg is what lets the dot stay
+# lit after an agent exits while its frame wrapper is still up — the state
+# `amux --kill` reaps; no separate -term check, since a frame's scratch terminal
+# never outlives the frame (both die together). Default target is the current
+# dir's session; an explicit arg is sanitised, and a trailing -frame/-term is
+# stripped to the base (so `amux --probe foo-frame` queries project `foo`).
+_amux_probe() {
+  local arg base
+  if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
+  case "$arg" in
+    *-frame) base="${arg%-frame}" ;;
+    *-term)  base="${arg%-term}" ;;
+    *)       base="$arg" ;;
+  esac
+  _amux_session_exists "$base" && return 0
+  # -L names the frame socket explicitly, so this ignores any inherited $TMUX
+  # (unlike the agent socket, which _amux_atmux must clear $TMUX to reach).
+  tmux -L "$AGENTMUX_FRAME_SOCKET" has-session -t "=${base}-frame" 2>/dev/null
+}
+
 # Kill ONE project completely: the agent session (agent socket) plus its paired
 # <base>-frame and <base>-term. Default target is the current dir's session; an
 # explicit arg is sanitised, and a trailing -frame/-term is stripped to the base.
@@ -675,6 +698,11 @@ amux() {
         _amux_log
         return $?
         ;;
+      --probe)
+        shift
+        _amux_probe "$@"
+        return $?
+        ;;
       --kill)
         shift
         _amux_kill "$@"
@@ -707,6 +735,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
   --log          durable roster of past/open agent sessions, incl. ones lost to a server crash
+  --probe        exit 0 if a session [session] (agent or frame) exists (default: current dir); silent
   --kill         kill an agent session [session] + its frame/term (default: current dir)
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
   --update       update to the latest agentmux (git pull)
@@ -1153,6 +1182,37 @@ EOF
     tmux -L "$_fsock" kill-server 2>/dev/null
   else
     echo "SKIP: \$TMUX isolation test (tmux not found)"
+  fi
+
+  # --probe presence: exit 0 when the agent OR the frame session exists for the
+  # resolved base, non-zero when neither does. This is the query warden's cyan
+  # presence dot calls; it must light for a lingering frame (agent exited, frame
+  # wrapper still up), not just a live agent. Isolate both sockets onto throwaway
+  # servers so the user's real tmux is never touched.
+  if command -v tmux >/dev/null 2>&1; then
+    AGENTMUX_AGENT_SOCKET="amux-selftest-$$"
+    _psock="amux-selftest-pframe-$$"; _psave="$AGENTMUX_FRAME_SOCKET"; AGENTMUX_FRAME_SOCKET="$_psock"
+    _amux_atmux kill-server 2>/dev/null; tmux -L "$_psock" kill-server 2>/dev/null
+
+    if _amux_probe probe-x; then _got=present; else _got=absent; fi
+    _assert "probe: absent when no agent or frame session" "absent" "$_got"
+
+    _amux_atmux new-session -d -s probe-x -c /tmp 2>/dev/null
+    if _amux_probe probe-x; then _got=present; else _got=absent; fi
+    _assert "probe: present via agent session" "present" "$_got"
+    _amux_atmux kill-session -t "=probe-x" 2>/dev/null
+
+    tmux -L "$_psock" new-session -d -s probe-x-frame -c /tmp 2>/dev/null
+    if _amux_probe probe-x; then _got=present; else _got=absent; fi
+    _assert "probe: present via lingering frame (agent gone)" "present" "$_got"
+    # an explicit -frame/-term arg resolves to the same base
+    if _amux_probe probe-x-frame; then _got=present; else _got=absent; fi
+    _assert "probe: -frame arg resolves to base" "present" "$_got"
+
+    _amux_atmux kill-server 2>/dev/null; tmux -L "$_psock" kill-server 2>/dev/null
+    AGENTMUX_AGENT_SOCKET=""; AGENTMUX_FRAME_SOCKET="$_psave"
+  else
+    echo "SKIP: --probe test (tmux not found)"
   fi
 
   rm -rf "$_selftest_cache"

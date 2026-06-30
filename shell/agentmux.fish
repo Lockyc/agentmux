@@ -22,6 +22,6 @@ complete -c amux -f
 # __fish_is_nth_token) it mirrors zsh's strict CURRENT == 2: `amux -p <tab>`
 # is the session-name slot and offers nothing.
 complete -c amux -f -n '__fish_is_first_arg' -a '($AGENTMUX_BIN --complete)'
-# After --kill / --frame-kill, complete live agentmux session names (the second
-# arg). The -all variants are distinct tokens, so they don't trigger this.
-complete -c amux -f -n '__fish_seen_subcommand_from --kill --frame-kill' -a '($AGENTMUX_BIN --complete-sessions)'
+# After --kill / --frame-kill / --probe, complete live agentmux session names (the
+# second arg). The -all variants are distinct tokens, so they don't trigger this.
+complete -c amux -f -n '__fish_seen_subcommand_from --kill --frame-kill --probe' -a '($AGENTMUX_BIN --complete-sessions)'
