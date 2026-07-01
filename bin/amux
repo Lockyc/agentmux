@@ -481,6 +481,13 @@ _amux_frame() {
   # it and notifications never reach warden/Ghostty. frame.conf sets it for a fresh
   # server; this line keeps any pre-existing frame current.
   tmux -L "$sock" set-option -g allow-passthrough on
+  # Likewise extended keys: the frame must forward CSI-u (Escape, Ctrl-C, Shift+Enter) down
+  # to the agent pane, or Claude's kitty-protocol keys desync and Escape/Ctrl-C intermittently
+  # die in a framed agent. tmux drops Claude's enable request, so `always` (not `on`) is what
+  # forwards them; extkeys carries them from the host terminal. frame.conf sets it for a fresh
+  # server; this keeps any pre-existing frame current (same shared-long-lived-server reason).
+  tmux -L "$sock" set-option -s extended-keys always
+  tmux -L "$sock" set-option -as terminal-features 'xterm*:extkeys,screen*:extkeys'
   # Reset-split binding + its per-session data, asserted here (not just frame.conf)
   # for the same shared-long-lived-server reason as the hook above: a frame server
   # predating this feature has no @amux_left/@amux_left_pane and no `0` override.
