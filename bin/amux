@@ -98,6 +98,17 @@ _amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left "$PWD")" 30; 
 # Opt-in: unset or non-numeric → empty output (the left column stays one pane).
 _amux_frame_top_height() { _amux_clamp_pct "$(agentmux_frame_field left_vertical_split "$PWD")" ""; }
 
+# Resolve how many side-by-side plain-shell panes fill the top sub-region for
+# --frame: [frame] left_top_panes, clamped to 1..6, default 1 (absent/non-numeric).
+# Only meaningful when left_vertical_split is set (no top region otherwise).
+_amux_frame_top_panes() {
+  local v; v=$(agentmux_frame_field left_top_panes "$PWD")
+  case "$v" in ''|*[!0-9]*) v=1 ;; esac
+  [ "$v" -lt 1 ] && v=1
+  [ "$v" -gt 6 ] && v=6
+  printf '%s' "$v"
+}
+
 # Resolve which pane the frame focuses on start: [frame] focus. "terminal" focuses
 # the left scratch column; anything else (incl. unset) focuses the agent (right).
 _amux_frame_focus() {
@@ -372,17 +383,18 @@ _amux_frame() {
   # blurs the two, and a stale frame is harder to tell apart from the real one.
   local sock="$AGENTMUX_FRAME_SOCKET" fsess="${session}-frame"
 
-  # Optional left-column vertical split (empty = off). Resolved up front so the
-  # staleness check below knows the expected pane count.
-  local top; top=$(_amux_frame_top_height)
+  # Optional left-column vertical split (empty = off) and its top-region pane count.
+  # Resolved up front so the staleness check below knows the expected pane count.
+  local top top_panes; top=$(_amux_frame_top_height); top_panes=$(_amux_frame_top_panes)
 
   # A frame that has lost its right (agent) pane is useless — reattaching it just
   # shows a full-width terminal. The agent pane runs with remain-on-exit, so a
   # detached/killed agent leaves a DEAD pane rather than vanishing; count only
   # LIVE panes (#{pane_dead}=0) so such a frame still reads as stale and gets
-  # rebuilt. Expected: 2 live panes, or 3 when the left split is enabled.
+  # rebuilt. Expected: 2 live panes (agent + bottom scratch), plus $top_panes more
+  # when the left split is on (so a single top pane still wants 3).
   if tmux -L "$sock" has-session -t "=$fsess" 2>/dev/null; then
-    local npanes want; want=2; [ -n "$top" ] && want=3
+    local npanes want; want=2; [ -n "$top" ] && want=$((2 + top_panes))
     npanes=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_dead}' 2>/dev/null | grep -c '^0$')
     [ "${npanes:-0}" -lt "$want" ] && tmux -L "$sock" kill-session -t "=$fsess" 2>/dev/null
   fi
@@ -446,12 +458,20 @@ _amux_frame() {
     # socket. A real kill stays dead instead of being resurrected.
     tmux -L "$sock" set -p -t "$agent_pid" remain-on-exit on
     tmux -L "$sock" set -p -t "$agent_pid" @amux_role agent
-    # Optional vertical split of the LEFT column into top/bottom (a plain shell in
-    # the new TOP pane). `-b` inserts the new pane ABOVE left_pid, so the scratch
+    # Optional vertical split of the LEFT column into top/bottom (plain shells in
+    # the new TOP region). `-b` inserts the new pane ABOVE left_pid, so the scratch
     # terminal (with its tab bar) stays at the BOTTOM. Done AFTER the agent split so
     # the agent keeps spanning full height; `-l` sizes the new (top) pane to $top%.
     if [ -n "$top" ]; then
-      tmux -L "$sock" split-window -v -b -t "$left_pid" -l "${top}%" -c "$PWD"
+      local top_pid i
+      top_pid=$(tmux -L "$sock" split-window -v -b -t "$left_pid" -l "${top}%" -c "$PWD" -P -F '#{pane_id}')
+      # Carve the top region into $top_panes equal-width plain shells. Always split
+      # the same (leftmost) top pane, giving each new pane 100/i % of it as i counts
+      # down from $top_panes to 2 — `-l N%` is a percentage of the pane being split,
+      # so the shrinking leftmost pane leaves ~equal columns. top_panes=1 → no splits.
+      for (( i = top_panes; i >= 2; i-- )); do
+        tmux -L "$sock" split-window -h -t "$top_pid" -l "$((100 / i))%" -c "$PWD"
+      done
     fi
     # Start focus ([frame] focus): agent (right) by default, or the left scratch
     # column. Done last so it wins over wherever the splits left the active pane.
@@ -1038,6 +1058,18 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   printf '[frame]\nleft_vertical_split = 99\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "frame_top clamp high"   "90" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_height)"
+
+  # _amux_frame_top_panes: default 1 (example config sets none), clamped to 1..6.
+  _assert "frame_top_panes default" "1" "$(_amux_frame_top_panes)"
+  printf '[frame]\nleft_top_panes = 3\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_top_panes value"    "3" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_panes)"
+  printf '[frame]\nleft_top_panes = 0\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_top_panes clamp low"  "1" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_panes)"
+  printf '[frame]\nleft_top_panes = 12\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "frame_top_panes clamp high" "6" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_top_panes)"
 
   # _amux_frame_focus / _amux_frame_status_position / _amux_frame_default: the
   # example config sets none of these, so each falls back to its default.

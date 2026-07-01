@@ -76,12 +76,19 @@ left = 30
 #
 # prefix = "C-Space"
 
-# Optionally split the left column top/bottom: percent height of the TOP sub-pane
-# (10..90). Unset = single left pane (default). The top sub-pane is a plain shell;
+# Optionally split the left column top/bottom: percent height of the TOP region
+# (10..90). Unset = single left pane (default). The top region is plain shells;
 # the scratch terminal (with its tab bar) stays in the bottom sub-pane. Reach the
-# top shell with the mouse. e.g.:
+# top shells with the mouse. e.g.:
 #
 # left_vertical_split = 70
+
+# Number of side-by-side plain shells across the top region (1..6, default 1,
+# equal-width). Needs left_vertical_split (no top region without it). e.g. three
+# small shells above a larger scratch terminal:
+#
+# left_vertical_split = 30
+# left_top_panes = 3
 
 # Which pane is focused when the frame starts: "agent" (right, the default) or
 # "terminal" (the left scratch column). e.g.:

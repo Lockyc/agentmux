@@ -180,9 +180,13 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   amux can see it, so a colliding `[amux] prefix` is ignored (with a warning).
 - Set the left-pane width with `[frame] left = <percent>` (default `30`).
   Optionally split the left column top/bottom with `[frame] left_vertical_split =
-  <percent>` (the top sub-pane's height, `10`–`90`; unset = single left pane). The
-  top sub-pane is a plain shell; the scratch terminal (with its tab bar) stays in
-  the bottom sub-pane — reach the top shell with the mouse. Two more layout fields:
+  <percent>` (the top region's height, `10`–`90`; unset = single left pane). The
+  top region is plain shells; the scratch terminal (with its tab bar) stays in
+  the bottom sub-pane — reach the top shells with the mouse. Put more than one
+  shell across the top with `[frame] left_top_panes = <count>` (`1`–`6`, default
+  `1`, equal-width; needs `left_vertical_split`) — e.g. `left_vertical_split = 30`
+  + `left_top_panes = 3` gives three small shells above a larger scratch terminal.
+  Two more layout fields:
   `[frame] focus` picks which pane starts focused — `"agent"` (right, the default)
   or `"terminal"` (the left column); `[frame] status_position` places the frame's
   outer status bar at `"bottom"` (default) or `"top"`. Frame
