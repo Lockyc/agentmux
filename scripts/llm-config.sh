@@ -18,8 +18,12 @@ _amux_config_json() {
   _cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
   [ -f "$_cfg" ] || return 1
   _mtime=$(stat -c %Y "$_cfg" 2>/dev/null || stat -f %m "$_cfg" 2>/dev/null || echo 0)
-  _cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_mtime}.json"
-  if [ -f "$_cache" ]; then
+  # Key must match agentmux-config.sh's _amux_json (the cache writer): PATH hash
+  # (cksum, no extra dep) + mtime. Keying on mtime alone aliases distinct configs
+  # sharing a one-second mtime; a divergent key here would silently miss the cache.
+  _phash=$(printf '%s' "$_cfg" | cksum | cut -d' ' -f1)
+  _cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_phash}-${_mtime}.json"
+  if [ -f "$_cache" ] && [ -s "$_cache" ]; then
     cat "$_cache"
   elif command -v toml2json >/dev/null 2>&1; then
     toml2json < "$_cfg" 2>/dev/null

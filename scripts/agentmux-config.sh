@@ -21,18 +21,27 @@ _amux_json() {
     printf '%s' "$_amux_json_cache"; return 0
   fi
 
-  # Disk cache in a user-private dir, keyed on config mtime.
+  # Disk cache in a user-private dir, keyed on config PATH + mtime.
   # Avoids toml2json on every hook invocation (in-memory cache only lives per-process).
+  # The path hash (cksum, no extra dep) is load-bearing: keying on mtime alone
+  # aliases two different configs whose mtimes land in the same second, serving
+  # one project's agents for another. Must match llm-config.sh's _amux_config_json.
   local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux"
-  local mtime
+  local mtime phash
   mtime=$(stat -c %Y "$AGENTMUX_CONFIG" 2>/dev/null \
        || stat -f %m "$AGENTMUX_CONFIG" 2>/dev/null \
        || echo "0")
-  local cache_file="$cache_dir/config-${mtime}.json"
+  phash=$(printf '%s' "$AGENTMUX_CONFIG" | cksum | cut -d' ' -f1)
+  local cache_file="$cache_dir/config-${phash}-${mtime}.json"
 
   if [ -f "$cache_file" ]; then
     _amux_json_cache=$(cat "$cache_file")
-    printf '%s' "$_amux_json_cache"; return 0
+    # A non-empty read only: a concurrent find -delete (below) in the window
+    # between [ -f ] and cat yields "", which must NOT be cached as a valid
+    # parse — fall through to live toml2json instead.
+    if [ -n "$_amux_json_cache" ]; then
+      printf '%s' "$_amux_json_cache"; return 0
+    fi
   fi
 
   local json _tmp
@@ -41,7 +50,8 @@ _amux_json() {
   }
   _amux_json_cache="$json"
   mkdir -p "$cache_dir" 2>/dev/null
-  find "$cache_dir" -maxdepth 1 -name 'config-*.json' -delete 2>/dev/null
+  # Only prune this config's own stale entries, not every config's.
+  find "$cache_dir" -maxdepth 1 -name "config-${phash}-*.json" -delete 2>/dev/null
   # Write via tmp + rename so concurrent readers see either no file (and
   # fall through to live toml2json) or the complete new one, never a partial.
   _tmp="$cache_file.tmp.$$"
