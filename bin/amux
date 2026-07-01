@@ -465,12 +465,13 @@ _amux_frame() {
     if [ -n "$top" ]; then
       local top_pid i
       top_pid=$(tmux -L "$sock" split-window -v -b -t "$left_pid" -l "${top}%" -c "$PWD" -P -F '#{pane_id}')
-      # Carve the top region into $top_panes equal-width plain shells. Always split
-      # the same (leftmost) top pane, giving each new pane 100/i % of it as i counts
-      # down from $top_panes to 2 — `-l N%` is a percentage of the pane being split,
-      # so the shrinking leftmost pane leaves ~equal columns. top_panes=1 → no splits.
+      # Stack the top region into $top_panes equal-height plain shells (all full width
+      # of the left column, stacked above the scratch terminal). Always split the same
+      # top pane, giving each new pane 100/i % of it as i counts down from $top_panes
+      # to 2 — `-l N%` is a percentage of the pane being split, so the shrinking top
+      # pane leaves ~equal rows within the top region. top_panes=1 → no splits.
       for (( i = top_panes; i >= 2; i-- )); do
-        tmux -L "$sock" split-window -h -t "$top_pid" -l "$((100 / i))%" -c "$PWD"
+        tmux -L "$sock" split-window -v -t "$top_pid" -l "$((100 / i))%" -c "$PWD"
       done
     fi
     # Start focus ([frame] focus): agent (right) by default, or the left scratch
