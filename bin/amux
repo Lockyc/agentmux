@@ -13,7 +13,7 @@ AGENTMUX_SCRIPTS="${AGENTMUX_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../sc
 # scripts/ are siblings (the install + dev layout). Fail fast with a readable
 # message rather than a confusing "source: No such file" if it can't be found.
 if [ ! -d "$AGENTMUX_SCRIPTS" ]; then
-  echo "agentmux: cannot locate scripts dir (set AGENTMUX_SCRIPTS)" >&2
+  echo "amux: cannot locate scripts dir (set AGENTMUX_SCRIPTS)" >&2
   exit 1
 fi
 
@@ -38,10 +38,18 @@ AGENTMUX_BIN="${AGENTMUX_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null 
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# Sanitise a tmux session name: tmux uses . and : as target separators
-# (session.win.pane, session:win), so an unsanitised name breaks
-# `tmux has-session -t` and friends. Map both to _.
-_amux_sanitize_session() { printf '%s' "$1" | tr '.:' '__'; }
+# Sanitise a tmux session name to a safe-character whitelist. Two reasons,
+# both load-bearing:
+#  1. tmux uses . and : as target separators (session.win.pane, session:win),
+#     so those break `tmux has-session -t` and friends.
+#  2. SECURITY: the name is later re-expanded as #{session_name} inside
+#     `run-shell` hook bodies (tmux/agentmux.conf, tmux/frame.conf), which tmux
+#     passes to `sh -c`. A name containing $(...) / backticks / ; etc. would
+#     then execute — and the default name is basename "$PWD", so a hostile
+#     directory name would be RCE on `amux`. Whitelisting to [A-Za-z0-9_-]
+#     closes both sinks; session names are cosmetic so nothing is lost.
+# Dash is last in the set so tr reads it as a literal, not a range endpoint.
+_amux_sanitize_session() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_'; }
 
 # tmux on the agent (default) socket, honouring AGENTMUX_AGENT_SOCKET for test
 # isolation. In production AGENTMUX_AGENT_SOCKET is empty → default socket, but we
@@ -159,17 +167,23 @@ _amux_bar_reserved() {
   (
     . "$AGENTMUX_SCRIPTS/update_colors.sh"
     seen=' '
-    for nm in $names; do
+    # Iterate line-wise via a here-string: a session_colour value with a glob
+    # char (* ? [) or whitespace would otherwise word-split / glob against CWD
+    # and silently lose the slot reservation it is meant to publish. The
+    # here-string (not a pipe) keeps the loop in this shell so $seen survives
+    # for the `set -- $seen` below.
+    while IFS= read -r nm; do
+      [ -n "$nm" ] || continue
       s=$(_bar_name_to_slot "$nm")
       if [ -z "$s" ]; then
-        echo "agentmux: unknown bar colour '$nm' in [amux.dirs] — run 'amux --colours' for names" >&2
+        echo "amux: unknown bar colour '$nm' in [amux.dirs] — run 'amux --colours' for names" >&2
         continue
       fi
       case "$seen" in
-        *" $s "*) echo "agentmux: bar colour '$nm' (slot $s) is pinned by more than one dir — last wins" >&2 ;;
+        *" $s "*) echo "amux: bar colour '$nm' (slot $s) is pinned by more than one dir — last wins" >&2 ;;
         *) seen="$seen$s " ;;
       esac
-    done
+    done <<< "$names"
     set -- $seen
     echo "$*"
   )
@@ -195,7 +209,7 @@ _amux_resolve_target() {
         local flag="${1#-}" fidx
         fidx=$(agentmux_find_by_flag "$flag")
         if [ "$fidx" = "-1" ]; then
-          echo "agentmux: unknown flag -$flag" >&2; return 1
+          echo "amux: unknown flag -$flag" >&2; return 1
         fi
         agent_name=$(agentmux_agent_field "$fidx" name); shift ;;
     esac
@@ -231,13 +245,13 @@ _amux_update() {
   local dir="$1"
   if [ -d "$dir/.git" ]; then
     if ! git -C "$dir" pull --ff-only; then
-      echo "agentmux: update failed — resolve manually in $dir (run: git -C $dir status)" >&2
+      echo "amux: update failed — resolve manually in $dir (run: git -C $dir status)" >&2
       return 1
     fi
     local v; v=$(tr -d '[:space:]' < "$dir/VERSION" 2>/dev/null)
     echo "agentmux updated to ${v:-unknown}"
   else
-    echo "agentmux: $dir is not a git clone (dev/symlink install) — 'git pull' your source checkout instead" >&2
+    echo "amux: $dir is not a git clone (dev/symlink install) — 'git pull' your source checkout instead" >&2
     return 1
   fi
 }
