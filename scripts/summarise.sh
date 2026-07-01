@@ -24,7 +24,7 @@ _clean() {
   tr '\n\r\t' '   ' \
     | sed -e 's/\([a-z0-9]\)\([A-Z]\)/\1 \2/g' \
     | tr 'A-Z' 'a-z' \
-    | tr '_-/' '   ' \
+    | tr '_/-' '   ' \
     | LC_ALL=C tr -c 'a-z0-9 ' ' ' \
     | sed -e 's/  */ /g' -e 's/^ *//' -e 's/ *$//' \
     | awk -v n="${maxwords:-4}" '{for(i=1;i<=NF&&i<=n;i++) printf (i>1?" ":"") $i}'
