@@ -6,11 +6,11 @@
 # Also exposes _amux_config_json — a shared config-JSON loader used by
 # _amux_load_llm and other [section] consumers (e.g. version_check.sh's
 # [update] check).
-# Reads the disk cache (config-<mtime>.json under XDG_CACHE_HOME) populated
+# Reads the disk cache (config-<phash>-<mtime>.json under XDG_CACHE_HOME) populated
 # by agentmux-config.sh; falls back to live toml2json if cache is cold.
 # Pure POSIX sh — safe to source from /bin/sh scripts.
 
-# Echo the parsed amux.toml as JSON — disk cache (config-<mtime>.json under
+# Echo the parsed amux.toml as JSON — disk cache (config-<phash>-<mtime>.json under
 # XDG_CACHE_HOME) if present, else live toml2json. Empty output + non-zero if the
 # config is missing or no parser is available. Shared by _amux_load_llm and other
 # [section] consumers (e.g. version_check.sh's [update] check).

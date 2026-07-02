@@ -125,7 +125,7 @@ _amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left "$PWD")" 30; 
 # Opt-in: unset or non-numeric → empty output (the left column stays one pane).
 _amux_frame_top_height() { _amux_clamp_pct "$(agentmux_frame_field left_vertical_split "$PWD")" ""; }
 
-# Resolve how many side-by-side plain-shell panes fill the top sub-region for
+# Resolve how many stacked (top/bottom) plain-shell panes fill the top sub-region for
 # --frame: [frame] left_top_panes, clamped to 1..6, default 1 (absent/non-numeric).
 # Only meaningful when left_vertical_split is set (no top region otherwise).
 _amux_frame_top_panes() {

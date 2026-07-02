@@ -55,10 +55,26 @@ case "$state" in
 esac
 
 # Per-uid runtime dir instead of world-writable /tmp (a co-tenant could otherwise
-# pre-create the fixed-name files to leak summary text or wedge locks). Same base
-# must be used by summary_rows.sh.
+# pre-create the fixed-name files to leak summary text or wedge locks).
 runtime_dir="${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}"
-[ -d "$runtime_dir" ] || { mkdir -p "$runtime_dir" 2>/dev/null && chmod 0700 "$runtime_dir" 2>/dev/null; }
+# -m 0700 applies the mode atomically at creation (no default-umask window). The
+# parent (/tmp or /run/user) always exists, so -p only ever creates this one
+# level — SC2174's "intermediate dirs skip -m" caveat can't bite here.
+# shellcheck disable=SC2174
+mkdir -p -m 0700 "$runtime_dir" 2>/dev/null
+# If the dir already existed and isn't ours, a co-tenant squatted the predictable
+# per-uid path first; writing our summaries/locks there would hand them the very
+# leak the 0700 dir is meant to prevent. Fall back to a private mktemp dir (GNU
+# stat first, BSD second — see the mtime footgun). The reader can't guess a mktemp
+# path, so the resolved dir is published below via @amux_runtime_dir.
+_rd_owner=$(stat -c %u "$runtime_dir" 2>/dev/null || stat -f %u "$runtime_dir" 2>/dev/null || echo -1)
+[ "$_rd_owner" = "$(id -u)" ] || runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/agentmux.XXXXXX" 2>/dev/null) || exit 0
+# Publish the resolved dir so summary_rows.sh (the reader, run from agentmux.conf
+# via tmux #()) uses exactly this path instead of re-deriving it from its own
+# environment — #() does NOT inherit $XDG_RUNTIME_DIR (the same reason the socket
+# is passed to it). Read there as #{@amux_runtime_dir}. Global: the dir is per-uid,
+# identical for every pane on this server.
+tmux set-option -g @amux_runtime_dir "$runtime_dir" 2>/dev/null
 # pane_key folds the tmux socket identity (first comma-field of $TMUX) into the
 # pane number so two servers can't collide (see header). Whitelist-safe: cksum
 # digits + '-' + pane digits. Empty $TMUX (not inside tmux) → bare pane number.

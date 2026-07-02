@@ -1,11 +1,13 @@
 #!/bin/sh
-# summary_rows.sh <pane-id> <row> [width] [socket-path]
+# summary_rows.sh <pane-id> <row> [width] [socket-path] [runtime-dir]
 # Renders the pane's done/now/next status file across THREE status rows. The file
-# lives under a per-uid runtime dir ($XDG_RUNTIME_DIR, else /tmp/agentmux-<uid>),
-# keyed by "<hash of tmux socket>-<pane number>". This derivation MUST match
-# tmux-status.sh (the writer) or the file can't be found. tmux `#()` format
-# commands don't inherit $TMUX, so agentmux.conf passes #{socket_path} as arg 4;
-# if absent (e.g. manual invocation) we fall back to the bare pane number.
+# lives under the runtime dir the writer published (arg 5, else $XDG_RUNTIME_DIR,
+# else /tmp/agentmux-<uid>), keyed by "<hash of tmux socket>-<pane number>". Both
+# the dir and the key MUST match tmux-status.sh (the writer) or the file can't be
+# found. tmux `#()` format commands don't inherit $TMUX (nor $XDG_RUNTIME_DIR), so
+# agentmux.conf passes #{socket_path} as arg 4 and #{@amux_runtime_dir} as arg 5;
+# if either is absent (e.g. manual invocation, or a server predating the option)
+# we fall back — to the bare pane number, and to re-deriving the dir from env.
 # Agents write "done/now/next" text to that file; this script displays it.
 # Format produced by summarise.sh stand mode: "<subject>. done: …; now: …; next: …"
 #   row 1 = "<subject>. done: …"  (everything before " now:")
@@ -93,6 +95,7 @@ pane_num=$(printf '%s' "${1:-}" | tr -d '%')
 row=${2:-1}
 width=${3:-120}
 sock="${4:-}"
+rtd="${5:-}"
 [ -n "$pane_num" ] || exit 0
 case "$row" in 1|2|3) ;; *) exit 0 ;; esac
 case "$width" in ''|*[!0-9]*) width=120 ;; esac
@@ -103,7 +106,10 @@ if [ -n "$sock" ]; then
 else
   pane="$pane_num"
 fi
-runtime_dir="${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}"
+# Prefer the dir the writer published (arg 5); re-derive from env only for a
+# manual call or a server predating @amux_runtime_dir. #() can't see the hook's
+# $XDG_RUNTIME_DIR, so the arg is the reliable source.
+runtime_dir="${rtd:-${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}}"
 f="$runtime_dir/agentmux-status-${pane}.txt"
 df="$runtime_dir/agentmux-diag-${pane}.txt"
 if [ -s "$f" ]; then

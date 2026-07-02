@@ -212,6 +212,14 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   # keep_alive/reattach branch independent of what the example ships with.
   _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"
+  # Isolate the disk cache in a throwaway dir so selftest configs never touch or
+  # leak into the user's real ~/.cache/agentmux, and it all disappears with one rm
+  # at the end. Per-config cleanup can't reclaim these anyway: the cache key is
+  # path+mtime-scoped and each selftest config is a unique mktemp path whose phash
+  # never recurs, so the live find-prune (keyed on the current config's phash)
+  # never matches them.
+  _selftest_cache=$(mktemp -d "${TMPDIR:-/tmp}/agentmux-cache-XXXXXX") || exit 1
+  export XDG_CACHE_HOME="$_selftest_cache"
   _amux_json_cache=""
   pass=0; fail=0
   _assert() {
@@ -291,10 +299,7 @@ TOML
   case "$_err" in *"reattach=true requires keep_alive=true"*) _got="warns" ;; *) _got="silent" ;; esac
   _assert "build_cmd reattach-only warns"  "warns"                                                   "$_got"
   _assert "build_cmd bare"                 'myagent'                                                 "$(agentmux_build_cmd 3)"
-  # Tidy: mktemp file + the disk cache entry it produced. The mtime-keyed
-  # cache cleanup runs on next access anyway, but explicit is friendlier.
-  _tmp_mtime=$(stat -c %Y "$_tmpcfg" 2>/dev/null || stat -f %m "$_tmpcfg" 2>/dev/null || echo 0)
-  rm -f "$_tmpcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_tmp_mtime}.json"
+  rm -f "$_tmpcfg"   # cache entries live in the throwaway $XDG_CACHE_HOME (removed at end)
 
   # Self-contained coverage for agentmux_agent_for_dir's resolution rules —
   # absolute paths (no ~) so it doesn't depend on $HOME. Covers longest-prefix
@@ -328,8 +333,7 @@ TOML
   _assert "dir broad subtree"       "broad"  "$(agentmux_agent_for_dir /tmp/amux-route/other)"
   _assert "dir tie first in file"   "tieA"   "$(agentmux_agent_for_dir /tmp/amux-tie/z)"
   _assert "dir routing no match"    ""       "$(agentmux_agent_for_dir /tmp/elsewhere)"
-  _dir_mtime=$(stat -c %Y "$_dircfg" 2>/dev/null || stat -f %m "$_dircfg" 2>/dev/null || echo 0)
-  rm -f "$_dircfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_dir_mtime}.json"
+  rm -f "$_dircfg"
 
   # Directory-scoped [frame] overrides. Same match rules as agentmux_agent_for_dir
   # (longest path wins, subtree match, ~ expansion), but resolved per-field: a
@@ -374,8 +378,7 @@ TOML
   _assert "frame base default true" "true"  "$(agentmux_frame_field default /tmp/amux-frame)"
   # ~ key expands to $HOME and matches a subdir.
   _assert "frame tilde key"         "45" "$(agentmux_frame_field left "$HOME/amux-fr-home/proj")"
-  _fr_mtime=$(stat -c %Y "$_frcfg" 2>/dev/null || stat -f %m "$_frcfg" 2>/dev/null || echo 0)
-  rm -f "$_frcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_fr_mtime}.json"
+  rm -f "$_frcfg"
 
   # [amux] shares the same dir-scoped engine as [frame]. Cover a base read, a
   # per-dir override (longest match), subtree fallback to base, and an unset field.
@@ -397,9 +400,9 @@ TOML
   _assert "amux fallback prefix"  "C-a"     "$(agentmux_amux_field prefix /tmp/elsewhere)"
   _assert "amux tilde prefix"     "C-o"     "$(agentmux_amux_field prefix "$HOME/amux-pfx-home/x")"
   _assert "amux absent field"     ""        "$(agentmux_amux_field nonexistent)"
-  _am_mtime=$(stat -c %Y "$_amcfg" 2>/dev/null || stat -f %m "$_amcfg" 2>/dev/null || echo 0)
-  rm -f "$_amcfg" "${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_am_mtime}.json"
+  rm -f "$_amcfg"
 
+  rm -rf "$_selftest_cache"
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
 fi
