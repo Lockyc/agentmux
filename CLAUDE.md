@@ -7,7 +7,7 @@ Configurable tmux agent launcher. Shell scripts only — no Python, Node, or oth
 Shell scripts only — split between bash, POSIX sh, and (for the fish integration) fish, by what each script needs:
 
 - **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `bin/amux`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `relaunch.sh`).
-- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `update_colors.sh`, `colours.sh`, `frame_reattach.sh`, `version_check.sh`, `session_log.sh`, `claude/{status,ctx,digest}.sh`.
+- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `clear_icon.sh`, `update_colors.sh`, `colours.sh`, `frame_reattach.sh`, `version_check.sh`, `session_log.sh`, `claude/{status,ctx,digest}.sh`.
 - **fish** (`shell/agentmux.fish`) — the fish-shell integration only. It is a thin wrapper around `bin/amux` plus a `complete` line; it never sources bash libs (fish can't). All real logic stays in `bin/amux`.
 
 When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
@@ -26,6 +26,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 |---|---|
 | `bin/amux` | The `amux` launcher — standalone bash, single source of truth for amux logic |
 | `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
+| `scripts/clear_icon.sh` | `prefix v` binding target — one-shot strips the leading state emoji off the current window name (emoji-agnostic; relies on `tmux-status.sh`'s `"<emoji> <label>"` invariant). Hooks re-badge on the next event |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`) |
 | `scripts/session_log.sh` | Durable roster of agent windows amux opens (`amux --log`); recovery after a server/reboot kill, with a one-time launch nudge when a dead server left sessions open. The roster groups by project (one `cd` per project dir), tags each window `● live`/`✗ lost`, and builds each resume command from the launching agent's `resume` program (`[[agents]]` `resume` field; falls back to the recorded default) |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
@@ -98,6 +99,7 @@ AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 SESSION_LOG_SELFTEST=1       sh scripts/session_log.sh
 AMUX_SELFTEST=1              bash bin/amux
+CLEAR_ICON_SELFTEST=1        sh scripts/clear_icon.sh
 VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
 COLOURS_SELFTEST=1           sh scripts/colours.sh
 UPDATE_COLORS_SELFTEST=1     sh scripts/update_colors.sh

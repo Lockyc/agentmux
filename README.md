@@ -139,6 +139,7 @@ All of these are pressed **after the prefix** (`C-b` by default).
 | `prefix x` | Close the current tab. In an agentmux session's last pane it respawns + relaunches the agent instead of destroying the session; everywhere else it's tmux's kill-pane |
 | `prefix d` | Detach — leave the session running and return to your shell |
 | `prefix m` | Cycle `@agent-mode` through your defined agents (agentmux sessions only) |
+| `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
 
 ### Directory-based agent selection
 
