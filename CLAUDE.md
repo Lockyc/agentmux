@@ -91,7 +91,15 @@ by default (`[update] check`, or `AGENTMUX_VERSION_CHECK`).
 
 ## Selftests
 
-Several scripts have built-in selftests — run before changing them:
+`bash test.sh` (repo root) is the aggregate "run everything" entry point: it runs
+shellcheck, the `fish -n` syntax check, and every selftest below, prints a
+per-check pass/fail line and a summary, and exits non-zero if anything fails.
+It's runnable from any cwd and is what CI runs (`.github/workflows/ci.yml`, on
+push to `dev`/`main` and every PR — the runner installs `tmux` so the
+tmux-gated selftests actually run rather than self-skip).
+
+Several scripts also have built-in selftests — run the relevant one directly for
+a targeted check while changing a script:
 
 ```bash
 SUMMARISE_SELFTEST=1         scripts/summarise.sh
