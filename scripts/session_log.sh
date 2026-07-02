@@ -324,6 +324,22 @@ sl_prune() {
     | ((.socket_path + "|" + (.server_pid|tostring)) as $k | select($keep | index($k)))
   ' "$_ledger" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_ledger" || rm -f "$_tmp"
 
+  # Trim the `notified` marker the same way as the ledger: it grows one
+  # "socket|pid" line per dead server (sl_notice appends, never prunes), so keep
+  # only lines whose server is still in the live-or-recent KEEP set. Drops stale
+  # keys (and blank lines) so it self-cleans instead of growing unbounded.
+  _notmark="$(_sl_state_dir)/notified"
+  if [ -s "$_notmark" ]; then
+    _tmpn=$(mktemp) || _tmpn=""
+    if [ -n "$_tmpn" ]; then
+      # Bind the line to $k first: inside `$keep | …`, a bare `.` would rebind to
+      # $keep, not the line (same `as $k` guard the ledger rewrite above uses).
+      jq -Rrn --argjson keep "$_keep" '
+        inputs | select(length>0) | . as $k | select($keep | index($k) != null)
+      ' "$_notmark" > "$_tmpn" 2>/dev/null && mv "$_tmpn" "$_notmark" || rm -f "$_tmpn"
+    fi
+  fi
+
   # Best-effort marker sweep: drop seen/<pid>-* for pids no longer in the ledger.
   if [ -d "$(_sl_state_dir)/seen" ]; then
     _livepids=$(jq -rRn '[ inputs | fromjson? | .server_pid ] | unique | .[]' "$_ledger" 2>/dev/null)
@@ -481,10 +497,17 @@ cat > "$ledger" <<JSON
 {"ts":$now,"event":"open","socket_path":"/s/live","server_pid":222,"session":"b","window_id":"@1","window_name":"claude","cwd":"/w/b","agent":"claude"}
 {"ts":$now,"event":"open","socket_path":"/s/recent","server_pid":333,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/c","agent":"claude"}
 JSON
+# seed the notified marker with all three servers (+ a blank line); prune must
+# trim it to the live-or-recent keep set, matching the ledger.
+printf '%s\n' '/s/dead|111' '/s/live|222' '' '/s/recent|333' > "$AGENTMUX_STATE_DIR/notified"
 AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
 _assert "prune drops dead+old 111" "0" "$(grep -c '"server_pid":111' "$ledger")"
 _assert "prune keeps live 222"     "1" "$(grep -c '"server_pid":222' "$ledger")"
 _assert "prune keeps recent 333"   "1" "$(grep -c '"server_pid":333' "$ledger")"
+_assert "prune trims notified: drops dead"   "0" "$(grep -c '^/s/dead|111$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: keeps live"   "1" "$(grep -c '^/s/live|222$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: keeps recent" "1" "$(grep -c '^/s/recent|333$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: drops blanks" "0" "$(grep -cx '' "$AGENTMUX_STATE_DIR/notified")"
 
 # --- fold tolerates a torn/corrupt line (kill-server mid-append) → roster survives ---
 rm -f "$ledger"
