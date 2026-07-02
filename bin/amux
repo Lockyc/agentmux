@@ -78,6 +78,33 @@ _amux_agent_session_names() {
   _amux_atmux list-sessions -F '#{?@autoagent,#{session_name},}' 2>/dev/null | grep .
 }
 
+# --- Directory-guarded session ownership -------------------------------------
+# amux names a session after the current dir's basename, so two projects that
+# share a basename (~/work/api and ~/personal/api) resolve to the SAME session
+# name. warden drives --probe/--kill by CWD (no explicit name, cwd = the tab's
+# dir), so without a guard its cyan dot could light from — and its kill could
+# tear down — the OTHER project's session. Each agent and frame session records
+# its launch dir in the @amux_dir session option (set on every (re)launch); the
+# CWD-derived probe/kill treat a session whose @amux_dir is a DIFFERENT path as
+# "not ours". A session with no @amux_dir — created before this feature and not
+# yet relaunched — counts as ours, so nothing regresses for already-running
+# sessions. An explicit `amux --probe/--kill <name>` targets by name and skips
+# the guard entirely (unchanged behaviour). @amux_dir is only ever an opaque
+# option value compared as a string — never re-expanded as a target — so the
+# session-name whitelist (_amux_sanitize_session) is unaffected.
+# show-options targets the bare name: callers only reach here after an exact
+# has-session check, and tmux matches exact before prefix (see _amux_session_exists).
+_amux_agent_session_is_mine() {
+  _amux_session_exists "$1" || return 1
+  local sdir; sdir=$(_amux_atmux show-options -qv -t "$1" @amux_dir 2>/dev/null)
+  [ -z "$sdir" ] || [ "$sdir" = "$PWD" ]
+}
+_amux_frame_session_is_mine() {
+  tmux -L "$AGENTMUX_FRAME_SOCKET" has-session -t "=$1" 2>/dev/null || return 1
+  local sdir; sdir=$(tmux -L "$AGENTMUX_FRAME_SOCKET" show-options -qv -t "$1" @amux_dir 2>/dev/null)
+  [ -z "$sdir" ] || [ "$sdir" = "$PWD" ]
+}
+
 # Clamp a percent to 10..90. Non-numeric/empty falls back to $2 (the default),
 # which may itself be empty — in which case the result is empty (no output).
 _amux_clamp_pct() {
@@ -447,6 +474,9 @@ _amux_frame() {
     # Per-session (not -g): the frame socket can host several frames, each in its own
     # project, and a global option would let the last launch clobber the others.
     tmux -L "$sock" set -t "$fsess" @amux_project "$(basename "$PWD")"
+    # Full launch dir (not just the basename above) so the CWD-derived --probe/
+    # --kill can distinguish this frame from another project's same-basename frame.
+    tmux -L "$sock" set -t "$fsess" @amux_dir "$PWD"
     # Status bar position ([frame] status_position): frame.conf relies on tmux's
     # default (bottom); override per-session here when "top" is requested.
     tmux -L "$sock" set -t "$fsess" status-position "$status_pos"
@@ -611,13 +641,20 @@ _amux_log() {
 # dir's session; an explicit arg is sanitised, and a trailing -frame/-term is
 # stripped to the base (so `amux --probe foo-frame` queries project `foo`).
 _amux_probe() {
-  local arg base
-  if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
+  local arg base by_dir=0
+  if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); by_dir=1; fi
   case "$arg" in
     *-frame) base="${arg%-frame}" ;;
     *-term)  base="${arg%-term}" ;;
     *)       base="$arg" ;;
   esac
+  # CWD-derived (no explicit name → warden's call): honour the dir guard so a
+  # basename collision with a different project can't light this dot.
+  if [ "$by_dir" -eq 1 ]; then
+    _amux_agent_session_is_mine "$base" && return 0
+    _amux_frame_session_is_mine "${base}-frame" && return 0
+    return 1
+  fi
   _amux_session_exists "$base" && return 0
   # -L names the frame socket explicitly, so this ignores any inherited $TMUX
   # (unlike the agent socket, which _amux_atmux must clear $TMUX to reach).
@@ -636,15 +673,24 @@ _amux_kill() {
     *-term)  base="${arg%-term}" ;;
     *)       base="$arg" ;;
   esac
-  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET" parts=""
-  if _amux_session_exists "$base"; then
+  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET" parts="" by_dir=0 own_frame=0
+  [ $# -eq 0 ] && by_dir=1
+  # CWD-derived kill (no explicit name → warden's call): only reap sessions whose
+  # recorded @amux_dir is THIS dir, so a same-basename sibling project is never
+  # torn down. An explicit name skips the guard (unchanged behaviour). The term
+  # session carries no @amux_dir — it's paired 1:1 with the frame, so its
+  # ownership follows the frame's.
+  if { [ "$by_dir" -eq 0 ] && _amux_session_exists "$base"; } \
+     || { [ "$by_dir" -eq 1 ] && _amux_agent_session_is_mine "$base"; }; then
     _amux_atmux kill-session -t "=$base" 2>/dev/null; parts="agent '$base'"
   fi
-  if tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; then
+  if { [ "$by_dir" -eq 0 ] && tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; } \
+     || { [ "$by_dir" -eq 1 ] && _amux_frame_session_is_mine "${base}-frame"; }; then
     tmux -L "$fsock" kill-session -t "=${base}-frame" 2>/dev/null
-    parts="${parts:+$parts + }frame '${base}-frame'"
+    parts="${parts:+$parts + }frame '${base}-frame'"; own_frame=1
   fi
-  if tmux -L "$tsock" has-session -t "=${base}-term" 2>/dev/null; then
+  if { [ "$by_dir" -eq 0 ] || [ "$own_frame" -eq 1 ]; } \
+     && tmux -L "$tsock" has-session -t "=${base}-term" 2>/dev/null; then
     tmux -L "$tsock" kill-session -t "=${base}-term" 2>/dev/null
     parts="${parts:+$parts + }terminal '${base}-term'"
   fi
@@ -829,6 +875,10 @@ EOF
   fi
 
   _amux_atmux set-option -t "$name" "@autoagent" "1"
+  # Record the launch dir so the CWD-derived --probe/--kill can tell this session
+  # apart from another project that shares its basename (see the dir-guard block).
+  # Set on every (re)launch, so a legacy session picks it up the next time amux runs.
+  _amux_atmux set-option -t "$name" "@amux_dir" "$PWD"
   # Optional per-session prefix ([amux] prefix). Set unconditionally (new and
   # reattached sessions) so a config change applies on the next launch, and as a
   # session option so it never touches other sessions' ~/.tmux.conf prefix. Empty
@@ -1267,6 +1317,42 @@ EOF
     AGENTMUX_AGENT_SOCKET=""; AGENTMUX_FRAME_SOCKET="$_psave"
   else
     echo "SKIP: --probe test (tmux not found)"
+  fi
+
+  # --probe/--kill dir-guard (basename-collision safety): amux names a session
+  # after $PWD's basename, so two dirs sharing a basename collide. The CWD-derived
+  # probe/kill must refuse a session whose recorded @amux_dir is a DIFFERENT dir
+  # (so warden's dot/kill can't cross-fire to a sibling project); a session with
+  # no @amux_dir (legacy) still counts as ours. Isolate both sockets.
+  if command -v tmux >/dev/null 2>&1; then
+    AGENTMUX_AGENT_SOCKET="amux-selftest-$$"
+    _dgfsave="$AGENTMUX_FRAME_SOCKET"; AGENTMUX_FRAME_SOCKET="amux-selftest-dgframe-$$"
+    _amux_atmux kill-server 2>/dev/null; tmux -L "$AGENTMUX_FRAME_SOCKET" kill-server 2>/dev/null
+    _dgsave="$PWD"; _dgroot=$(mktemp -d); mkdir -p "$_dgroot/dgapi"; cd "$_dgroot/dgapi" || true
+    # session named after this dir's basename, but recorded under a DIFFERENT dir
+    _amux_atmux new-session -d -s dgapi -c /tmp 2>/dev/null
+    _amux_atmux set-option -t dgapi @amux_dir "/somewhere/else/dgapi" 2>/dev/null
+
+    if _amux_probe; then _got=present; else _got=absent; fi
+    _assert "dir-guard: probe absent for a same-basename session in another dir" "absent" "$_got"
+    _amux_kill >/dev/null 2>&1; _rc=$?
+    if _amux_session_exists dgapi; then _got=alive; else _got=killed; fi
+    _assert "dir-guard: kill spares a same-basename session in another dir" "alive" "$_got"
+    _assert "dir-guard: kill reports nothing to reap (exit 1)" "1" "$_rc"
+
+    _amux_atmux set-option -t dgapi @amux_dir "$PWD" 2>/dev/null
+    if _amux_probe; then _got=present; else _got=absent; fi
+    _assert "dir-guard: probe present once @amux_dir matches \$PWD" "present" "$_got"
+
+    _amux_atmux set-option -u -t dgapi @amux_dir 2>/dev/null   # legacy: no @amux_dir
+    if _amux_probe; then _got=present; else _got=absent; fi
+    _assert "dir-guard: probe present for a legacy session (no @amux_dir)" "present" "$_got"
+
+    _amux_atmux kill-server 2>/dev/null; tmux -L "$AGENTMUX_FRAME_SOCKET" kill-server 2>/dev/null
+    cd "$_dgsave" || true; rm -rf "$_dgroot"
+    AGENTMUX_AGENT_SOCKET=""; AGENTMUX_FRAME_SOCKET="$_dgfsave"
+  else
+    echo "SKIP: dir-guard test (tmux not found)"
   fi
 
   rm -rf "$_selftest_cache"

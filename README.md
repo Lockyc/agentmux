@@ -97,8 +97,8 @@ Normal shell commands — type them at a prompt.
 | `amux <agent> <session>` | New/attach named session with specified agent |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
 | `amux --log` | Durable roster of agent windows amux has opened, grouped by project — recover sessions lost to a server kill or reboot. Prints one `cd` per project, then a resume command per window tagged `● live` / `✗ lost` |
-| `amux --probe [session]` | Exit 0 if a session exists — the agent **or** a lingering frame (default: current dir). Silent; for scripting a presence indicator (e.g. warden's cyan dot) off the exit code |
-| `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir) |
+| `amux --probe [session]` | Exit 0 if a session exists — the agent **or** a lingering frame (default: current dir). Silent; for scripting a presence indicator (e.g. warden's cyan dot) off the exit code. With no `session` arg it matches only the session launched *from this dir*, so two projects sharing a folder name never cross-light |
+| `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir). Like `--probe`, the no-arg form only reaps the session launched *from this dir* — a same-named sibling project is left alone |
 | `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
 | `amux --update` | Update to the latest agentmux (`git pull --ff-only` of `~/.agentmux`) |
 | `amux --colours [grid\|pick]` | Preview the colour palette (curated names + 256 codes). `pick [agent]` interactively builds a paste-ready `colour =` line |
