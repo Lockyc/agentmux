@@ -111,7 +111,7 @@ Normal shell commands — type them at a prompt.
 Set `[update] check = true` in `~/.agentmux/amux.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
 
-Sessions are named after `basename $PWD` (dots → underscores) by default — run `amux` in your project directory and it picks up the name automatically. Pass an explicit name with `amux <agent> <session>` to override. agentmux sessions get a coloured status bar, AI summary rows, and tab-state emojis; plain tmux sessions are left unstyled.
+Sessions are named after `basename $PWD` (every character outside `A-Za-z0-9_-` — spaces, slashes, colons, dots, … — becomes `_`) by default — run `amux` in your project directory and it picks up the name automatically. Pass an explicit name with `amux <agent> <session>` to override. agentmux sessions get a coloured status bar, AI summary rows, and tab-state emojis; plain tmux sessions are left unstyled.
 
 ### Inside a session: tmux basics
 
@@ -304,7 +304,7 @@ Two optional overrides let an adapter swap in custom helpers; defaults work for 
 
 Both must print nothing and exit 0 on any error — the shared core treats them as cosmetic.
 
-To add e.g. a Gemini CLI adapter: create `scripts/gemini/{status,ctx,digest}.sh` following the Claude versions, wire your agent's hook system to call `~/.agentmux/scripts/gemini/status.sh <state>` with `state` ∈ `start|working|notify|permission|done`, and `install.sh` will pick the directory up automatically.
+To add e.g. a Gemini CLI adapter: create the adapter's `{status,ctx,digest}.sh` following the Claude versions and wire your agent's hook system to call its `status.sh <state>` (by absolute path) with `state` ∈ `start|working|notify|permission|done`. `install.sh` doesn't wire adapters — it only clones/updates the repo, so any adapter agentmux *ships* (e.g. a future tracked `scripts/gemini/`) is already present in the clone, but your **own** adapter and its hook wiring are manual and live outside the clone (see below).
 
 **Keep custom adapters outside the shipped tree.** `~/.agentmux/` is a git clone and `amux --update` runs `git pull --ff-only`. Because adapters are referenced by absolute path — the hook command plus the `AGENTMUX_CTX_BIN`/`AGENTMUX_DIGEST_BIN` (and other `AGENTMUX_*_BIN`) overrides — they can live anywhere on your filesystem. Put your own under e.g. `~/.agentmux-local/<agent>/` and point your hook command and env-var overrides at those paths. Avoid authoring an adapter under `~/.agentmux/scripts/<name>/` using a name agentmux might later ship: if a future release adds a tracked `scripts/<name>/`, `amux --update` will refuse to proceed rather than overwrite your file, blocking updates until you relocate it.
 

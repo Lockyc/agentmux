@@ -773,7 +773,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   <agent_name>   agent by name (e.g. "work")
   (none)         agent whose `dirs` matches the current directory;
                  falls back to the first agent in amux.toml
-  session_name   defaults to basename of $PWD (dots → underscores)
+  session_name   defaults to basename of $PWD (chars outside A-Za-z0-9_- → _)
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
   --log          durable roster of past/open agent sessions, incl. ones lost to a server crash
