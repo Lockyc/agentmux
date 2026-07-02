@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install apt deps (shellcheck, tmux, jq, fish)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck tmux jq fish
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      # The `toml2json` runtime dep is pelletier/go-toml's `tomljson` command,
+      # exposed on PATH under the name the scripts invoke (`toml2json`).
+      - name: Install toml2json (go-toml tomljson)
+        run: |
+          go install github.com/pelletier/go-toml/v2/cmd/tomljson@latest
+          ln -sf "$(go env GOPATH)/bin/tomljson" "$(go env GOPATH)/bin/toml2json"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify toml deps
+        run: |
+          command -v toml2json
+          printf 'a = 1\n' | toml2json | jq -e '.a == 1' >/dev/null
+          echo "toml2json + jq round-trip OK"
+
+      - name: Run test.sh
+        run: bash test.sh
