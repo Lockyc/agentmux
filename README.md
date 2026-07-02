@@ -378,7 +378,7 @@ The coloured status bar and 3 extra summary rows only appear in `amux` sessions 
 1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
 2. `claude/digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
 3. `summarise.sh` (stand mode) — sends the digest to a local OpenAI-compatible endpoint; receives `"<subject>. done: …; now: …; next: …"`
-4. Result written to `/tmp/agentmux-status-<pane_key>.txt`
+4. Result written to `<runtime>/agentmux-status-<pane_key>.txt` (see the note below for `<runtime>` and `<pane_key>`)
 5. `summary_rows.sh` (called by tmux `status-format[1-3]`) splits that into three display rows
 
 Override the endpoint or model with environment variables:
@@ -389,7 +389,16 @@ export AGENTMUX_LLM_MODEL=qwen2.5-14b-instruct
 export AGENTMUX_LLM_TIMEOUT=20   # seconds
 ```
 
-**Non-Claude agents:** any agent can participate by writing to `/tmp/agentmux-status-<pane_key>.txt` directly (where `pane_key=$(echo $TMUX_PANE | tr -d '%')`). The format is a single line: `<subject>. done: <text>; now: <text>; next: <text>` — any of the `done`/`now`/`next` labels may be omitted.
+**Non-Claude agents:** any agent can participate by writing the summary file directly. It lives under a **per-uid runtime dir** — `$XDG_RUNTIME_DIR` if set, else `/tmp/agentmux-$(id -u)` (created mode 0700, so a `/tmp` co-tenant can't pre-create it to leak text or wedge locks) — named `agentmux-status-<pane_key>.txt`. The `<pane_key>` folds the **tmux socket identity** into the pane number so two tmux servers can't collide (routine for power users, and guaranteed under `amux --frame`). Compute the same path your agent's pane resolves to:
+
+```sh
+runtime_dir="${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}"
+mkdir -p -m 0700 "$runtime_dir"
+pane_key="$(printf '%s' "${TMUX%%,*}" | cksum | cut -d' ' -f1)-$(printf '%s' "$TMUX_PANE" | tr -d '%')"
+printf '%s' "$summary" > "$runtime_dir/agentmux-status-${pane_key}.txt"
+```
+
+The format is a single line: `<subject>. done: <text>; now: <text>; next: <text>` — any of the `done`/`now`/`next` labels may be omitted.
 
 ## Session colours
 

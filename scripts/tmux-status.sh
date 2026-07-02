@@ -16,13 +16,20 @@
 #     via AGENTMUX_DIGEST_BIN + summarise.sh stand mode — so it refreshes
 #     mid-turn during long autonomous runs, not only when a prompt arrives.
 #
-# /tmp/agentmux-status-<pane>.txt       done/now/next summary (status lines 1-3; each working hook)
-# /tmp/agentmux-diag-<pane>.txt         pipeline diagnostic shown when no summary yet
-# /tmp/<agent_name>-subject-<pane>.txt  stable subject label (derived once, re-anchored on shift)
-# /tmp/<agent_name>-substart-<pane>.txt subject-start line offset (scope B; written on re-anchor)
-# /tmp/agentmux-sum-<pane>.lock.d       summariser overlap lock
-# /tmp/agentmux-sum-<pane>.ts           last-refresh stamp (throttles prompt-less PostToolUse refreshes)
-# /tmp/agentmux-sum-<pane>.drift        consecutive-drift counter (subject re-derives only after sustained drift)
+# Per-pane state files live under a per-uid runtime dir ($XDG_RUNTIME_DIR, else
+# /tmp/agentmux-<uid> at mode 0700 — not world-writable /tmp), keyed by <pane_key>
+# = "<hash of tmux socket>-<pane number>". The socket hash folds in server
+# identity so two tmux servers' colliding %0/%1 pane numbers (guaranteed under
+# `amux --frame`, where the agent runs a second tmux deep) don't clobber each
+# other. summary_rows.sh MUST derive the same runtime dir + key or it can't find
+# these files — keep the two in lockstep (it takes #{socket_path} as an arg).
+# <runtime>/agentmux-status-<pane_key>.txt   done/now/next summary (status lines 1-3; each working hook)
+# <runtime>/agentmux-diag-<pane_key>.txt     pipeline diagnostic shown when no summary yet
+# <runtime>/<agent_name>-subject-<pane_key>.txt  stable subject label (derived once, re-anchored on shift)
+# <runtime>/<agent_name>-substart-<pane_key>.txt subject-start line offset (scope B; written on re-anchor)
+# <runtime>/agentmux-sum-<pane_key>.lock.d   summariser overlap lock
+# <runtime>/agentmux-sum-<pane_key>.ts       last-refresh stamp (throttles prompt-less PostToolUse refreshes)
+# <runtime>/agentmux-sum-<pane_key>.drift    consecutive-drift counter (subject re-derives only after sustained drift)
 # start state removes all of the above. Needs jq, AGENTMUX_CTX_BIN, AGENTMUX_DIGEST_BIN,
 # summarise.sh, and a reachable LLM endpoint; without it diag shows "llm: unreachable".
 
@@ -47,14 +54,30 @@ case "$state" in
   *)          exit 0 ;;
 esac
 
-pane_key=$(echo "$TMUX_PANE" | tr -d '%')
+# Per-uid runtime dir instead of world-writable /tmp (a co-tenant could otherwise
+# pre-create the fixed-name files to leak summary text or wedge locks). Same base
+# must be used by summary_rows.sh.
+runtime_dir="${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}"
+[ -d "$runtime_dir" ] || { mkdir -p "$runtime_dir" 2>/dev/null && chmod 0700 "$runtime_dir" 2>/dev/null; }
+# pane_key folds the tmux socket identity (first comma-field of $TMUX) into the
+# pane number so two servers can't collide (see header). Whitelist-safe: cksum
+# digits + '-' + pane digits. Empty $TMUX (not inside tmux) → bare pane number.
+# $TMUX is guaranteed non-empty here by the guard at the top, but stay defensive.
+_amux_sock="${TMUX%%,*}"
+_amux_pane_num=$(printf '%s' "$TMUX_PANE" | tr -d '%')
+if [ -n "$_amux_sock" ]; then
+  pane_key="$(printf '%s' "$_amux_sock" | cksum | cut -d' ' -f1)-${_amux_pane_num}"
+else
+  pane_key="$_amux_pane_num"
+fi
 agent_name="${AGENTMUX_AGENT_NAME:-agent}"
-longfile="/tmp/agentmux-status-${pane_key}.txt"
-diagfile="/tmp/agentmux-diag-${pane_key}.txt"
-subjectfile="/tmp/${agent_name}-subject-${pane_key}.txt"
-substartfile="/tmp/${agent_name}-substart-${pane_key}.txt"
-sumtsfile="/tmp/agentmux-sum-${pane_key}.ts"
-driftfile="/tmp/agentmux-sum-${pane_key}.drift"
+longfile="$runtime_dir/agentmux-status-${pane_key}.txt"
+diagfile="$runtime_dir/agentmux-diag-${pane_key}.txt"
+subjectfile="$runtime_dir/${agent_name}-subject-${pane_key}.txt"
+substartfile="$runtime_dir/${agent_name}-substart-${pane_key}.txt"
+sumtsfile="$runtime_dir/agentmux-sum-${pane_key}.ts"
+driftfile="$runtime_dir/agentmux-sum-${pane_key}.drift"
+sumlockdir="$runtime_dir/agentmux-sum-${pane_key}.lock.d"
 TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
 label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
 # Target our own pane explicitly: an un-targeted display-message resolves against
@@ -79,7 +102,7 @@ esac
 
 if [ "$emoji" = "🤖" ]; then
   rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" "$sumtsfile" "$driftfile" 2>/dev/null
-  rmdir "/tmp/agentmux-sum-${pane_key}.lock.d" 2>/dev/null
+  rmdir "$sumlockdir" 2>/dev/null
 fi
 
 # Hook payload is parsed by the adapter and handed in via env vars — agent
@@ -145,14 +168,14 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
   if [ -n "$pfile" ]; then
     printf '%s' "$prompt" > "$pfile"
     nohup sh -c '
-      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}; dcf=${12}
+      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}; dcf=${12}; rtd=${13}
       cur=$(cat "$pf" 2>/dev/null); rm -f "$pf"
       recent=$("$ctx" "$tp" 6 400 tail 2>/dev/null)
       if [ -n "$recent" ] && [ -n "$cur" ]; then blob="$recent / $cur"
       elif [ -n "$cur" ]; then blob="$cur"
       else blob="$recent"; fi
       [ -n "$blob" ] || exit 0
-      lock="/tmp/agentmux-sum-${pane}.lock.d"
+      lock="$rtd/agentmux-sum-${pane}.lock.d"
       mkdir "$lock" 2>/dev/null || exit 0
 
       # GOAL context for the subject: early intent (read from the session START,
@@ -235,7 +258,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       case "$start" in ""|*[!0-9]*) start=1 ;; esac
       digest=$("$dig" "$tp" "$start" 10000 2>/dev/null)
       [ -n "$digest" ] || digest="$blob"
-      df="/tmp/agentmux-diag-${pane}.txt"
+      df="$rtd/agentmux-diag-${pane}.txt"
       p=$(printf "%s" "$digest" | AGENTMUX_SUBJECT="$subj" "$sum" 55 stand)
       # Defence-in-depth: strip any "done:" clause the model invented despite
       # the prompt, when the digest has no file-mutation evidence (edited or
@@ -256,7 +279,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
         fi
       fi
       rmdir "$lock" 2>/dev/null
-    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" "$driftfile" \
+    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" "$driftfile" "$runtime_dir" \
       >/dev/null 2>&1 </dev/null &
   fi
 elif [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ -x "$SUM" ]; then
@@ -305,7 +328,7 @@ _tmux_nest_depth() {
 if [ "$2" = "--notify" ]; then
   # Dedupe across hook types (done + notify fire ~simultaneously at end of turn).
   # mkdir is atomic — only one concurrent hook process wins the claim per cooldown window.
-  lockdir="/tmp/${agent_name}-notify-${pane_key}.d"
+  lockdir="$runtime_dir/${agent_name}-notify-${pane_key}.d"
   cooldown=5
 
   if [ -d "$lockdir" ]; then

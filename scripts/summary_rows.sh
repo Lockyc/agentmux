@@ -1,6 +1,11 @@
 #!/bin/sh
-# summary_rows.sh <pane-id> <row> [width]
-# Renders the pane's /tmp/agentmux-status-<pane>.txt across THREE status rows.
+# summary_rows.sh <pane-id> <row> [width] [socket-path]
+# Renders the pane's done/now/next status file across THREE status rows. The file
+# lives under a per-uid runtime dir ($XDG_RUNTIME_DIR, else /tmp/agentmux-<uid>),
+# keyed by "<hash of tmux socket>-<pane number>". This derivation MUST match
+# tmux-status.sh (the writer) or the file can't be found. tmux `#()` format
+# commands don't inherit $TMUX, so agentmux.conf passes #{socket_path} as arg 4;
+# if absent (e.g. manual invocation) we fall back to the bare pane number.
 # Agents write "done/now/next" text to that file; this script displays it.
 # Format produced by summarise.sh stand mode: "<subject>. done: …; now: …; next: …"
 #   row 1 = "<subject>. done: …"  (everything before " now:")
@@ -84,15 +89,23 @@ if [ "${SUMMARY_ROWS_SELFTEST:-}" = "1" ]; then
   exit "$fail"
 fi
 
-pane=$(printf '%s' "${1:-}" | tr -d '%')
+pane_num=$(printf '%s' "${1:-}" | tr -d '%')
 row=${2:-1}
 width=${3:-120}
-[ -n "$pane" ] || exit 0
+sock="${4:-}"
+[ -n "$pane_num" ] || exit 0
 case "$row" in 1|2|3) ;; *) exit 0 ;; esac
 case "$width" in ''|*[!0-9]*) width=120 ;; esac
 [ "$width" -lt 20 ] && width=120
-f="/tmp/agentmux-status-${pane}.txt"
-df="/tmp/agentmux-diag-${pane}.txt"
+# Fold the socket into the key (see header) so this matches tmux-status.sh.
+if [ -n "$sock" ]; then
+  pane="$(printf '%s' "$sock" | cksum | cut -d' ' -f1)-${pane_num}"
+else
+  pane="$pane_num"
+fi
+runtime_dir="${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}"
+f="$runtime_dir/agentmux-status-${pane}.txt"
+df="$runtime_dir/agentmux-diag-${pane}.txt"
 if [ -s "$f" ]; then
   content=$(tr '\n' ' ' < "$f")
 elif [ -s "$df" ]; then

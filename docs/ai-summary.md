@@ -35,7 +35,10 @@ agent hook  →  scripts/claude/status.sh  →  scripts/tmux-status.sh  ─┬�
   - **stand line** — the moving done/now/next, re-derived each refresh from
     `digest.sh` output piped through `summarise.sh` stand mode, written to
     `agentmux-status-<pane>.txt` and rendered by `summary_rows.sh`.
-- Per-pane temp files (all under `/tmp`, keyed by pane id): `agentmux-status-*`
+- Per-pane temp files (under a per-uid runtime dir — `$XDG_RUNTIME_DIR`, else
+  `/tmp/agentmux-<uid>` at mode 0700 — keyed by `<hash of tmux socket>-<pane
+  number>`, so two tmux servers' colliding pane numbers don't clash and a `/tmp`
+  co-tenant can't pre-create them): `agentmux-status-*`
   (stand line), `agentmux-diag-*` (pipeline diagnostic), `<agent>-subject-*`
   (subject), `<agent>-substart-*` (digest start offset), `agentmux-sum-*.lock.d`
   (overlap lock), `agentmux-sum-*.ts` (refresh throttle stamp),
