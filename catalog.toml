@@ -1,0 +1,10 @@
+name    = "agentmux"
+summary = "tmux-based agent launcher — the companion a warden/curator tab runs to spawn, probe, and kill agent sessions"
+kind    = "tool"
+status  = "active"
+tags    = ["tmux", "agents", "cli", "launcher"]
+stack   = ["bash", "tmux"]
+
+[[provides]]
+name    = "agent-sessions"
+summary = "Spawns, probes, and kills tmux-backed agent sessions (the warden → agentmux → tmux stack)"
