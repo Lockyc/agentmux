@@ -87,8 +87,29 @@ if [ "${SUMMARY_ROWS_SELFTEST:-}" = "1" ]; then
   # '#' is escaped to '##'.
   [ "$(_render "subj #1. now: y" 1 200)" = "subj ##1." ] || { echo "lt12 FAIL [$(_render "subj #1. now: y" 1 200)]" >&2; fail=1; }
 
+  # stdin entry point renders the same as _render. SUMMARY_ROWS_SELFTEST is
+  # explicitly cleared for the subshell: without it the subshell inherits
+  # SUMMARY_ROWS_SELFTEST=1 from this very run, re-enters this selftest block
+  # instead of the --stdin branch, and recurses -- an unbounded fork bomb.
+  got=$(printf '%s' "$s" | SUMMARY_ROWS_SELFTEST='' sh "$0" --stdin 1 200)
+  [ "$got" = "billing soft delete migration. done: edited models.py, wrote backfill.py" ] || { echo "lt-stdin1 FAIL [$got]" >&2; fail=1; }
+  got=$(printf '%s' "$s" | SUMMARY_ROWS_SELFTEST='' sh "$0" --stdin 2 200)
+  [ "$got" = "now: add proration tests" ] || { echo "lt-stdin2 FAIL [$got]" >&2; fail=1; }
+
   [ "$fail" = 0 ] && echo "selftest OK"
   exit "$fail"
+fi
+
+# Render one row from content on stdin (used by tmux-status.sh, the writer, which
+# now pushes rendered rows into @amux_rowN pane options instead of the status bar
+# polling this script via #()). Pass a large width to disable clipping — tmux
+# auto-clips the status line to the terminal width.
+if [ "${1:-}" = "--stdin" ]; then
+  _row=${2:-1}; _w=${3:-9999}
+  case "$_row" in 1|2|3) ;; *) exit 0 ;; esac
+  case "$_w" in ''|*[!0-9]*) _w=9999 ;; esac
+  _render "$(cat)" "$_row" "$_w"
+  exit 0
 fi
 
 pane_num=${1#%}   # strip the leading % of a #{pane_id} (%3 -> 3); builtin, no fork
