@@ -754,6 +754,13 @@ $c
     local grp_name=""; [ "$c" = "$PWD" ] && grp_name="$name_override"
     printf '%s' "$lines" | _amux_restore_into "$c" "$grp_name"
     [ "$mode" = auto ] && _amux_auto_restored=1
+    # Retire this cwd's dead servers from future AUTO offers now that their tabs
+    # are relaunched — otherwise a manual --restore/--global (which don't mark the
+    # notified gate) leaves the tab offerable, and a later bare `amux` would
+    # auto-restore it AGAIN into a second window fighting the same session id.
+    # `dropped --new` marks (socket|pid|cwd) for every still-dead server in $c;
+    # the just-created live session is excluded, so only the dead source is marked.
+    "$AGENTMUX_SCRIPTS/session_log.sh" dropped --new "$c" >/dev/null 2>&1 || true
   done
   # Attach behaviour by mode.
   if [ "$mode" != auto ]; then
@@ -999,7 +1006,11 @@ EOF
   # on read. If the user restores tabs, the session now exists → the block below
   # skips the fresh window-0 agent (window-0-replace falls out naturally).
   local _amux_auto_restored=0
-  if [ -t 0 ] && [ -t 1 ]; then
+  # Guard the fds the picker actually uses: it reads the reply on stdin (fd 0) and
+  # writes the list + prompt to stderr (fd 2). Testing fd 2 (not fd 1) means
+  # `amux 2>/dev/null` correctly skips the picker instead of blocking on an
+  # invisible prompt, while a redirected stdout still shows it.
+  if [ -t 0 ] && [ -t 2 ]; then
     _amux_restore_pick auto "$name"
   fi
 
