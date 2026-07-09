@@ -102,6 +102,17 @@ It's runnable from any cwd and is what CI runs (`.github/workflows/ci.yml`, on
 push to `dev`/`main` and every PR — the runner installs `tmux` so the
 tmux-gated selftests actually run rather than self-skip).
 
+**On a heavily-loaded machine, prefer the individual selftests below for local
+checks and let CI run the aggregate `bash test.sh`.** It's bounded — one
+shellcheck call plus strictly-sequential selftests, no infinite fan-out — but it
+does spike process count, not worth stacking on a machine already near its
+per-user process limit. (It once contributed to a process-table lockup, but only
+as a spike on top of the old status-bar `#()` poll that was spawning per second;
+both that poll and the one true infinite-fork vector — the `summary_rows`
+selftest re-entering itself — are gone now: `summary_rows.sh` checks `--stdin`
+*before* its selftest block, so a `--stdin` child renders and exits, never
+recursing.)
+
 Several scripts also have built-in selftests — run the relevant one directly for
 a targeted check while changing a script:
 

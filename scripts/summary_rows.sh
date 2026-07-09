@@ -46,6 +46,21 @@ _render() {
     }'
 }
 
+# Render one row from content on stdin (the writer's entry point). Checked FIRST,
+# before the selftest block below, so a --stdin call can never re-enter the
+# selftest — the recursion that made the selftest a fork bomb is structurally
+# impossible now, not merely guarded by an env var. A large width disables
+# clipping here; tmux auto-clips the status line to the terminal width.
+if [ "${1:-}" = "--stdin" ]; then
+  _row=${2:-1}; _w=${3:-9999}
+  case "$_row" in 1|2|3) ;; *) exit 0 ;; esac
+  case "$_w" in ''|*[!0-9]*) _w=9999 ;; esac
+  # Flatten newlines to spaces (as the old file reader did): a stray newline in
+  # the content would otherwise reach the tmux option and break the status line.
+  _render "$(cat | tr '\n' ' ')" "$_row" "$_w"
+  exit 0
+fi
+
 if [ "${SUMMARY_ROWS_SELFTEST:-}" = "1" ]; then
   fail=0
   s="billing soft delete migration. done: edited models.py, wrote backfill.py; now: add proration tests; next: fix and rerun"
@@ -83,33 +98,19 @@ if [ "${SUMMARY_ROWS_SELFTEST:-}" = "1" ]; then
   # '#' is escaped to '##'.
   [ "$(_render "subj #1. now: y" 1 200)" = "subj ##1." ] || { echo "lt12 FAIL [$(_render "subj #1. now: y" 1 200)]" >&2; fail=1; }
 
-  # stdin entry point renders the same as _render. SUMMARY_ROWS_SELFTEST is
-  # explicitly cleared for the subshell: without it the subshell inherits
-  # SUMMARY_ROWS_SELFTEST=1 from this very run, re-enters this selftest block
-  # instead of the --stdin branch, and recurses -- an unbounded fork bomb.
-  got=$(printf '%s' "$s" | SUMMARY_ROWS_SELFTEST='' sh "$0" --stdin 1 200)
+  # stdin entry point renders the same as _render. Spawning "$0 --stdin" is safe
+  # even though SUMMARY_ROWS_SELFTEST=1 is still set: the --stdin check runs ABOVE
+  # this selftest block, so the child renders and exits before it could ever
+  # re-enter the selftest — no recursion, no fork bomb, structurally.
+  got=$(printf '%s' "$s" | sh "$0" --stdin 1 200)
   [ "$got" = "billing soft delete migration. done: edited models.py, wrote backfill.py" ] || { echo "lt-stdin1 FAIL [$got]" >&2; fail=1; }
-  got=$(printf '%s' "$s" | SUMMARY_ROWS_SELFTEST='' sh "$0" --stdin 2 200)
+  got=$(printf '%s' "$s" | sh "$0" --stdin 2 200)
   [ "$got" = "now: add proration tests" ] || { echo "lt-stdin2 FAIL [$got]" >&2; fail=1; }
 
   [ "$fail" = 0 ] && echo "selftest OK"
   exit "$fail"
 fi
 
-# Render one row from content on stdin (used by tmux-status.sh, the writer, which
-# now pushes rendered rows into @amux_rowN pane options instead of the status bar
-# polling this script via #()). Pass a large width to disable clipping — tmux
-# auto-clips the status line to the terminal width.
-if [ "${1:-}" = "--stdin" ]; then
-  _row=${2:-1}; _w=${3:-9999}
-  case "$_row" in 1|2|3) ;; *) exit 0 ;; esac
-  case "$_w" in ''|*[!0-9]*) _w=9999 ;; esac
-  # Flatten newlines to spaces (as the old file reader did): a stray newline in
-  # the content would otherwise reach the tmux option and break the status line.
-  _render "$(cat | tr '\n' ' ')" "$_row" "$_w"
-  exit 0
-fi
-
-# No --stdin → no-op: the status bar reads the @amux_rowN pane options the writer
-# pushes, so this script is only ever a render helper now. Exit 0 (see header).
+# Neither --stdin (above) nor a selftest run → no-op: the status bar reads the
+# @amux_rowN pane options the writer pushes; this script is only a render helper.
 exit 0
