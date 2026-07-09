@@ -91,7 +91,7 @@ if [ "${SUMMARY_ROWS_SELFTEST:-}" = "1" ]; then
   exit "$fail"
 fi
 
-pane_num=$(printf '%s' "${1:-}" | tr -d '%')
+pane_num=${1#%}   # strip the leading % of a #{pane_id} (%3 -> 3); builtin, no fork
 row=${2:-1}
 width=${3:-120}
 sock="${4:-}"
