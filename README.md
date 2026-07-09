@@ -379,7 +379,7 @@ The coloured status bar and 3 extra summary rows only appear in `amux` sessions 
 1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
 2. `claude/digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
 3. `summarise.sh` (stand mode) — sends the digest to a local OpenAI-compatible endpoint; receives `"<subject>. done: …; now: …; next: …"`
-4. Result written to `<runtime>/agentmux-status-<pane_key>.txt` (see the note below for `<runtime>` and `<pane_key>`)
+4. Result saved to the writer's per-pane status file (internal state — lets a later failed refresh keep the last-good rows rather than blank them)
 5. The three rows are rendered (`summary_rows.sh --stdin`) and **pushed** into the `@amux_row1/2/3` pane options; `status-format[1-3]` reads those options (`#{@amux_rowN}`), so a status redraw substitutes them and spawns nothing — no `#()` poll
 
 Override the endpoint or model with environment variables:
@@ -390,13 +390,15 @@ export AGENTMUX_LLM_MODEL=qwen2.5-14b-instruct
 export AGENTMUX_LLM_TIMEOUT=20   # seconds
 ```
 
-**Non-Claude agents:** any agent can participate by writing the summary file directly. It lives under a **per-uid runtime dir** — `$XDG_RUNTIME_DIR` if set, else `/tmp/agentmux-$(id -u)` (created mode 0700, so a `/tmp` co-tenant can't pre-create it to leak text or wedge locks) — named `agentmux-status-<pane_key>.txt`. The `<pane_key>` folds the **tmux socket identity** into the pane number so two tmux servers can't collide (routine for power users, and guaranteed under `amux --frame`). Compute the same path your agent's pane resolves to:
+**Non-Claude agents:** any agent can participate by pushing the three rendered rows into its pane's `@amux_row1/2/3` options — the same options `status-format` reads (the display is event-driven; there is no status file to poll). Render each row from your summary line with `summary_rows.sh --stdin <row>`, set the option on your own pane, and refresh:
 
 ```sh
-runtime_dir="${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}"
-mkdir -p -m 0700 "$runtime_dir"
-pane_key="$(printf '%s' "${TMUX%%,*}" | cksum | cut -d' ' -f1)-$(printf '%s' "$TMUX_PANE" | tr -d '%')"
-printf '%s' "$summary" > "$runtime_dir/agentmux-status-${pane_key}.txt"
+summary="…"   # "<subject>. done: …; now: …; next: …"
+for r in 1 2 3; do
+  tmux set-option -p -t "$TMUX_PANE" "@amux_row$r" \
+    "$(printf '%s' "$summary" | ~/.agentmux/scripts/summary_rows.sh --stdin "$r")"
+done
+tmux refresh-client -S
 ```
 
 The format is a single line: `<subject>. done: <text>; now: <text>; next: <text>` — any of the `done`/`now`/`next` labels may be omitted.
