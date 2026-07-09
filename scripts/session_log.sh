@@ -7,15 +7,27 @@
 #   open  <agent> [target]   append an open record (target defaults to current pane)
 #   resume <label> <cmd>     append/refresh a generic resume hint for the current window
 #   list                     print the roster, partitioned live vs lost (dead server)
+#   notice                   one-time recovery nudge when a server died with windows open
 #   prune                    trim the ledger (dead, old server instances)
+#   heartbeat <socket> <pid> long-running loop; snapshots the live window set (internal)
 #
 # There is deliberately NO close event: tmux's pane-exit hooks cannot reliably
 # identify the exited pane (they fire with the ACTIVE pane's context once the
 # pane is gone), so a close hook would misattribute and hide live windows. We
-# reconcile instead at read time — a live server's rows are intersected with its
-# currently-open windows (see _sl_live_windows / sl_list).
+# reconcile instead against the set of windows that were open. For a LIVE server
+# that set is queried directly (tmux list-windows). A DEAD server can't be
+# queried, so while alive each server keeps a per-pid "live-set" sidecar at
+# <state>/live/<pid>.windows (one window id per line), overwritten in place — no
+# growth. It is refreshed two ways (hybrid): eagerly by sl_open/sl_resume (the
+# window set just changed) and by a per-server heartbeat loop every
+# AGENTMUX_HEARTBEAT_SECS (default 30) that catches CLOSES (which have no reliable
+# hook) and exits when the server dies, leaving its final snapshot as the recovery
+# set. At read time: live → intersect real list-windows; dead + sidecar → intersect
+# the sidecar (rows not in it were closed before death → omitted); dead + no sidecar
+# (server predating this feature) → show all, the pre-sidecar best-effort behavior.
 
 TAB=$(printf '\t')
+_SL_SELF="$0"   # this script's own path, for re-invoking the heartbeat detached
 
 _sl_state_dir() {
   printf '%s' "${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}"
@@ -68,6 +80,10 @@ EOF
     --arg wid "$_wid" --arg wn "$_wname" --arg cwd "$_cwd" --arg ag "$_agent" \
     '{ts:$ts,event:"open",socket_path:$sp,server_pid:$pid,session:$s,window_id:$wid,window_name:$wn,cwd:$cwd,agent:$ag}')
   _sl_append "$_line"
+  # The window set just grew — record it, and make sure a heartbeat is tracking
+  # this server so later closes are caught too.
+  _sl_snapshot "$_socket" "$_pid"
+  _sl_heartbeat_ensure "$_socket" "$_pid"
   # Launch is the natural trim point; sl_prune self-gates on the line cap, so
   # this is a cheap `wc -l` no-op until the ledger actually grows large.
   sl_prune
@@ -95,6 +111,54 @@ _sl_live_windows() {  # <socket>
     return 0
   fi
   tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null
+}
+
+# Path to a server's live-set sidecar (per pid; a reused pid means a *live* server,
+# which takes the list-windows path and overwrites the stale file on first write).
+_sl_live_file() { printf '%s/live/%s.windows' "$(_sl_state_dir)" "$1"; }  # <pid>
+
+# Overwrite <pid>'s sidecar with the server's current window set. Reuses
+# _sl_live_windows so the SESSION_LOG_LIVE_WINDOWS test hook drives it too. Atomic
+# (temp + mv) so a reader never sees a half-written set; fails soft.
+_sl_snapshot() {  # <socket> <pid>
+  _lf=$(_sl_live_file "$2"); _dir=${_lf%/*}
+  mkdir -p "$_dir" 2>/dev/null || return 0
+  _tmp="$_dir/.$2.$$.tmp"
+  if _sl_live_windows "$1" > "$_tmp" 2>/dev/null; then
+    mv "$_tmp" "$_lf" 2>/dev/null || rm -f "$_tmp"
+  else
+    rm -f "$_tmp"
+  fi
+}
+
+# Read a dead server's recorded live-set (empty if the file is absent).
+_sl_snapshot_windows() { cat "$(_sl_live_file "$1")" 2>/dev/null; }  # <pid>
+
+# Long-running heartbeat: refresh <pid>'s sidecar every AGENTMUX_HEARTBEAT_SECS
+# until the server dies, then remove only our pidfile (the final snapshot stays as
+# the recovery set; sl_prune reaps it with the server). Runs as its own process.
+sl_heartbeat() {  # <socket> <pid>
+  _sl_enabled || return 0
+  _dir="$(_sl_state_dir)/live"; mkdir -p "$_dir" 2>/dev/null || return 0
+  _hbpf="$_dir/$2.hb"; printf '%s' "$$" > "$_hbpf" 2>/dev/null || true
+  while _sl_server_live "$1" "$2"; do
+    _sl_snapshot "$1" "$2"
+    sleep "${AGENTMUX_HEARTBEAT_SECS:-30}"
+  done
+  rm -f "$_hbpf" 2>/dev/null || true
+}
+
+# Ensure exactly one heartbeat runs for <socket>/<pid>. Guard FIRST (cheap
+# steady-state no-op), so the test hook and a disabled config still honour an
+# already-running heartbeat. SESSION_LOG_HEARTBEAT_DISABLE suppresses the spawn
+# (tests, and any caller that doesn't want a background process).
+_sl_heartbeat_ensure() {  # <socket> <pid>
+  _hbpf="$(_sl_state_dir)/live/$2.hb"
+  if [ -f "$_hbpf" ] && kill -0 "$(cat "$_hbpf" 2>/dev/null)" 2>/dev/null; then return 0; fi
+  [ -n "${SESSION_LOG_HEARTBEAT_DISABLE:-}" ] && return 0
+  mkdir -p "$(_sl_state_dir)/live" 2>/dev/null || return 0
+  nohup sh "$_SL_SELF" heartbeat "$1" "$2" </dev/null >/dev/null 2>&1 &
+  echo "$!" > "$_hbpf" 2>/dev/null || true
 }
 
 # Epoch of the last boot, to tell a reboot from a same-boot kill (a server whose
@@ -168,8 +232,13 @@ sl_list() {
     if _sl_server_live "$socket" "$pid"; then
       _lw=$(_sl_live_windows "$socket" | tr '\n' ' ')
       printf 'S\t%s\t%s\tlive\t%s\n' "$socket" "$pid" "$_lw"
+    elif [ -f "$(_sl_live_file "$pid")" ]; then
+      # Dead, but we recorded its last live-set → intersect against that.
+      _sw=$(_sl_snapshot_windows "$pid" | tr '\n' ' ')
+      printf 'S\t%s\t%s\tlost\t%s\n' "$socket" "$pid" "$_sw"
     else
-      printf 'S\t%s\t%s\tlost\t\n' "$socket" "$pid"
+      # Dead with no sidecar (server predating the feature) → show all, best-effort.
+      printf 'S\t%s\t%s\tlostall\t\n' "$socket" "$pid"
     fi
   done > "$state"
 
@@ -190,12 +259,13 @@ sl_list() {
       $1 == "R" {
         socket=$2; pid=$3; wid=$4; cwd=$7; agent=$8; rcmd=$9; ts=$10
         key = socket SUBSEP pid
-        if (st[key] == "live") {
+        state = st[key]
+        if (state == "live" || state == "lost") {
           n = split(lw[key], a, " "); open = 0
           for (i = 1; i <= n; i++) if (a[i] == wid) { open = 1; break }
-          if (!open) next                       # closed-on-live → omit
-          tag = "● live"
-        } else tag = "✗ lost"
+          if (!open) next                       # closed before death/now → omit
+          tag = (state == "live") ? "● live" : "✗ lost"
+        } else tag = "✗ lost"                    # lostall: no sidecar → show all
         if (rcmd == "") { hint = 0; cmd = "" }
         else {
           hint = 1; p = prog[agent]
@@ -238,21 +308,35 @@ sl_notice() {
   _dir=$(_sl_state_dir)
   _notmark="$_dir/notified"
 
-  # Per server: socket, pid, newest ts, distinct-window count (from open events).
+  # Per server: socket, pid, newest ts, the distinct open-event window ids (joined).
   _servers=$(jq -rRn '
     [ inputs | fromjson? | select(.event=="open") ]
     | group_by([.socket_path, .server_pid])
     | map([ .[0].socket_path, (.[0].server_pid|tostring),
-            (map(.ts)|max|tostring), ([.[].window_id]|unique|length|tostring) ] | @tsv) | .[]
+            (map(.ts)|max|tostring), ([.[].window_id]|unique|join(" ")) ] | @tsv) | .[]
   ' "$_ledger")
   [ -n "$_servers" ] || return 0
 
   _total=0; _new=""; _reboot=0; _killed=0
-  while IFS="$TAB" read -r _socket _pid _maxts _wcount; do
+  while IFS="$TAB" read -r _socket _pid _maxts _wids; do
     [ -n "$_pid" ] || continue
     # Live iff the pid still answers AND the records aren't from before boot.
     if _sl_server_live "$_socket" "$_pid" && { [ -z "$_boot" ] || [ "$_maxts" -ge "$_boot" ] 2>/dev/null; }; then
       continue
+    fi
+    # How many windows were still open at death: intersect the ledger's windows
+    # with the recorded live-set if we have one; else (pre-feature server) all.
+    if [ -f "$(_sl_live_file "$_pid")" ]; then
+      _snap=$(_sl_snapshot_windows "$_pid"); _wcount=0
+      for _w in $_wids; do
+        case "
+$_snap
+" in *"
+$_w
+"*) _wcount=$((_wcount + 1)) ;; esac
+      done
+    else
+      _wcount=0; for _w in $_wids; do _wcount=$((_wcount + 1)); done
     fi
     _key="$_socket|$_pid"
     if [ -f "$_notmark" ] && grep -qxF "$_key" "$_notmark" 2>/dev/null; then continue; fi
@@ -295,6 +379,10 @@ EOF
     --arg wid "$_wid" --arg label "$_label" --arg rc "$_rcmd" \
     '{ts:$ts,event:"resume",socket_path:$sp,server_pid:$pid,window_id:$wid,label:$label,resume_cmd:$rc}')
   _sl_append "$_line"
+  # A resume reaches a server that may have been attached-to (not opened) this
+  # session — refresh its live-set and ensure a heartbeat is tracking it.
+  _sl_snapshot "$_socket" "$_pid"
+  _sl_heartbeat_ensure "$_socket" "$_pid"
 }
 
 sl_prune() {
@@ -341,11 +429,25 @@ sl_prune() {
   fi
 
   # Best-effort marker sweep: drop seen/<pid>-* for pids no longer in the ledger.
+  _livepids=$(jq -rRn '[ inputs | fromjson? | .server_pid ] | unique | .[]' "$_ledger" 2>/dev/null)
   if [ -d "$(_sl_state_dir)/seen" ]; then
-    _livepids=$(jq -rRn '[ inputs | fromjson? | .server_pid ] | unique | .[]' "$_ledger" 2>/dev/null)
     for m in "$(_sl_state_dir)"/seen/*; do
       [ -e "$m" ] || continue
       mp=$(basename "$m"); mp=${mp%%-*}
+      case "
+$_livepids
+" in *"
+$mp
+"*) : ;; *) rm -f "$m" ;; esac
+    done
+  fi
+
+  # Same for the live-set sidecars + heartbeat pidfiles (<pid>.windows / <pid>.hb):
+  # drop those whose server pid is no longer in the ledger.
+  if [ -d "$(_sl_state_dir)/live" ]; then
+    for m in "$(_sl_state_dir)"/live/*.windows "$(_sl_state_dir)"/live/*.hb; do
+      [ -e "$m" ] || continue
+      mp=$(basename "$m"); mp=${mp%.*}
       case "
 $_livepids
 " in *"
@@ -359,11 +461,12 @@ $mp
 if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
   cmd="${1:-}"; [ $# -gt 0 ] && shift
   case "$cmd" in
-    open)   sl_open   "$@" ;;
-    resume) sl_resume "$@" ;;
-    list)   sl_list   "$@" ;;
-    notice) sl_notice "$@" ;;
-    prune)  sl_prune  "$@" ;;
+    open)      sl_open      "$@" ;;
+    resume)    sl_resume    "$@" ;;
+    list)      sl_list      "$@" ;;
+    notice)    sl_notice    "$@" ;;
+    prune)     sl_prune     "$@" ;;
+    heartbeat) sl_heartbeat "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
   esac
   exit 0
@@ -562,6 +665,73 @@ cat > "$ledger" <<JSON
 JSON
 n3=$(SESSION_LOG_LIVE_PIDS="777" SESSION_LOG_BOOT_EPOCH=$_now sl_notice)
 _assert "notice catches pre-boot reboot (pid reused)" "1" "$(printf '%s\n' "$n3" | grep -c 'lost to a reboot')"
+
+# ============ live-set sidecar: confident dead-server recovery ============
+# Never spawn a real heartbeat process from the test process.
+SESSION_LOG_HEARTBEAT_DISABLE=1; export SESSION_LOG_HEARTBEAT_DISABLE
+
+# --- _sl_snapshot writes the current live window set to a per-pid sidecar ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
+SESSION_LOG_LIVE_WINDOWS="@1 @2 @5" _sl_snapshot "/s/a" 4242
+_assert "snapshot writes sidecar file" "1" "$([ -f "$AGENTMUX_STATE_DIR/live/4242.windows" ] && echo 1 || echo 0)"
+_assert "snapshot records the window set" "@1 @2 @5" "$(tr '\n' ' ' < "$AGENTMUX_STATE_DIR/live/4242.windows" | sed 's/ *$//')"
+
+# --- dead server WITH sidecar: open-at-death shown lost, closed-earlier omitted ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+cat > "$ledger" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/d","server_pid":808,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/d","server_pid":808,"window_id":"@1","label":"open1","resume_cmd":"claude --resume open1"}
+{"ts":90,"event":"open","socket_path":"/s/d","server_pid":808,"session":"old","window_id":"@2","window_name":"claude","cwd":"/w/old","agent":"work"}
+{"ts":91,"event":"resume","socket_path":"/s/d","server_pid":808,"window_id":"@2","label":"closed2","resume_cmd":"claude --resume closed2"}
+JSON
+printf '@1\n' > "$AGENTMUX_STATE_DIR/live/808.windows"   # only @1 was open at death
+out=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_RESUME_MAP="$RMAP" sl_list 2>&1)
+_assert "dead+sidecar: open-at-death shown"        "1" "$(printf '%s\n' "$out" | grep -c 'open1   ✗ lost')"
+_assert "dead+sidecar: closed-before-death omitted" "0" "$(printf '%s\n' "$out" | grep -c 'closed2')"
+_assert "dead+sidecar: closed project omitted"      "0" "$(printf '%s\n' "$out" | grep -c '/w/old')"
+
+# --- dead server with NO sidecar (pre-feature): fall back to show-all ---
+rm -rf "$AGENTMUX_STATE_DIR/live"
+out=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_RESUME_MAP="$RMAP" sl_list 2>&1)
+_assert "dead+no-sidecar: shows all (open1)"   "1" "$(printf '%s\n' "$out" | grep -c 'open1   ✗ lost')"
+_assert "dead+no-sidecar: shows all (closed2)" "1" "$(printf '%s\n' "$out" | grep -c 'closed2   ✗ lost')"
+
+# --- notice counts only the sidecar's windows for a dead server ---
+rm -f "$AGENTMUX_STATE_DIR/notified"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+printf '@1\n' > "$AGENTMUX_STATE_DIR/live/808.windows"   # only 1 of the 2 windows open at death
+nn=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_notice)
+_assert "notice counts sidecar intersection (1 not 2)" "1" "$(printf '%s\n' "$nn" | grep -c '1 agent session lost')"
+
+# --- notice without a sidecar (pre-feature) counts all open windows ---
+rm -rf "$AGENTMUX_STATE_DIR/live"; rm -f "$AGENTMUX_STATE_DIR/notified"
+nn2=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_notice)
+_assert "notice without sidecar counts all (2)" "1" "$(printf '%s\n' "$nn2" | grep -c '2 agent sessions lost')"
+
+# --- prune removes sidecars + heartbeat pidfiles for dropped servers ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+now=$(date +%s); old=$(( now - 30*86400 ))
+cat > "$ledger" <<JSON
+{"ts":$old,"event":"open","socket_path":"/s/dead","server_pid":111,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/a","agent":"claude"}
+{"ts":$now,"event":"open","socket_path":"/s/live","server_pid":222,"session":"b","window_id":"@1","window_name":"claude","cwd":"/w/b","agent":"claude"}
+JSON
+printf '@1\n' > "$AGENTMUX_STATE_DIR/live/111.windows"   # dead+old → sweep
+printf '999'  > "$AGENTMUX_STATE_DIR/live/111.hb"        # dead+old → sweep
+printf '@1\n' > "$AGENTMUX_STATE_DIR/live/222.windows"   # live → keep
+AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
+_assert "prune removes dead sidecar"      "0" "$([ -f "$AGENTMUX_STATE_DIR/live/111.windows" ] && echo 1 || echo 0)"
+_assert "prune removes dead hb pidfile"   "0" "$([ -f "$AGENTMUX_STATE_DIR/live/111.hb" ] && echo 1 || echo 0)"
+_assert "prune keeps live sidecar"        "1" "$([ -f "$AGENTMUX_STATE_DIR/live/222.windows" ] && echo 1 || echo 0)"
+
+# --- heartbeat-ensure: no-op when a live heartbeat already owns the pidfile ---
+rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+printf '%s' "$$" > "$AGENTMUX_STATE_DIR/live/808.hb"   # our own (alive) pid
+_sl_heartbeat_ensure "/s/d" 808
+_assert "ensure no-op when heartbeat alive" "$$" "$(cat "$AGENTMUX_STATE_DIR/live/808.hb")"
+
+# --- heartbeat-ensure: disabled → no spawn, no pidfile ---
+rm -rf "$AGENTMUX_STATE_DIR/live"
+_sl_heartbeat_ensure "/s/d" 909
+_assert "ensure disabled: no pidfile" "0" "$([ -f "$AGENTMUX_STATE_DIR/live/909.hb" ] && echo 1 || echo 0)"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
