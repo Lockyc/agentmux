@@ -658,8 +658,10 @@ _amux_sessions() {
 # WITH the resume_cmd as their pane start command, so launch_agent.sh's guard
 # skips the auto-launch. Sets the session opts a normal launch would.
 _amux_restore_into() {
-  local cwd="$1" name agent rcmd win created=0 exists=0
-  name=$(_amux_sanitize_session "$(basename "$cwd")")   # _amux_default_session_name is $PWD-bound — derive per-cwd
+  local cwd="$1" name="${2:-}" agent rcmd win created=0 exists=0
+  # Default to the per-cwd basename; overridable so the auto path can honour the
+  # launch's already-resolved session name (else it restores into a second session).
+  [ -n "$name" ] || name=$(_amux_sanitize_session "$(basename "$cwd")")
   _amux_session_exists "$name" && exists=1
   local TAB; TAB=$(printf '\t')
   while IFS="$TAB" read -r agent rcmd; do
@@ -691,7 +693,7 @@ _amux_restore_into() {
 #   explicit — dropped "$PWD"; attaches to $PWD's session after
 #   global   — dropped --global; restores all picked; attaches to $PWD's session if present
 _amux_restore_pick() {
-  local mode="$1" TAB; TAB=$(printf '\t')
+  local mode="$1" name_override="${2:-}" TAB; TAB=$(printf '\t')
   local rows
   case "$mode" in
     auto)     rows=$("$AGENTMUX_SCRIPTS/session_log.sh" dropped --new "$PWD" 2>/dev/null) ;;
@@ -699,7 +701,7 @@ _amux_restore_pick() {
     global)   rows=$("$AGENTMUX_SCRIPTS/session_log.sh" dropped --global 2>/dev/null) ;;
   esac
   if [ -z "$rows" ]; then
-    [ "$mode" = auto ] || echo "amux: no dropped tabs to restore"
+    [ "$mode" = auto ] || echo "amux: no dropped tabs to restore" >&2
     return 0
   fi
   # Number + render.
@@ -729,16 +731,29 @@ EOF
   local picked; picked=$(_amux_parse_selection "$n" "$reply")
   [ -n "$picked" ] || { echo "amux: nothing restored" >&2; return 0; }
   # Group picked rows by cwd, feed each project's rows to _amux_restore_into.
-  local -A seen_cwd=()
-  local idx c
+  # seen_cwd is a newline-delimited membership set, NOT an associative array:
+  # macOS ships bash 3.2 (no `local -A`), and amux is `#!/usr/bin/env bash`, so a
+  # `-A` would silently degrade to an indexed array and a path subscript would
+  # hard-error. Newlines also survive spaces in paths (a space-set would not).
+  local seen_cwd="" idx c
   for idx in $picked; do
-    c="${R_cwd[idx]}"; [ -n "${seen_cwd[$c]:-}" ] && continue; seen_cwd[$c]=1
+    c="${R_cwd[idx]}"
+    case "$seen_cwd" in *"
+$c
+"*) continue ;; esac
+    seen_cwd="$seen_cwd
+$c
+"
     local j lines=""
     for j in $picked; do
       [ "${R_cwd[j]}" = "$c" ] || continue
       lines+="${R_agent[j]}${TAB}${R_cmd[j]}"$'\n'
     done
-    printf '%s' "$lines" | _amux_restore_into "$c"
+    # Honour the launch's resolved session name for the $PWD group so the auto
+    # path restores into the SAME session the launch attaches, not a second one.
+    local grp_name=""; [ "$c" = "$PWD" ] && grp_name="$name_override"
+    printf '%s' "$lines" | _amux_restore_into "$c" "$grp_name"
+    [ "$mode" = auto ] && _amux_auto_restored=1
   done
   # Attach behaviour by mode.
   if [ "$mode" != auto ]; then
@@ -983,8 +998,9 @@ EOF
   # (once per dead server per cwd). TTY-guarded so an automated launch never blocks
   # on read. If the user restores tabs, the session now exists → the block below
   # skips the fresh window-0 agent (window-0-replace falls out naturally).
+  local _amux_auto_restored=0
   if [ -t 0 ] && [ -t 1 ]; then
-    _amux_restore_pick auto
+    _amux_restore_pick auto "$name"
   fi
 
   # Exact-match check (see _amux_session_exists): without it, `name` would
@@ -997,7 +1013,10 @@ EOF
     _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
     _amux_launch_window0 "$name" "$agent_name"
   else
-    _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
+    # After an auto-restore, window 0 runs a RESTORED agent and _amux_restore_into
+    # already set @agent-mode to it; don't clobber it with the launch default
+    # (relaunch.sh's prefix-x and launch_agent.sh's prefix-c both read @agent-mode).
+    [ "$_amux_auto_restored" = 1 ] || _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
   fi
 
   _amux_atmux set-option -t "$name" "@autoagent" "1"
@@ -1097,6 +1116,10 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "parse junk drops" ""      "$(_amux_parse_selection 3 'x,y' | tr -d ' ')"
   _assert "parse normalizes zero-pad" "8"   "$(_amux_parse_selection 10 '08' | tr -s ' ' | sed 's/ $//')"
   _assert "parse dedups 8 and 08"     "8"   "$(_amux_parse_selection 10 '8,08' | tr -s ' ' | sed 's/ $//')"
+
+  # Guard: no bash-4-only associative arrays — macOS ships bash 3.2 and amux is
+  # `#!/usr/bin/env bash`, so `local -A`/`declare -A` would break on the stock shell.
+  _assert "no bash-4 assoc arrays" "0" "$(grep -cE '^[[:space:]]*(local|declare) -A' "${BASH_SOURCE[0]}")"
 
   # _amux_ago tests
   _now=$(date +%s)
