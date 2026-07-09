@@ -207,12 +207,17 @@ _sl_resume_map() {
 }
 
 # sl_dropped <cwd> | --global | --new <cwd>
-# Emit restorable DROPPED tabs — an agent tab (agent != shell, resume_cmd non-empty)
-# on a DEAD server (pid no longer answers on its socket, or its records predate boot),
-# that was OPEN AT DEATH (in the live-set sidecar; a dead server with no sidecar counts
-# all its windows). One TSV row per tab: agent<TAB>cwd<TAB>resume_cmd<TAB>maxts, newest
-# first. The resume program is swapped in from [[agents]] `resume` (work→claude-work) so
-# the command targets the right profile. `<cwd>` filters to that dir; `--global` = no
+# Emit restorable DROPPED tabs from the SINGLE most recent crash — an agent tab
+# (agent != shell, resume_cmd non-empty) on a DEAD server (pid no longer answers on its
+# socket, or its records predate boot), that was OPEN AT DEATH (in the live-set sidecar;
+# a dead server with no sidecar counts all its windows). One TSV row per tab:
+# agent<TAB>cwd<TAB>resume_cmd<TAB>maxts, newest first. The resume program is swapped in
+# from [[agents]] `resume` (work→claude-work) so the command targets the right profile.
+# LAST-CRASH SCOPING: the ledger accumulates every dead server over its retention window;
+# a reboot-heavy machine would otherwise dump a 2-week backlog. So we keep only the rows
+# of the most-recently-active dead server (the crash you're recovering from), and DEDUP by
+# resume session id (the same session resumed across several server lifetimes, or in two
+# windows of one server, surfaces once). `<cwd>` filters to that dir; `--global` = no
 # filter; `--new <cwd>` additionally emits ONLY servers not yet offered for that cwd and
 # marks them offered (the once-per-server-per-project launch gate).
 sl_dropped() {
@@ -278,9 +283,25 @@ sl_dropped() {
         if (scope!="--global" && cwd!=scope) next
         p=prog[agent]
         if (p!="") { sp=index(rcmd," "); rcmd=(sp>0)?p substr(rcmd,sp):p }
-        print agent, cwd, rcmd, ts
+        # Carry the server key + ts so the next stage can isolate ONE crash.
+        print socket "|" pid, ts, agent, cwd, rcmd
       }
-    ' | sort -t"$TAB" -k4,4nr
+    ' \
+  | sort -t"$TAB" -k2,2nr \
+  | awk -F"$TAB" -v OFS="$TAB" '
+      # LAST CRASH ONLY: rows are ts-desc, so the first row names the single
+      # most-recently-active dead server (the crash we recover from); every other
+      # dead server in the ledger is history, not a recovery target. Then DEDUP by
+      # the resume session id (last token of the resume command) so a session that
+      # lived in >1 window of that server surfaces once. First-seen wins = newest
+      # (input already ts-desc), and the output stays ts-desc.
+      NR==1 { best=$1 }
+      $1 != best { next }
+      { m=split($5, g, " "); uuid=g[m]
+        if (uuid in seen) next
+        seen[uuid]=1
+        print $3, $4, $5, $2 }
+    '
 
   rm -f "$rows" "$state"
 }
@@ -529,6 +550,53 @@ n2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MA
 _assert "--new(locus): second call empty" ""  "$n2"
 n3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/notes")
 _assert "--new(notes): other cwd still offered" "1" "$(printf '%s\n' "$n3" | grep -c 'drop3')"
+
+# --- LAST-CRASH-ONLY: with multiple dead servers, only the most-recently-active one
+#     is offered; older dead servers are history. Plus dedup: a session resumed across
+#     both servers surfaces once (from the newer). 7001 older (ts≤103), 7002 newer. ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live" "$AGENTMUX_STATE_DIR/notified"
+cat > "$ledger" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/a","server_pid":7001,"session":"proj","window_id":"@1","window_name":"claude","cwd":"/w/proj","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/a","server_pid":7001,"window_id":"@1","label":"older","resume_cmd":"claude --resume older"}
+{"ts":102,"event":"open","socket_path":"/s/a","server_pid":7001,"session":"proj","window_id":"@2","window_name":"claude","cwd":"/w/proj","agent":"work"}
+{"ts":103,"event":"resume","socket_path":"/s/a","server_pid":7001,"window_id":"@2","label":"shared","resume_cmd":"claude --resume shared"}
+{"ts":200,"event":"open","socket_path":"/s/b","server_pid":7002,"session":"proj","window_id":"@1","window_name":"claude","cwd":"/w/proj","agent":"work"}
+{"ts":201,"event":"resume","socket_path":"/s/b","server_pid":7002,"window_id":"@1","label":"newer","resume_cmd":"claude --resume newer"}
+{"ts":202,"event":"open","socket_path":"/s/b","server_pid":7002,"session":"proj","window_id":"@2","window_name":"claude","cwd":"/w/proj","agent":"work"}
+{"ts":203,"event":"resume","socket_path":"/s/b","server_pid":7002,"window_id":"@2","label":"shared","resume_cmd":"claude --resume shared"}
+JSON
+lc=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/proj")
+_assert "last-crash: shows newest server's tab"      "1" "$(printf '%s\n' "$lc" | grep -c 'newer')"
+_assert "last-crash: hides older server's tab"       "0" "$(printf '%s\n' "$lc" | grep -c 'older')"
+_assert "last-crash: shared uuid shown once"         "1" "$(printf '%s\n' "$lc" | grep -c 'shared')"
+_assert "last-crash: exactly 2 rows (newest server)" "2" "$(printf '%s\n' "$lc" | grep -c .)"
+
+# --- dedup within one server: same session uuid in two windows → one row ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
+cat > "$ledger" <<JSON
+{"ts":300,"event":"open","socket_path":"/s/c","server_pid":7003,"session":"p","window_id":"@1","window_name":"claude","cwd":"/w/dup","agent":"work"}
+{"ts":301,"event":"resume","socket_path":"/s/c","server_pid":7003,"window_id":"@1","label":"same","resume_cmd":"claude --resume same"}
+{"ts":302,"event":"open","socket_path":"/s/c","server_pid":7003,"session":"p","window_id":"@2","window_name":"claude","cwd":"/w/dup","agent":"work"}
+{"ts":303,"event":"resume","socket_path":"/s/c","server_pid":7003,"window_id":"@2","label":"same","resume_cmd":"claude --resume same"}
+JSON
+dd=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/dup")
+_assert "dedup: same uuid two windows → one row" "1" "$(printf '%s\n' "$dd" | grep -c .)"
+
+# --- --global honours last-crash-only too: newest dead server, across all its cwds ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
+cat > "$ledger" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/a","server_pid":8001,"session":"x","window_id":"@1","window_name":"claude","cwd":"/w/old","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/a","server_pid":8001,"window_id":"@1","label":"oldg","resume_cmd":"claude --resume oldg"}
+{"ts":200,"event":"open","socket_path":"/s/b","server_pid":8002,"session":"y","window_id":"@1","window_name":"claude","cwd":"/w/new1","agent":"work"}
+{"ts":201,"event":"resume","socket_path":"/s/b","server_pid":8002,"window_id":"@1","label":"newg1","resume_cmd":"claude --resume newg1"}
+{"ts":202,"event":"open","socket_path":"/s/b","server_pid":8002,"session":"z","window_id":"@2","window_name":"claude","cwd":"/w/new2","agent":"work"}
+{"ts":203,"event":"resume","socket_path":"/s/b","server_pid":8002,"window_id":"@2","label":"newg2","resume_cmd":"claude --resume newg2"}
+JSON
+g=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
+_assert "global last-crash: newest server both cwds" "2" "$(printf '%s\n' "$g" | grep -c .)"
+_assert "global last-crash: hides older server"      "0" "$(printf '%s\n' "$g" | grep -c 'oldg')"
+_assert "global last-crash: shows newest new1"       "1" "$(printf '%s\n' "$g" | grep -c 'newg1')"
+_assert "global last-crash: shows newest new2"       "1" "$(printf '%s\n' "$g" | grep -c 'newg2')"
 
 # --- resume enrichment + dedup, env-less FALLBACK path (no $TMUX → key derived
 #     from the stubbed _sl_ctx: pid 4242, @3) ---
