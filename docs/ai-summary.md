@@ -34,7 +34,10 @@ agent hook  →  scripts/claude/status.sh  →  scripts/tmux-status.sh  ─┬�
     context (`AGENTMUX_SUBJECT`), never rendered as a tmux label.
   - **stand line** — the moving done/now/next, re-derived each refresh from
     `digest.sh` output piped through `summarise.sh` stand mode, written to
-    `agentmux-status-<pane>.txt` and rendered by `summary_rows.sh`.
+    `agentmux-status-<pane>.txt`; the writer then renders the three rows
+    (`summary_rows.sh --stdin`) and **pushes** them into `@amux_row1/2/3` pane
+    options that `status-format[1-3]` reads statically (event-driven, no `#()`
+    poll).
 - Per-pane temp files (under a per-uid runtime dir — `$XDG_RUNTIME_DIR`, else
   `/tmp/agentmux-<uid>` at mode 0700 — keyed by `<hash of tmux socket>-<pane
   number>`, so two tmux servers' colliding pane numbers don't clash and a `/tmp`

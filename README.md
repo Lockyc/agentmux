@@ -366,7 +366,7 @@ The `--notify` flag emits a standard **OSC 777 desktop-notification** escape *th
 
 ## AI summary status lines
 
-The 3-row status bar shows a rolling `done / now / next` summary of the active session. `agentmux.conf` already wires `status-format[1-3]` to `summary_rows.sh`; you just need a local LLM endpoint and the Claude Code hooks above.
+The 3-row status bar shows a rolling `done / now / next` summary of the active session. `agentmux.conf` already wires `status-format[1-3]` to the `@amux_row1/2/3` pane options that `tmux-status.sh` pushes (event-driven — no polling); you just need a local LLM endpoint and the Claude Code hooks above.
 
 **Requirements:**
 - A local OpenAI-compatible LLM endpoint with a small non-reasoning instruct model loaded (e.g. LM Studio at `localhost:1234` with `qwen2.5-14b-instruct`, or Ollama at `localhost:11434`)
@@ -380,7 +380,7 @@ The coloured status bar and 3 extra summary rows only appear in `amux` sessions 
 2. `claude/digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
 3. `summarise.sh` (stand mode) — sends the digest to a local OpenAI-compatible endpoint; receives `"<subject>. done: …; now: …; next: …"`
 4. Result written to `<runtime>/agentmux-status-<pane_key>.txt` (see the note below for `<runtime>` and `<pane_key>`)
-5. `summary_rows.sh` (called by tmux `status-format[1-3]`) splits that into three display rows
+5. The three rows are rendered (`summary_rows.sh --stdin`) and **pushed** into the `@amux_row1/2/3` pane options; `status-format[1-3]` reads those options (`#{@amux_rowN}`), so a status redraw substitutes them and spawns nothing — no `#()` poll
 
 Override the endpoint or model with environment variables:
 
