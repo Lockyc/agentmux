@@ -1,6 +1,9 @@
 # User config (installed separately)
 *.local
+# superpowers scratch: specs/plans (docs/superpowers) and SDD run state
+# (.superpowers/sdd) — git-ephemeral working notes, never tracked.
 /docs/superpowers
+/.superpowers/
 
 # User's live config lives at the clone root (~/.agentmux/amux.toml); never track it.
 /amux.toml
