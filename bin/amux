@@ -1526,6 +1526,32 @@ EOF
     echo "SKIP: dir-guard test (tmux not found)"
   fi
 
+  # --- restore integration (real tmux socket): prove _amux_restore_into actually
+  #     creates windows and RUNS each dropped tab's resume command. Window 0 goes
+  #     through send-keys into the interactive shell; extra windows through a
+  #     new-window START-COMMAND (a non-empty pane_start_command, which is also what
+  #     makes launch_agent.sh's after-new-window guard skip them). Markers prove the
+  #     commands ran; @agent-mode proves window-0-replace set the restored agent. ---
+  if command -v tmux >/dev/null 2>&1; then
+    _rsave="$AGENTMUX_AGENT_SOCKET"; AGENTMUX_AGENT_SOCKET="amux-restore-selftest-$$"
+    _rsdsave="${AGENTMUX_STATE_DIR:-}"; _rstate=$(mktemp -d); export AGENTMUX_STATE_DIR="$_rstate"
+    _rdir=$(mktemp -d); _rm1="$_rdir/m1"; _rm2="$_rdir/m2"
+    printf "work\tsh -c 'echo one > %s'\npersonal\tsh -c 'echo two > %s'\n" "$_rm1" "$_rm2" \
+      | _amux_restore_into "$_rdir"
+    _rn=0; while [ "$_rn" -lt 50 ]; do [ -s "$_rm1" ] && [ -s "$_rm2" ] && break; sleep 0.1; _rn=$((_rn + 1)); done
+    _assert "restore: window-0 (send-keys) ran its cmd"      "one"  "$(cat "$_rm1" 2>/dev/null)"
+    _assert "restore: extra window (start-cmd) ran its cmd"  "two"  "$(cat "$_rm2" 2>/dev/null)"
+    _rname=$(_amux_sanitize_session "$(basename "$_rdir")")
+    if _amux_atmux has-session -t "=$_rname" 2>/dev/null; then _got=yes; else _got=no; fi
+    _assert "restore: session created on the agent socket"   "yes"  "$_got"
+    _assert "restore: @agent-mode = window-0 restored agent" "work" "$(_amux_atmux show-options -qv -t "$_rname" @agent-mode 2>/dev/null)"
+    _amux_atmux kill-server 2>/dev/null
+    rm -rf "$_rdir" "$_rstate"; AGENTMUX_AGENT_SOCKET="$_rsave"
+    if [ -n "$_rsdsave" ]; then export AGENTMUX_STATE_DIR="$_rsdsave"; else unset AGENTMUX_STATE_DIR; fi
+  else
+    echo "SKIP: restore integration test (tmux not found)"
+  fi
+
   rm -rf "$_selftest_cache"
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
