@@ -116,6 +116,34 @@ _amux_clamp_pct() {
   printf '%s' "$v"
 }
 
+# _amux_parse_selection <count> <input> — echo the chosen 1-based indices (space
+# separated, input order, deduped, each in [1,count]). a/all → all; ''/n/none/q → none.
+_amux_parse_selection() {
+  local count="$1" input="$2" norm tok seen=" "
+  norm=$(printf '%s' "$input" | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+  case "$norm" in
+    a|all)            local i; for ((i=1;i<=count;i++)); do printf '%s ' "$i"; done; return 0 ;;
+    ''|n|none|q|quit) return 0 ;;
+  esac
+  for tok in $(printf '%s' "$input" | tr ',' ' '); do
+    case "$tok" in ''|*[!0-9]*) continue ;; esac
+    tok=$((10#$tok))   # normalize to decimal so a zero-padded token isn't read as octal
+    { [ "$tok" -ge 1 ] && [ "$tok" -le "$count" ]; } || continue
+    case "$seen" in *" $tok "*) continue ;; esac
+    seen="$seen$tok "
+    printf '%s ' "$tok"
+  done
+}
+
+# _amux_ago <epoch> — compact relative age for the picker.
+_amux_ago() {
+  local now delta; now=$(date +%s); delta=$(( now - ${1:-0} ))
+  if   [ "$delta" -lt 60 ];    then printf 'just now'
+  elif [ "$delta" -lt 3600 ];  then printf '%dm ago' "$(( delta / 60 ))"
+  elif [ "$delta" -lt 86400 ]; then printf '%dh ago' "$(( delta / 3600 ))"
+  else printf '%dd ago' "$(( delta / 86400 ))"; fi
+}
+
 # Resolve the left-pane width for --frame: [frame] left (percent), default 30,
 # clamped to 10..90. Non-numeric or absent → default.
 _amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left "$PWD")" 30; }
@@ -624,11 +652,122 @@ _amux_sessions() {
   fi
 }
 
-# amux --log — durable roster of agent windows amux has opened, for recovery
-# after a tmux server died (kill-server / reboot). Distinct from --sessions,
-# which lists only sessions on the *live* server.
-_amux_log() {
-  "$AGENTMUX_SCRIPTS/session_log.sh" list
+# _amux_restore_into <cwd>   (reads: agent<TAB>resume_cmd per line on stdin)
+# Restores the tabs for ONE project session. Window-0-replace: the first tab
+# into a fresh session replaces window 0; the rest are new windows created
+# WITH the resume_cmd as their pane start command, so launch_agent.sh's guard
+# skips the auto-launch. Sets the session opts a normal launch would.
+_amux_restore_into() {
+  local cwd="$1" name="${2:-}" agent rcmd win created=0 exists=0
+  # Default to the per-cwd basename; overridable so the auto path can honour the
+  # launch's already-resolved session name (else it restores into a second session).
+  [ -n "$name" ] || name=$(_amux_sanitize_session "$(basename "$cwd")")
+  _amux_session_exists "$name" && exists=1
+  local TAB; TAB=$(printf '\t')
+  while IFS="$TAB" read -r agent rcmd; do
+    [ -n "$agent" ] && [ -n "$rcmd" ] || continue
+    if [ "$exists" = 0 ] && [ "$created" = 0 ]; then
+      _amux_atmux new-session -d -s "$name" -c "$cwd"
+      _amux_atmux set-option -t "$name" "@agent-mode" "$agent"
+      _amux_atmux rename-window -t "=$name:0" "$agent"
+      agentmux_set_window_style "$agent" "$name:0"
+      _amux_atmux send-keys -t "=$name:0" "$rcmd" Enter
+      win="=$name:0"; created=1
+    else
+      win=$(_amux_atmux new-window -t "=$name" -c "$cwd" -P -F '#{window_id}' "$rcmd")
+      _amux_atmux rename-window -t "$win" "$agent"
+      agentmux_set_window_style "$agent" "$win"
+    fi
+    "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "$win" 2>/dev/null || true
+  done
+  if [ "$created" = 1 ]; then
+    _amux_atmux set-option -t "$name" "@autoagent" "1"
+    _amux_atmux set-option -t "$name" "@amux_dir" "$cwd"
+  fi
+}
+
+# _amux_restore_pick <mode>   mode ∈ auto|explicit|global
+# Renders the numbered picker for a scope, reads + parses the selection, groups
+# the chosen rows by cwd, and restores each project via _amux_restore_into.
+#   auto     — dropped --new "$PWD"; silent when empty; no attach (caller continues launch)
+#   explicit — dropped "$PWD"; attaches to $PWD's session after
+#   global   — dropped --global; restores all picked; attaches to $PWD's session if present
+_amux_restore_pick() {
+  local mode="$1" name_override="${2:-}" TAB; TAB=$(printf '\t')
+  local rows
+  case "$mode" in
+    auto)     rows=$("$AGENTMUX_SCRIPTS/session_log.sh" dropped --new "$PWD" 2>/dev/null) ;;
+    explicit) rows=$("$AGENTMUX_SCRIPTS/session_log.sh" dropped "$PWD" 2>/dev/null) ;;
+    global)   rows=$("$AGENTMUX_SCRIPTS/session_log.sh" dropped --global 2>/dev/null) ;;
+  esac
+  if [ -z "$rows" ]; then
+    [ "$mode" = auto ] || echo "amux: no dropped tabs to restore" >&2
+    return 0
+  fi
+  # Number + render.
+  local -a R_agent=() R_cwd=() R_cmd=() R_ts=()
+  local agent cwd cmd ts n=0
+  local scope_word="here"; [ "$mode" = global ] && scope_word="across all projects"
+  while IFS="$TAB" read -r agent cwd cmd ts; do
+    [ -n "$agent" ] || continue
+    n=$((n+1)); R_agent[n]="$agent"; R_cwd[n]="$cwd"; R_cmd[n]="$cmd"; R_ts[n]="$ts"
+  done <<EOF
+$rows
+EOF
+  [ "$n" -gt 0 ] || return 0
+  local plural=s; [ "$n" = 1 ] && plural=""
+  printf 'amux: %d agent tab%s %s were dropped:\n' "$n" "$plural" "$scope_word" >&2
+  local i disp
+  for ((i=1;i<=n;i++)); do
+    disp="${R_cwd[i]}"; case "$disp" in "$HOME"|"$HOME"/*) disp="~${disp#"$HOME"}" ;; esac
+    if [ "$mode" = global ]; then
+      printf '  %d) %-9s %s  → %s\n' "$i" "${R_agent[i]}" "$disp" "${R_cmd[i]}" >&2
+    else
+      printf '  %d) %-9s → %s   (%s)\n' "$i" "${R_agent[i]}" "${R_cmd[i]}" "$(_amux_ago "${R_ts[i]}")" >&2
+    fi
+  done
+  printf 'restore? [a = all · 1,2 = some · n = none]› ' >&2
+  local reply=""; IFS= read -r reply
+  local picked; picked=$(_amux_parse_selection "$n" "$reply")
+  [ -n "$picked" ] || { echo "amux: nothing restored" >&2; return 0; }
+  # Group picked rows by cwd, feed each project's rows to _amux_restore_into.
+  # seen_cwd is a newline-delimited membership set, NOT an associative array:
+  # macOS ships bash 3.2 (no `local -A`), and amux is `#!/usr/bin/env bash`, so a
+  # `-A` would silently degrade to an indexed array and a path subscript would
+  # hard-error. Newlines also survive spaces in paths (a space-set would not).
+  local seen_cwd="" idx c
+  for idx in $picked; do
+    c="${R_cwd[idx]}"
+    case "$seen_cwd" in *"
+$c
+"*) continue ;; esac
+    seen_cwd="$seen_cwd
+$c
+"
+    local j lines=""
+    for j in $picked; do
+      [ "${R_cwd[j]}" = "$c" ] || continue
+      lines+="${R_agent[j]}${TAB}${R_cmd[j]}"$'\n'
+    done
+    # Honour the launch's resolved session name for the $PWD group so the auto
+    # path restores into the SAME session the launch attaches, not a second one.
+    local grp_name=""; [ "$c" = "$PWD" ] && grp_name="$name_override"
+    printf '%s' "$lines" | _amux_restore_into "$c" "$grp_name"
+    [ "$mode" = auto ] && _amux_auto_restored=1
+    # Retire this cwd's dead servers from future AUTO offers now that their tabs
+    # are relaunched — otherwise a manual --restore/--global (which don't mark the
+    # notified gate) leaves the tab offerable, and a later bare `amux` would
+    # auto-restore it AGAIN into a second window fighting the same session id.
+    # `dropped --new` marks (socket|pid|cwd) for every still-dead server in $c;
+    # the just-created live session is excluded, so only the dead source is marked.
+    "$AGENTMUX_SCRIPTS/session_log.sh" dropped --new "$c" >/dev/null 2>&1 || true
+  done
+  # Attach behaviour by mode.
+  if [ "$mode" != auto ]; then
+    local pname; pname=$(_amux_default_session_name)   # $PWD-bound — correct here
+    if _amux_session_exists "$pname"; then _amux_attach "$pname"
+    else echo "amux: restored tabs in other projects; cd there and run amux to attach" >&2; fi
+  fi
 }
 
 # Presence query for a single project: exit 0 if its agent session (agent socket)
@@ -782,8 +921,9 @@ amux() {
         _amux_sessions
         return $?
         ;;
-      --log)
-        _amux_log
+      --restore)
+        shift
+        if [ "${1:-}" = "--global" ]; then _amux_restore_pick global; else _amux_restore_pick explicit; fi
         return $?
         ;;
       --probe)
@@ -822,7 +962,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   session_name   defaults to basename of $PWD (chars outside A-Za-z0-9_- → _)
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
-  --log          durable roster of past/open agent sessions, incl. ones lost to a server crash
+  --restore      pick dropped agent tabs (from a crash) to relaunch; --global for all projects
   --probe        exit 0 if a session [session] (agent or frame) exists (default: current dir); silent
   --kill         kill an agent session [session] + its frame/term (default: current dir)
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
@@ -861,6 +1001,19 @@ EOF
 
   local name="$session_arg"
 
+  # Recovery picker: on an interactive launch, offer this project's dropped tabs
+  # (once per dead server per cwd). TTY-guarded so an automated launch never blocks
+  # on read. If the user restores tabs, the session now exists → the block below
+  # skips the fresh window-0 agent (window-0-replace falls out naturally).
+  local _amux_auto_restored=0
+  # Guard the fds the picker actually uses: it reads the reply on stdin (fd 0) and
+  # writes the list + prompt to stderr (fd 2). Testing fd 2 (not fd 1) means
+  # `amux 2>/dev/null` correctly skips the picker instead of blocking on an
+  # invisible prompt, while a redirected stdout still shows it.
+  if [ -t 0 ] && [ -t 2 ]; then
+    _amux_restore_pick auto "$name"
+  fi
+
   # Exact-match check (see _amux_session_exists): without it, `name` would
   # prefix-match a longer existing session and we'd attach to the wrong one
   # instead of creating the session you asked for. set-option below targets the
@@ -871,7 +1024,10 @@ EOF
     _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
     _amux_launch_window0 "$name" "$agent_name"
   else
-    _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
+    # After an auto-restore, window 0 runs a RESTORED agent and _amux_restore_into
+    # already set @agent-mode to it; don't clobber it with the launch default
+    # (relaunch.sh's prefix-x and launch_agent.sh's prefix-c both read @agent-mode).
+    [ "$_amux_auto_restored" = 1 ] || _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
   fi
 
   _amux_atmux set-option -t "$name" "@autoagent" "1"
@@ -901,17 +1057,6 @@ EOF
   [ -n "$_pin_slot" ] && _amux_atmux set-option -t "$name" @l1idx "$_pin_slot"
   _reserved=$(_amux_bar_reserved)
   _amux_atmux set-option -g @l1reserved "$_reserved"
-
-  # One-time recovery nudge: if a previous tmux server died with agent windows
-  # still open (crash/reboot), flash it on the status line ~1s after the client
-  # attaches. A plain echo here would be wiped when tmux paints on attach; the
-  # message goes through a server option so its text needs no shell-escaping.
-  local _crash_notice
-  _crash_notice=$("$AGENTMUX_SCRIPTS/session_log.sh" notice 2>/dev/null)
-  if [ -n "$_crash_notice" ]; then
-    _amux_atmux set-option -g "@amux_session_notice" "$_crash_notice"
-    _amux_atmux run-shell -d 1 'tmux display-message -d 5000 "#{@amux_session_notice}"' 2>/dev/null || true
-  fi
 
   _amux_attach "$name"
 }
@@ -969,6 +1114,30 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --help advertises --no-frame.
   case "$help" in *"--no-frame"*) _got="present" ;; *) _got="absent" ;; esac
   _assert "help advertises --no-frame" "present" "$_got"
+
+  # _amux_parse_selection tests
+  _assert "parse all"        "1 2 3" "$(_amux_parse_selection 3 a | tr -s ' ' | sed 's/ $//')"
+  _assert "parse all word"   "1 2 3" "$(_amux_parse_selection 3 all | tr -s ' ' | sed 's/ $//')"
+  _assert "parse none empty" ""      "$(_amux_parse_selection 3 '' | tr -d ' ')"
+  _assert "parse none n"     ""      "$(_amux_parse_selection 3 n | tr -d ' ')"
+  _assert "parse subset"     "1 3"   "$(_amux_parse_selection 3 '1,3' | tr -s ' ' | sed 's/ $//')"
+  _assert "parse spaces"     "2 3"   "$(_amux_parse_selection 3 '2 3' | tr -s ' ' | sed 's/ $//')"
+  _assert "parse dedup"      "2"     "$(_amux_parse_selection 3 '2,2' | tr -s ' ' | sed 's/ $//')"
+  _assert "parse out-of-range drops" "1" "$(_amux_parse_selection 3 '1,9' | tr -s ' ' | sed 's/ $//')"
+  _assert "parse junk drops" ""      "$(_amux_parse_selection 3 'x,y' | tr -d ' ')"
+  _assert "parse normalizes zero-pad" "8"   "$(_amux_parse_selection 10 '08' | tr -s ' ' | sed 's/ $//')"
+  _assert "parse dedups 8 and 08"     "8"   "$(_amux_parse_selection 10 '8,08' | tr -s ' ' | sed 's/ $//')"
+
+  # Guard: no bash-4-only associative arrays — macOS ships bash 3.2 and amux is
+  # `#!/usr/bin/env bash`, so `local -A`/`declare -A` would break on the stock shell.
+  _assert "no bash-4 assoc arrays" "0" "$(grep -cE '^[[:space:]]*(local|declare) -A' "${BASH_SOURCE[0]}")"
+
+  # _amux_ago tests
+  _now=$(date +%s)
+  _assert "ago seconds" "just now" "$(_amux_ago $((_now - 5)))"
+  _assert "ago minutes" "3m ago"   "$(_amux_ago $((_now - 180)))"
+  _assert "ago hours"   "2h ago"   "$(_amux_ago $((_now - 7200)))"
+  _assert "ago days"    "1d ago"   "$(_amux_ago $((_now - 90000)))"
 
   # --frame refuses to run inside tmux (guard returns 1 before any tmux call)
   # unless [frame] allow_nested is set. The example config sets none, so it's off.
@@ -1029,8 +1198,10 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --help advertises the agent-session lifecycle commands + the renamed kill-all.
   case "$help" in *"--sessions"*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --sessions" "present" "$_got"
+  case "$help" in *"--restore"*) _got="present" ;; *) _got="absent" ;; esac
+  _assert "help advertises --restore" "present" "$_got"
   case "$help" in *"--log"*) _got="present" ;; *) _got="absent" ;; esac
-  _assert "help shows --log" "present" "$_got"
+  _assert "help no longer advertises --log" "absent" "$_got"
   case "$help" in *"--kill "*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --kill" "present" "$_got"
   case "$help" in *"--kill-all"*) _got=present ;; *) _got=absent ;; esac

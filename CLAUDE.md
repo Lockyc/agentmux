@@ -28,6 +28,8 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 
 **Footgun — the summary status rows are PUSHED (event-driven); never turn them back into a `#()` poll.** `tmux-status.sh` (the writer, run on each agent hook event) renders the three rows via `summary_rows.sh --stdin` and sets them as `@amux_row1/2/3` **pane options** + `refresh-client`; `agentmux.conf`'s `status-format[1..3]` reference those options statically (`#{@amux_row1}`), so a status redraw just substitutes an option value and **spawns nothing** — `status-interval` no longer gates any process spawn here. This replaced a `#(summary_rows.sh …)` poll that tmux re-ran every `status-interval` per client: each call spawned `awk`/coreutils helpers with **no backpressure**, so at `status-interval 1` across many amux panes a system slowdown (e.g. a post-reboot Spotlight storm) made spawns outrun drain and exhaust the **per-user process table** (`kern.maxprocperuid`, ~10666) — `fork()` then fails for everything (new shells hang, nothing launches, apps can't be killed) while RAM/CPU sit *idle*. It reads like a freeze but is process-table exhaustion — diagnose with `ps -Axo user= | grep -c $(id -un)` climbing past ~400 (confirmed 2026-07-09: 6237 procs / 16475 threads, flooded with `bash`/`gawk`/`ggrep`/`uu-coreutils`). The lesson that outlives the fix: **show live status via pushed options, never a `#()` in the status format.** (`~/.tmux.conf`'s `status-interval` is now irrelevant to spawning here; it only paces passive redraws — a lower value is harmless again.)
 
+**Footgun — `bin/amux` must stay bash-3.2-compatible; no associative arrays or other bash-4-isms.** macOS ships bash 3.2 as `/bin/bash`, and `bin/amux` is `#!/usr/bin/env bash` installed via `curl|bash`, so it must run on the stock shell, not whatever Homebrew bash a dev machine happens to have on `PATH` — no `local -A`/`declare -A` (associative arrays), no other bash-4+ feature. The selftest guards this mechanically: it asserts `grep -cE '^[[:space:]]*(local|declare) -A' bin/amux` is `0`. Verify a change with `AMUX_SELFTEST=1 /bin/bash bin/amux`, which must pass under the real `/bin/bash`, not just under `PATH`'s bash.
+
 ## Layout
 
 | Path | Purpose |
@@ -36,7 +38,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
 | `scripts/clear_icon.sh` | `prefix v` binding target — one-shot strips the leading state emoji off the current window name (emoji-agnostic; relies on `tmux-status.sh`'s `"<emoji> <label>"` invariant). Hooks re-badge on the next event |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`) |
-| `scripts/session_log.sh` | Durable roster of agent windows amux opens (`amux --log`); recovery after a server/reboot kill, with a one-time launch nudge when a dead server left sessions open. The roster groups by project (one `cd` per project dir), tags each window `● live`/`✗ lost`, and builds each resume command from the launching agent's `resume` program (`[[agents]]` `resume` field; falls back to the recorded default) |
+| `scripts/session_log.sh` | Durable open/close ledger of agent windows amux opens, for crash recovery. The `dropped [<cwd>\|--global\|--new <cwd>]` subcommand emits restorable dropped tabs (agent tab, dead server, open-at-death, resume-program-swapped from `[[agents]] resume`); `amux`'s launch picker (and `amux --restore`) consume it. `--new` gates the launch offer once per (dead-server, cwd) via the `notified` marker |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
@@ -47,6 +49,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
 | `docs/ai-summary.md` | AI summary design rationale: invariants, ruled-out approaches, eval method — **start here when revisiting the summary feature** |
+| `docs/FOLLOWUPS.md` | Deferred, non-blocking work with pick-up-cold context (e.g. the restore picker's window-launch consistency item) |
 | `VERSION` | Semver version string |
 
 ## Install

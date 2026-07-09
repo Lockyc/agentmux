@@ -6,8 +6,7 @@
 # Subcommands:
 #   open  <agent> [target]   append an open record (target defaults to current pane)
 #   resume <label> <cmd>     append/refresh a generic resume hint for the current window
-#   list                     print the roster, partitioned live vs lost (dead server)
-#   notice                   one-time recovery nudge when a server died with windows open
+#   dropped <cwd>|--global|--new <cwd>   restorable dropped tabs (dead server, open-at-death)
 #   prune                    trim the ledger (dead, old server instances)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
 #
@@ -168,9 +167,9 @@ _sl_boot_epoch() {
 # Fold ledger → TSV, one row per opened window (latest open + latest resume per
 # (socket,pid,window_id) tuple). Columns: socket pid window_id session
 # window_name cwd agent resume_cmd maxts. `maxts` (the newest event ts for the
-# window) drives sl_list's most-recent-first ordering. Whether a window is still
-# open is decided at read time by sl_list (live server → intersect with reality),
-# not here.
+# window) drives sl_dropped's most-recent-first ordering. Whether a window is
+# still open is decided at read time by sl_dropped (live server → intersect with
+# reality), not here.
 # Read line-by-line with `fromjson?` so a single torn/blank line (e.g. a
 # kill-server mid-append) is skipped, not fatal — the whole point is surviving
 # a crash, and a slurp (`-s`) aborts the entire roster on one bad line.
@@ -207,146 +206,83 @@ _sl_resume_map() {
     | jq -r '.agents[]? | select(.resume) | [.name, .resume] | @tsv' 2>/dev/null
 }
 
-sl_list() {
-  _sl_enabled || { echo "amux: session logging disabled ([log] sessions = false)"; return 0; }
+# sl_dropped <cwd> | --global | --new <cwd>
+# Emit restorable DROPPED tabs — an agent tab (agent != shell, resume_cmd non-empty)
+# on a DEAD server (pid no longer answers on its socket, or its records predate boot),
+# that was OPEN AT DEATH (in the live-set sidecar; a dead server with no sidecar counts
+# all its windows). One TSV row per tab: agent<TAB>cwd<TAB>resume_cmd<TAB>maxts, newest
+# first. The resume program is swapped in from [[agents]] `resume` (work→claude-work) so
+# the command targets the right profile. `<cwd>` filters to that dir; `--global` = no
+# filter; `--new <cwd>` additionally emits ONLY servers not yet offered for that cwd and
+# marks them offered (the once-per-server-per-project launch gate).
+sl_dropped() {
+  _sl_enabled || return 0
+  _mark_new=0; _scope=""
+  case "$1" in
+    --new)    _mark_new=1; _scope="${2:-}" ;;
+    --global) _scope="--global" ;;
+    *)        _scope="${1:-}" ;;
+  esac
+  _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
+  _boot=$(_sl_boot_epoch)
+  _notmark="$(_sl_state_dir)/notified"
   rows=$(mktemp) || return 1
-  _sl_fold "$(_sl_ledger)" > "$rows"
-  if [ ! -s "$rows" ]; then echo "amux: no logged sessions"; rm -f "$rows"; return 0; fi
+  _sl_fold "$_ledger" > "$rows"
+  if [ ! -s "$rows" ]; then rm -f "$rows"; return 0; fi
 
-  # Per-server liveness, computed once. For a LIVE server, capture its still-open
-  # window ids (space-flattened); a row whose window is gone is omitted at read
-  # time (deliberately closed, not a crash). A LOST server's full roster shows —
-  # the recovery list — since we cannot intersect a server that no longer exists.
+  # Per (socket,pid): decide dead vs live, and capture the recorded live-set (or '*'
+  # for a dead server with no sidecar → all windows count). Live servers emit nothing.
   state=$(mktemp) || { rm -f "$rows"; return 1; }
   cut -f1,2 "$rows" | sort -u | while IFS="$TAB" read -r socket pid; do
     [ -n "$pid" ] || continue
-    if _sl_server_live "$socket" "$pid"; then
-      _lw=$(_sl_live_windows "$socket" | tr '\n' ' ')
-      printf 'S\t%s\t%s\tlive\t%s\n' "$socket" "$pid" "$_lw"
-    elif [ -f "$(_sl_live_file "$socket" "$pid")" ]; then
-      # Dead, but we recorded its last live-set → intersect against that.
+    smax=$(awk -F"$TAB" -v s="$socket" -v p="$pid" '$1==s&&$2==p{if($9+0>m)m=$9}END{print m+0}' "$rows")
+    if _sl_server_live "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
+      continue
+    fi
+    if [ "$_mark_new" = 1 ]; then
+      _gk="$socket|$pid|$_scope"
+      if [ -f "$_notmark" ] && grep -qxF "$_gk" "$_notmark" 2>/dev/null; then
+        continue                                   # already offered for this cwd
+      fi
+      mkdir -p "$(_sl_state_dir)" 2>/dev/null && printf '%s\n' "$_gk" >> "$_notmark" 2>/dev/null || true
+    fi
+    if [ -f "$(_sl_live_file "$socket" "$pid")" ]; then
       _sw=$(_sl_snapshot_windows "$socket" "$pid" | tr '\n' ' ')
-      printf 'S\t%s\t%s\tlost\t%s\n' "$socket" "$pid" "$_sw"
+      printf 'S\t%s\t%s\t%s\n' "$socket" "$pid" "$_sw"
     else
-      # Dead with no sidecar (server predating the feature) → show all, best-effort.
-      printf 'S\t%s\t%s\tlostall\t\n' "$socket" "$pid"
+      printf 'S\t%s\t%s\t*\n' "$socket" "$pid"
     fi
   done > "$state"
 
-  # Annotate each folded window (tag live/lost, drop closed-on-live, swap the
-  # resume program), then group by project: cd printed once, projects ordered
-  # most-recent-first, windows within likewise. Side tables (S = server state,
-  # P = resume map) precede the R rows so they're seen first by the join awk.
   {
     cat "$state"
     _sl_resume_map | while IFS="$TAB" read -r _ag _prog; do
       [ -n "$_ag" ] || continue
       printf 'P\t%s\t%s\n' "$_ag" "$_prog"
     done
-    awk '{ print "R\t" $0 }' "$rows"
-  } | awk -F"$TAB" -v OFS="$TAB" '
-      $1 == "S" { st[$2 SUBSEP $3] = $4; lw[$2 SUBSEP $3] = $5; next }
-      $1 == "P" { prog[$2] = $3; next }
-      $1 == "R" {
+    awk '{print "R\t" $0}' "$rows"
+  } | awk -F"$TAB" -v OFS="$TAB" -v scope="$_scope" '
+      $1=="S" { dead[$2 SUBSEP $3]=1; lw[$2 SUBSEP $3]=$4; next }
+      $1=="P" { prog[$2]=$3; next }
+      $1=="R" {
         socket=$2; pid=$3; wid=$4; cwd=$7; agent=$8; rcmd=$9; ts=$10
-        key = socket SUBSEP pid
-        state = st[key]
-        if (state == "live" || state == "lost") {
-          n = split(lw[key], a, " "); open = 0
-          for (i = 1; i <= n; i++) if (a[i] == wid) { open = 1; break }
-          if (!open) next                       # closed before death/now → omit
-          tag = (state == "live") ? "● live" : "✗ lost"
-        } else tag = "✗ lost"                    # lostall: no sidecar → show all
-        if (rcmd == "") { hint = 0; cmd = "" }
-        else {
-          hint = 1; p = prog[agent]
-          if (p != "") { sp = index(rcmd, " "); rcmd = (sp > 0) ? p substr(rcmd, sp) : p }
-          cmd = rcmd
+        key=socket SUBSEP pid
+        if (!(key in dead)) next
+        set=lw[key]
+        if (set != "*") {
+          inset=0; n=split(set,a," ")
+          for (i=1;i<=n;i++) if (a[i]==wid) { inset=1; break }
+          if (!inset) next
         }
-        idx++; C[idx]=cwd; T[idx]=ts; G[idx]=tag; A[idx]=agent; H[idx]=hint; M[idx]=cmd
-        if (!(cwd in mx) || ts+0 > mx[cwd]+0) mx[cwd] = ts
+        if (agent=="shell" || rcmd=="") next
+        if (scope!="--global" && cwd!=scope) next
+        p=prog[agent]
+        if (p!="") { sp=index(rcmd," "); rcmd=(sp>0)?p substr(rcmd,sp):p }
+        print agent, cwd, rcmd, ts
       }
-      END { for (i = 1; i <= idx; i++) print mx[C[i]], C[i], T[i], G[i], A[i], H[i], M[i] }
-    ' \
-  | sort -t"$TAB" -k1,1nr -k2,2 -k3,3nr \
-  | awk -F"$TAB" -v home="$HOME" '
-      {
-        cwd=$2; tag=$4; agent=$5; hint=$6; cmd=$7
-        disp = cwd
-        if (home != "" && (cwd == home || index(cwd, home "/") == 1)) disp = "~" substr(cwd, length(home) + 1)
-        if (cwd != last) {
-          print ""
-          print disp "  (" agent ")"
-          print "   cd " disp
-          last = cwd
-        }
-        if (hint == "1") printf "   %s   %s\n", cmd, tag
-        else             print  "   (relaunch — no resume hint)"
-      }'
+    ' | sort -t"$TAB" -k4,4nr
 
   rm -f "$rows" "$state"
-}
-
-# One-time recovery nudge. Prints a single line iff a previous tmux server died
-# with agent windows still open (crash/reboot) and hasn't been announced yet —
-# marking those servers announced so it fires once per dead server, not every
-# launch. A server is lost if its pid no longer answers on its socket, OR its
-# newest record predates boot (a reboot that reused the pid). Silent otherwise.
-sl_notice() {
-  _sl_enabled || return 0
-  _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
-  _boot=$(_sl_boot_epoch)
-  _dir=$(_sl_state_dir)
-  _notmark="$_dir/notified"
-
-  # Per server: socket, pid, newest ts, the distinct open-event window ids (joined).
-  _servers=$(jq -rRn '
-    [ inputs | fromjson? | select(.event=="open") ]
-    | group_by([.socket_path, .server_pid])
-    | map([ .[0].socket_path, (.[0].server_pid|tostring),
-            (map(.ts)|max|tostring), ([.[].window_id]|unique|join(" ")) ] | @tsv) | .[]
-  ' "$_ledger")
-  [ -n "$_servers" ] || return 0
-
-  _total=0; _new=""; _reboot=0; _killed=0
-  while IFS="$TAB" read -r _socket _pid _maxts _wids; do
-    [ -n "$_pid" ] || continue
-    # Live iff the pid still answers AND the records aren't from before boot.
-    if _sl_server_live "$_socket" "$_pid" && { [ -z "$_boot" ] || [ "$_maxts" -ge "$_boot" ] 2>/dev/null; }; then
-      continue
-    fi
-    # How many windows were still open at death: intersect the ledger's windows
-    # with the recorded live-set if we have one; else (pre-feature server) all.
-    if [ -f "$(_sl_live_file "$_socket" "$_pid")" ]; then
-      _snap=$(_sl_snapshot_windows "$_socket" "$_pid"); _wcount=0
-      for _w in $_wids; do
-        case "
-$_snap
-" in *"
-$_w
-"*) _wcount=$((_wcount + 1)) ;; esac
-      done
-    else
-      _wcount=0; for _w in $_wids; do _wcount=$((_wcount + 1)); done
-    fi
-    _key="$_socket|$_pid"
-    if [ -f "$_notmark" ] && grep -qxF "$_key" "$_notmark" 2>/dev/null; then continue; fi
-    _total=$((_total + _wcount))
-    _new="$_new$_key
-"
-    if [ -n "$_boot" ] && [ "$_maxts" -lt "$_boot" ] 2>/dev/null; then _reboot=1; else _killed=1; fi
-  done <<EOF
-$_servers
-EOF
-
-  [ "$_total" -gt 0 ] || return 0
-  mkdir -p "$_dir" 2>/dev/null && printf '%s' "$_new" >> "$_notmark" 2>/dev/null || true
-
-  _cause="a previous tmux server"
-  if [ "$_reboot" = 1 ] && [ "$_killed" = 0 ]; then _cause="a reboot"
-  elif [ "$_killed" = 1 ] && [ "$_reboot" = 0 ]; then _cause="a server kill"; fi
-  _s=s; [ "$_total" = 1 ] && _s=""
-  printf '⚠ %d agent session%s lost to %s — recover with: amux --log\n' "$_total" "$_s" "$_cause"
 }
 
 # Generic resume-hint enrichment. Runs inside the agent's own pane, on EVERY
@@ -427,17 +363,19 @@ sl_prune() {
   ' "$_ledger" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_ledger" || rm -f "$_tmp"
 
   # Trim the `notified` marker the same way as the ledger: it grows one
-  # "socket|pid" line per dead server (sl_notice appends, never prunes), so keep
-  # only lines whose server is still in the live-or-recent KEEP set. Drops stale
-  # keys (and blank lines) so it self-cleans instead of growing unbounded.
+  # "socket|pid|cwd" line per (server,cwd) offered (sl_dropped --new appends,
+  # never prunes), so keep only lines whose "socket|pid" PREFIX is still in the
+  # live-or-recent KEEP set. Drops stale keys (and blank lines) so it self-cleans
+  # instead of growing unbounded.
   _notmark="$(_sl_state_dir)/notified"
   if [ -s "$_notmark" ]; then
     _tmpn=$(mktemp) || _tmpn=""
     if [ -n "$_tmpn" ]; then
-      # Bind the line to $k first: inside `$keep | …`, a bare `.` would rebind to
-      # $keep, not the line (same `as $k` guard the ledger rewrite above uses).
       jq -Rrn --argjson keep "$_keep" '
-        inputs | select(length>0) | . as $k | select($keep | index($k) != null)
+        inputs | select(length>0)
+        | . as $line
+        | ($line | split("|")[0:2] | join("|")) as $sp
+        | select($keep | index($sp) != null)
       ' "$_notmark" > "$_tmpn" 2>/dev/null && mv "$_tmpn" "$_notmark" || rm -f "$_tmpn"
     fi
   fi
@@ -479,8 +417,7 @@ if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
   case "$cmd" in
     open)      sl_open      "$@" ;;
     resume)    sl_resume    "$@" ;;
-    list)      sl_list      "$@" ;;
-    notice)    sl_notice    "$@" ;;
+    dropped)   sl_dropped   "$@" ;;
     prune)     sl_prune     "$@" ;;
     snapshot)  sl_snapshot  "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
@@ -539,58 +476,59 @@ _assert "fold spans 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -
 # trailing column is max(ts) over the window's events: locus = max(10,42) = 42
 _assert "fold trailing col is max ts"    "42" "$(printf '%s\n' "$foldout" | awk -F'\t' '$6=="/w/locus"{print $NF}')"
 
-# --- project-grouped list: group by cwd, cd once, per-line live/lost tags,
-#     per-agent resume-program swap, recency order, closed-on-live omission ---
-rm -f "$ledger"
-# Resume map (stubbed, bypassing toml2json): work->claude-work, personal->claude-personal.
-# 'ollama' is intentionally absent → its resume cmd prints verbatim (no swap).
+# ============ sl_dropped: restorable dropped tabs ============
 RMAP="work$(printf '\t')claude-work
 personal$(printf '\t')claude-personal"
+
+# server 4242 LIVE (its windows are not "dropped"); 9981 DEAD with a sidecar
+# recording only @1 open at death (@2 was closed earlier → omitted).
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
 cat > "$ledger" <<JSON
 {"ts":200,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
-{"ts":201,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@1","label":"c3d4","resume_cmd":"claude --resume c3d4"}
-{"ts":60,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"scratch","window_id":"@5","window_name":"claude","cwd":"/w/scratch","agent":"personal"}
-{"ts":61,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@5","label":"zzz","resume_cmd":"claude --resume zzz"}
+{"ts":201,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@1","label":"live1","resume_cmd":"claude --resume live1"}
 {"ts":100,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
-{"ts":101,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
-{"ts":50,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"notes","window_id":"@2","window_name":"claude","cwd":"/w/notes","agent":"personal"}
-{"ts":51,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@2","label":"e5f6","resume_cmd":"claude --resume e5f6"}
-{"ts":40,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"tools","window_id":"@3","window_name":"claude","cwd":"/w/tools","agent":"ollama"}
-{"ts":41,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@3","label":"xyz","resume_cmd":"claude --resume xyz"}
-{"ts":30,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"bare","window_id":"@4","window_name":"claude","cwd":"/w/bare","agent":"personal"}
-{"ts":71,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"home","window_id":"@6","window_name":"claude","cwd":"$HOME/proj","agent":"personal"}
-{"ts":72,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@6","label":"h1","resume_cmd":"claude --resume h1"}
+{"ts":101,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"drop1","resume_cmd":"claude --resume drop1"}
+{"ts":90,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"old","window_id":"@2","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":91,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@2","label":"closed2","resume_cmd":"claude --resume closed2"}
+{"ts":80,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"notes","window_id":"@3","window_name":"claude","cwd":"/w/notes","agent":"personal"}
+{"ts":81,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@3","label":"drop3","resume_cmd":"claude --resume drop3"}
+{"ts":70,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"sh","window_id":"@4","window_name":"shell","cwd":"/w/locus","agent":"shell"}
 JSON
+printf '@1\n@3\n' > "$(_sl_live_file "/s/b" 9981)"   # @1,@3 open at death; @2 closed earlier
 
-# server 4242 live, only @1 still open (@5 since closed → omit); 9981 dead.
-out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_LIVE_WINDOWS="@1" SESSION_LOG_RESUME_MAP="$RMAP" sl_list 2>&1)
-_assert "no awk error"                   "0" "$(printf '%s\n' "$out" | grep -c 'awk:')"
-# cd printed ONCE per project even though locus has two windows (live + lost)
-_assert "cd printed once per project"    "1" "$(printf '%s\n' "$out" | grep -c '^   cd /w/locus$')"
-# locus heading carries its (newest window's) agent
-_assert "project heading shows agent"    "1" "$(printf '%s\n' "$out" | grep -c '^/w/locus  (work)$')"
-# program swap: work -> claude-work, tagged by per-line state
-_assert "live line: swapped + tagged"    "1" "$(printf '%s\n' "$out" | grep -c 'claude-work --resume c3d4   ● live')"
-_assert "lost line: swapped + tagged"    "1" "$(printf '%s\n' "$out" | grep -c 'claude-work --resume a1b2   ✗ lost')"
-_assert "personal swap"                  "1" "$(printf '%s\n' "$out" | grep -c 'claude-personal --resume e5f6   ✗ lost')"
-# no resume config for ollama → verbatim, NOT swapped
-_assert "unconfigured agent: verbatim"   "1" "$(printf '%s\n' "$out" | grep -c 'claude --resume xyz   ✗ lost')"
-# closed-on-live window omitted entirely (its label never surfaces)
-_assert "closed-on-live omitted"         "0" "$(printf '%s\n' "$out" | grep -c 'zzz')"
-_assert "closed-on-live project omitted" "0" "$(printf '%s\n' "$out" | grep -c '/w/scratch')"
-# window with no resume hint → cd-only relaunch note, no resume command
-_assert "no-hint window: relaunch note"  "1" "$(printf '%s\n' "$out" | grep -c 'relaunch — no resume hint')"
-# $HOME abbreviated to ~ in heading and cd
-_assert "home dir abbreviated in cd"     "1" "$(printf '%s\n' "$out" | grep -c '^   cd ~/proj$')"
-_assert "home dir abbreviated heading"   "1" "$(printf '%s\n' "$out" | grep -c '^~/proj  (personal)$')"
-# recency order: locus (max ts 201) heading precedes notes (max ts 51) heading
-_locus_ln=$(printf '%s\n' "$out" | grep -n '^/w/locus' | head -1 | cut -d: -f1)
-_notes_ln=$(printf '%s\n' "$out" | grep -n '^/w/notes' | head -1 | cut -d: -f1)
-_assert "projects ordered by recency"    "yes" "$([ "${_locus_ln:-0}" -lt "${_notes_ln:-0}" ] 2>/dev/null && echo yes || echo no)"
-# within locus, the newer window (c3d4, ts 201) precedes the older (a1b2, ts 101)
-_c3d4_ln=$(printf '%s\n' "$out" | grep -n 'c3d4' | head -1 | cut -d: -f1)
-_a1b2_ln=$(printf '%s\n' "$out" | grep -n 'a1b2' | head -1 | cut -d: -f1)
-_assert "windows ordered by recency"     "yes" "$([ "${_c3d4_ln:-0}" -lt "${_a1b2_ln:-0}" ] 2>/dev/null && echo yes || echo no)"
+# per-project /w/locus: only @1 (dead, open-at-death, work) — NOT @2 (closed),
+# NOT @4 (shell), NOT the live server's window, NOT /w/notes.
+out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/locus")
+_assert "dropped(locus): one row"        "1"          "$(printf '%s\n' "$out" | grep -c .)"
+_assert "dropped(locus): agent"          "work"       "$(printf '%s\n' "$out" | cut -f1)"
+_assert "dropped(locus): cwd"            "/w/locus"   "$(printf '%s\n' "$out" | cut -f2)"
+_assert "dropped(locus): swapped resume" "claude-work --resume drop1" "$(printf '%s\n' "$out" | cut -f3)"
+_assert "dropped(locus): omits live"     "0"          "$(printf '%s\n' "$out" | grep -c 'live1')"
+_assert "dropped(locus): omits closed"   "0"          "$(printf '%s\n' "$out" | grep -c 'closed2')"
+_assert "dropped(locus): omits notes"    "0"          "$(printf '%s\n' "$out" | grep -c 'drop3')"
+_assert "dropped(locus): omits shell"    "0"          "$(printf '%s\n' "$out" | grep -c '@4\|shell')"
+
+# --global: both dead dropped tabs (drop1 in locus, drop3 in notes), swapped.
+outg=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
+_assert "dropped(--global): two rows"    "2"          "$(printf '%s\n' "$outg" | grep -c .)"
+_assert "dropped(--global): has drop1"   "1"          "$(printf '%s\n' "$outg" | grep -c 'claude-work --resume drop1')"
+_assert "dropped(--global): has drop3"   "1"          "$(printf '%s\n' "$outg" | grep -c 'claude-personal --resume drop3')"
+
+# dead server with NO sidecar (pre-feature) → all its windows count as dropped.
+rm -rf "$AGENTMUX_STATE_DIR/live"
+outn=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/locus")
+_assert "dropped(no sidecar): shows @1"  "1"          "$(printf '%s\n' "$outn" | grep -c 'drop1')"
+_assert "dropped(no sidecar): shows @2"  "1"          "$(printf '%s\n' "$outn" | grep -c 'closed2')"
+
+# --- --new marks a (server,cwd) offered → second call for the SAME cwd is empty,
+#     but a DIFFERENT cwd from the same dead server is still offered. ---
+rm -rf "$AGENTMUX_STATE_DIR/live"; rm -f "$AGENTMUX_STATE_DIR/notified"
+n1=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/locus")
+_assert "--new(locus): first call shows"  "1" "$(printf '%s\n' "$n1" | grep -c 'drop1')"
+n2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/locus")
+_assert "--new(locus): second call empty" ""  "$n2"
+n3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/notes")
+_assert "--new(notes): other cwd still offered" "1" "$(printf '%s\n' "$n3" | grep -c 'drop3')"
 
 # --- resume enrichment + dedup, env-less FALLBACK path (no $TMUX → key derived
 #     from the stubbed _sl_ctx: pid 4242, @3) ---
@@ -649,16 +587,18 @@ cat > "$ledger" <<JSON
 {"ts":$now,"event":"open","socket_path":"/s/live","server_pid":222,"session":"b","window_id":"@1","window_name":"claude","cwd":"/w/b","agent":"claude"}
 {"ts":$now,"event":"open","socket_path":"/s/recent","server_pid":333,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/c","agent":"claude"}
 JSON
-# seed the notified marker with all three servers (+ a blank line); prune must
-# trim it to the live-or-recent keep set, matching the ledger.
-printf '%s\n' '/s/dead|111' '/s/live|222' '' '/s/recent|333' > "$AGENTMUX_STATE_DIR/notified"
+# seed the notified marker with all three servers, in the real 3-field
+# socket|pid|cwd format sl_dropped --new writes (+ a blank line); prune must
+# trim it to the live-or-recent keep set (matched on the socket|pid prefix,
+# with the cwd suffix stripped), matching the ledger.
+printf '%s\n' '/s/dead|111|/w/a' '/s/live|222|/w/b' '' '/s/recent|333|/w/c' > "$AGENTMUX_STATE_DIR/notified"
 AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
 _assert "prune drops dead+old 111" "0" "$(grep -c '"server_pid":111' "$ledger")"
 _assert "prune keeps live 222"     "1" "$(grep -c '"server_pid":222' "$ledger")"
 _assert "prune keeps recent 333"   "1" "$(grep -c '"server_pid":333' "$ledger")"
-_assert "prune trims notified: drops dead"   "0" "$(grep -c '^/s/dead|111$' "$AGENTMUX_STATE_DIR/notified")"
-_assert "prune trims notified: keeps live"   "1" "$(grep -c '^/s/live|222$' "$AGENTMUX_STATE_DIR/notified")"
-_assert "prune trims notified: keeps recent" "1" "$(grep -c '^/s/recent|333$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: drops dead"   "0" "$(grep -c '^/s/dead|111|/w/a$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: keeps live"   "1" "$(grep -c '^/s/live|222|/w/b$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: keeps recent" "1" "$(grep -c '^/s/recent|333|/w/c$' "$AGENTMUX_STATE_DIR/notified")"
 _assert "prune trims notified: drops blanks" "0" "$(grep -cx '' "$AGENTMUX_STATE_DIR/notified")"
 
 # --- fold tolerates a torn/corrupt line (kill-server mid-append) → roster survives ---
@@ -693,28 +633,6 @@ TMUX_PANE='%7' _sl_ctx '=s:0' >/dev/null
 case "$_captured" in *"-t =s:0"*) _got=yes ;; *) _got=no ;; esac
 _assert "explicit target overrides \$TMUX_PANE" "yes" "$_got"
 
-# --- notice: dead server fires a one-time recovery nudge; live ignored ---
-rm -f "$ledger" "$AGENTMUX_STATE_DIR/notified"
-_now=$(date +%s)
-cat > "$ledger" <<JSON
-{"ts":$_now,"event":"open","socket_path":"/s/dead","server_pid":555,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/a","agent":"claude"}
-{"ts":$_now,"event":"open","socket_path":"/s/dead","server_pid":555,"session":"b","window_id":"@2","window_name":"claude","cwd":"/w/b","agent":"claude"}
-{"ts":$_now,"event":"open","socket_path":"/s/live","server_pid":999,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/c","agent":"claude"}
-JSON
-n1=$(SESSION_LOG_LIVE_PIDS="999" SESSION_LOG_BOOT_EPOCH=$((_now - 3600)) sl_notice)
-_assert "notice counts dead server's 2 windows" "1" "$(printf '%s\n' "$n1" | grep -c '2 agent sessions lost')"
-_assert "notice ignores the live server"        "1" "$(printf '%s\n' "$n1" | grep -c 'a server kill')"
-n2=$(SESSION_LOG_LIVE_PIDS="999" SESSION_LOG_BOOT_EPOCH=$((_now - 3600)) sl_notice)
-_assert "notice is once-per-dead-server (then silent)" "" "$n2"
-
-# --- notice: a pre-boot server is lost even if its pid was reused (reboot) ---
-rm -f "$ledger" "$AGENTMUX_STATE_DIR/notified"
-cat > "$ledger" <<JSON
-{"ts":$((_now - 100000)),"event":"open","socket_path":"/s/old","server_pid":777,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/old","agent":"claude"}
-JSON
-n3=$(SESSION_LOG_LIVE_PIDS="777" SESSION_LOG_BOOT_EPOCH=$_now sl_notice)
-_assert "notice catches pre-boot reboot (pid reused)" "1" "$(printf '%s\n' "$n3" | grep -c 'lost to a reboot')"
-
 # ============ live-set sidecar: confident dead-server recovery ============
 
 # --- _sl_snapshot writes the current live window set to a (socket,pid) sidecar ---
@@ -737,37 +655,6 @@ _assert "socket A sidecar intact after B snapshot" "@5 @6" \
 _assert "socket B sidecar keeps its own set"       "@1" \
   "$(tr '\n' ' ' < "$(_sl_live_file "/s/b" 100)" | sed 's/ *$//')"
 rm -rf "$AGENTMUX_STATE_DIR/live"
-
-# --- dead server WITH sidecar: open-at-death shown lost, closed-earlier omitted ---
-rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
-cat > "$ledger" <<JSON
-{"ts":100,"event":"open","socket_path":"/s/d","server_pid":808,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
-{"ts":101,"event":"resume","socket_path":"/s/d","server_pid":808,"window_id":"@1","label":"open1","resume_cmd":"claude --resume open1"}
-{"ts":90,"event":"open","socket_path":"/s/d","server_pid":808,"session":"old","window_id":"@2","window_name":"claude","cwd":"/w/old","agent":"work"}
-{"ts":91,"event":"resume","socket_path":"/s/d","server_pid":808,"window_id":"@2","label":"closed2","resume_cmd":"claude --resume closed2"}
-JSON
-printf '@1\n' > "$(_sl_live_file "/s/d" 808)"   # only @1 was open at death
-out=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_RESUME_MAP="$RMAP" sl_list 2>&1)
-_assert "dead+sidecar: open-at-death shown"        "1" "$(printf '%s\n' "$out" | grep -c 'open1   ✗ lost')"
-_assert "dead+sidecar: closed-before-death omitted" "0" "$(printf '%s\n' "$out" | grep -c 'closed2')"
-_assert "dead+sidecar: closed project omitted"      "0" "$(printf '%s\n' "$out" | grep -c '/w/old')"
-
-# --- dead server with NO sidecar (pre-feature): fall back to show-all ---
-rm -rf "$AGENTMUX_STATE_DIR/live"
-out=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_RESUME_MAP="$RMAP" sl_list 2>&1)
-_assert "dead+no-sidecar: shows all (open1)"   "1" "$(printf '%s\n' "$out" | grep -c 'open1   ✗ lost')"
-_assert "dead+no-sidecar: shows all (closed2)" "1" "$(printf '%s\n' "$out" | grep -c 'closed2   ✗ lost')"
-
-# --- notice counts only the sidecar's windows for a dead server ---
-rm -f "$AGENTMUX_STATE_DIR/notified"; mkdir -p "$AGENTMUX_STATE_DIR/live"
-printf '@1\n' > "$(_sl_live_file "/s/d" 808)"   # only 1 of the 2 windows open at death
-nn=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_notice)
-_assert "notice counts sidecar intersection (1 not 2)" "1" "$(printf '%s\n' "$nn" | grep -c '1 agent session lost')"
-
-# --- notice without a sidecar (pre-feature) counts all open windows ---
-rm -rf "$AGENTMUX_STATE_DIR/live"; rm -f "$AGENTMUX_STATE_DIR/notified"
-nn2=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_notice)
-_assert "notice without sidecar counts all (2)" "1" "$(printf '%s\n' "$nn2" | grep -c '2 agent sessions lost')"
 
 # --- prune removes sidecars for dropped servers ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"

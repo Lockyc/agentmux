@@ -97,7 +97,7 @@ Normal shell commands — type them at a prompt.
 | `amux <agent>` | New/attach session, agent by name |
 | `amux <agent> <session>` | New/attach named session with specified agent |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
-| `amux --log` | Durable roster of agent windows amux has opened, grouped by project — recover sessions lost to a server kill or reboot. Prints one `cd` per project, then a resume command per window tagged `● live` / `✗ lost` |
+| `amux --restore [--global]` | Pick dropped agent tabs (lost to a crash/reboot) to relaunch — this project by default, `--global` for all. Also offered automatically when you launch `amux` in a project with dropped tabs |
 | `amux --probe [session]` | Exit 0 if a session exists — the agent **or** a lingering frame (default: current dir). Silent; for scripting a presence indicator (e.g. warden's cyan dot) off the exit code. With no `session` arg it matches only the session launched *from this dir*, so two projects sharing a folder name never cross-light |
 | `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir). Like `--probe`, the no-arg form only reaps the session launched *from this dir* — a same-named sibling project is left alone |
 | `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
@@ -266,7 +266,7 @@ The new agent appears in the `prefix m` cycle immediately (no reload needed).
 | `colour_inactive` / `colour_active` | — | Escape hatch: full raw tmux styles for total control (e.g. `"fg=black,bg=colour56"` / `"fg=black,bg=colour93,bold"`). Set **both** as a pair — they override `colour`, and setting only one is a misconfiguration (agentmux warns) |
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
-| `resume` | — | Resume program shown by `amux --log` for this agent's windows. Overrides just the executable of the recorded resume command (e.g. `resume = "claude-work"` → `claude-work --resume <id>`); omit to use the program the adapter recorded |
+| `resume` | — | Resume program used by the restore picker (`amux --restore`) for this agent's windows. Overrides just the executable of the recorded resume command (e.g. `resume = "claude-work"` → `claude-work --resume <id>`); omit to use the program the adapter recorded |
 
 ## Adding an agent integration
 
