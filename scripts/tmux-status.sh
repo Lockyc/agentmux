@@ -119,6 +119,9 @@ esac
 if [ "$emoji" = "🤖" ]; then
   rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" "$sumtsfile" "$driftfile" 2>/dev/null
   rmdir "$sumlockdir" 2>/dev/null
+  # Event-driven display: clear the pushed summary-row pane options too, so a
+  # fresh session starts blank instead of showing the previous run's rows.
+  for _r in 1 2 3; do tmux set-option -pu -t "$TMUX_PANE" "@amux_row$_r" 2>/dev/null; done
 fi
 
 # Hook payload is parsed by the adapter and handed in via env vars — agent
@@ -153,6 +156,7 @@ SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
 CTX="${AGENTMUX_CTX_BIN:-}"
 DIG="${AGENTMUX_DIGEST_BIN:-}"
 GATE="${AGENTMUX_STRIP_GATE_BIN:-$HOME/.agentmux/scripts/strip_unbacked_done.sh}"
+SR="${AGENTMUX_SUMMARY_ROWS_BIN:-$HOME/.agentmux/scripts/summary_rows.sh}"
 
 # Refresh cadence + throttle. A new user prompt (UserPromptSubmit, $prompt set)
 # always refreshes immediately. PostToolUse carries no $prompt and fires per
@@ -184,7 +188,18 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
   if [ -n "$pfile" ]; then
     printf '%s' "$prompt" > "$pfile"
     nohup sh -c '
-      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}; dcf=${12}; rtd=${13}
+      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}; dcf=${12}; rtd=${13}; sr=${14}
+      # Push the three rendered rows into pane options the status bar reads
+      # statically (@amux_row1/2/3), then refresh — replaces the old #() poll.
+      # Uses inherited $TMUX / $TMUX_PANE (exported by tmux, preserved by nohup),
+      # exactly as the foreground tmux calls in this file do. $1 = row content.
+      _push() {
+        for _r in 1 2 3; do
+          _rt=$(printf "%s" "$1" | "$sr" --stdin "$_r" 9999 2>/dev/null)
+          tmux set-option -p -t "$TMUX_PANE" "@amux_row$_r" "$_rt" 2>/dev/null
+        done
+        tmux refresh-client -S 2>/dev/null
+      }
       cur=$(cat "$pf" 2>/dev/null); rm -f "$pf"
       recent=$("$ctx" "$tp" 6 400 tail 2>/dev/null)
       if [ -n "$recent" ] && [ -n "$cur" ]; then blob="$recent / $cur"
@@ -285,17 +300,24 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       if [ -n "$p" ]; then
         printf "%s" "$p" > "$lf"
         rm -f "$df" 2>/dev/null
+        _push "$p"
       else
+        _dt=
         if command -v curl >/dev/null 2>&1; then
           if curl -s --max-time 3 "$llm_url" >/dev/null 2>&1; then
-            printf "context: building..." > "$df"
+            _dt="context: building..."
           else
-            printf "llm: unreachable" > "$df"
+            _dt="llm: unreachable"
           fi
+          printf "%s" "$_dt" > "$df"
         fi
+        # A failed refresh leaves the last-good summary in "$lf" untouched, so the
+        # bar keeps showing it — only surface the diag when there is NO prior
+        # summary, never clobbering good rows with "llm: unreachable".
+        [ -s "$lf" ] || { [ -n "$_dt" ] && _push "$_dt"; }
       fi
       rmdir "$lock" 2>/dev/null
-    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" "$driftfile" "$runtime_dir" \
+    ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" "$driftfile" "$runtime_dir" "$SR" \
       >/dev/null 2>&1 </dev/null &
   fi
 elif [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ -x "$SUM" ]; then
