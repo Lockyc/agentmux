@@ -349,20 +349,44 @@ EOF
   printf '⚠ %d agent session%s lost to %s — recover with: amux --log\n' "$_total" "$_s" "$_cause"
 }
 
-# Generic resume-hint enrichment. Runs inside the agent's own pane.
-# Marker check is FIRST so steady-state calls are cheap (no toml read, no append).
+# Generic resume-hint enrichment. Runs inside the agent's own pane, on EVERY
+# working hook — synchronously, ahead of the detached summariser — so the
+# steady-state (already-logged) path must NOT fork. It derives the dedup marker
+# key from tmux's exported env ($TMUX = "socket,serverpid,sessionid"; $TMUX_PANE =
+# "%N"), which costs ZERO subprocesses: a repeat label short-circuits without the
+# `tmux display-message` that _sl_ctx spawns. tmux exports both to every pane
+# process (the summariser already relies on this), so they're present in the hook
+# env. A pane is stable per agent and 1:1 with its window, so it dedups as well as
+# window_id; the "p" prefix keeps its key namespace disjoint from the window_id
+# fallback (a pane "%3" and a window "@3" must not collide). _sl_ctx (the tmux
+# call) is DEFERRED to a miss, where the authoritative socket/window_id are needed
+# for the ledger line + sidecar. No usable $TMUX (manual/selftest) → fall back to
+# deriving the key from _sl_ctx too.
 sl_resume() {  # <label> <resume_cmd>
   _label="$1"; _rcmd="$2"
+  [ -n "$_label" ] || return 0
+  _dir=$(_sl_state_dir)
+
+  # Fast path: env-derived key, no subprocess. Trust $TMUX only if well-formed.
+  _epid=""
+  case "$TMUX" in *,*,*) _epid=${TMUX#*,}; _epid=${_epid%%,*} ;; esac
+  _emark=""
+  if [ -n "$_epid" ] && [ -n "${TMUX_PANE:-}" ]; then
+    _emark="$_dir/seen/${_epid}-p$(printf '%s' "$TMUX_PANE" | tr -d '%')"
+    [ -f "$_emark" ] && [ "$(cat "$_emark" 2>/dev/null)" = "$_label" ] && return 0
+  fi
+
+  _sl_enabled || return 0
+
+  # Miss (new label) or no usable env: fetch full context once for the record.
   IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
 $(_sl_ctx)
 EOF
-  [ -n "$_pid" ] && [ -n "$_label" ] || return 0
-  _dir=$(_sl_state_dir)
-  _marker="$_dir/seen/${_pid}-$(printf '%s' "$_wid" | tr -d '@')"
-  if [ -f "$_marker" ] && [ "$(cat "$_marker" 2>/dev/null)" = "$_label" ]; then
-    return 0
-  fi
-  _sl_enabled || return 0
+  [ -n "$_pid" ] || return 0
+  _marker="${_emark:-$_dir/seen/${_pid}-$(printf '%s' "$_wid" | tr -d '@')}"
+  # Fallback-path dedup: when no env key short-circuited above, re-check here.
+  [ -z "$_emark" ] && [ -f "$_marker" ] && [ "$(cat "$_marker" 2>/dev/null)" = "$_label" ] && return 0
+
   mkdir -p "$_dir/seen" 2>/dev/null || return 0
   printf '%s' "$_label" > "$_marker" 2>/dev/null || true
   _line=$(jq -cn \
@@ -568,14 +592,47 @@ _c3d4_ln=$(printf '%s\n' "$out" | grep -n 'c3d4' | head -1 | cut -d: -f1)
 _a1b2_ln=$(printf '%s\n' "$out" | grep -n 'a1b2' | head -1 | cut -d: -f1)
 _assert "windows ordered by recency"     "yes" "$([ "${_c3d4_ln:-0}" -lt "${_a1b2_ln:-0}" ] 2>/dev/null && echo yes || echo no)"
 
-# --- resume enrichment + dedup (uses the stubbed tmux: pid 4242, @3) ---
+# --- resume enrichment + dedup, env-less FALLBACK path (no $TMUX → key derived
+#     from the stubbed _sl_ctx: pid 4242, @3) ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
+unset TMUX TMUX_PANE
 sl_resume "9f3c" "claude --resume 9f3c"
 _assert "resume writes one" "1" "$(grep -c '"event":"resume"' "$ledger")"
 sl_resume "9f3c" "claude --resume 9f3c"
 _assert "resume dedups same label" "1" "$(grep -c '"event":"resume"' "$ledger")"
 sl_resume "abcd" "claude --resume abcd"
 _assert "resume writes on new label" "2" "$(grep -c '"event":"resume"' "$ledger")"
+
+# --- resume FAST path: dedup keyed by tmux's exported env ($TMUX serverpid +
+#     $TMUX_PANE), so a repeat label short-circuits WITHOUT spawning tmux. A
+#     call-logging stub records every _sl_ctx invocation to a file (survives the
+#     command-substitution subshell that a counter var would not). ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"; mkdir -p "$AGENTMUX_STATE_DIR/seen"
+_ctxlog="$AGENTMUX_STATE_DIR/ctxlog"; : > "$_ctxlog"
+tmux() { echo x >> "$_ctxlog"; printf '/tmp/s\t7777\tsess\t@1\twin\t/w\n'; }
+export TMUX="/tmp/s,7777,0" TMUX_PANE="%9"
+printf 'lbl1' > "$AGENTMUX_STATE_DIR/seen/7777-p9"          # pre-seed the env-keyed marker
+sl_resume "lbl1" "claude --resume lbl1"                      # repeat label → dedup
+_assert "fast path dedups without spawning tmux" "0" "$(grep -c x "$_ctxlog")"
+_assert "fast path dedup writes nothing"         "0" "$([ -f "$ledger" ] && grep -c . "$ledger" || echo 0)"
+# distinct namespaces: a window "@9" marker must NOT be read as the pane "%9" one
+printf 'other' > "$AGENTMUX_STATE_DIR/seen/7777-9"
+sl_resume "lbl1" "claude --resume lbl1"
+_assert "pane key disjoint from window key" "0" "$(grep -c x "$_ctxlog")"
+# a NEW label falls through to _sl_ctx (tmux consulted) + a ledger write
+SESSION_LOG_LIVE_WINDOWS="@1" sl_resume "lbl2" "claude --resume lbl2"
+_assert "fast path new label writes one"       "1" "$(grep -c '"label":"lbl2"' "$ledger")"
+_assert "fast path new label consulted tmux"   "yes" "$([ "$(grep -c x "$_ctxlog")" -ge 1 ] && echo yes || echo no)"
+unset TMUX TMUX_PANE
+# restore the canonical stub for the blocks that follow
+tmux() {
+  case "$1 $2" in
+    "display-message -p")
+      shift 2; [ "$1" = "-t" ] && shift 2
+      printf '/tmp/tmux-501/default\t4242\tlocus\t@3\tclaude\t/tmp/work\n' ;;
+    *) return 0 ;;
+  esac
+}
 # fold must surface the LATEST resume cmd for that window
 seedl="$AGENTMUX_STATE_DIR/seed.jsonl"
 cat > "$seedl" <<'JSON'
