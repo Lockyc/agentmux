@@ -116,25 +116,6 @@ _amux_clamp_pct() {
   printf '%s' "$v"
 }
 
-# _amux_parse_selection <count> <input> — echo the chosen 1-based indices (space
-# separated, input order, deduped, each in [1,count]). a/all → all; ''/n/none/q → none.
-_amux_parse_selection() {
-  local count="$1" input="$2" norm tok seen=" "
-  norm=$(printf '%s' "$input" | tr 'A-Z' 'a-z' | tr -d '[:space:]')
-  case "$norm" in
-    a|all)            local i; for ((i=1;i<=count;i++)); do printf '%s ' "$i"; done; return 0 ;;
-    ''|n|none|q|quit) return 0 ;;
-  esac
-  for tok in $(printf '%s' "$input" | tr ',' ' '); do
-    case "$tok" in ''|*[!0-9]*) continue ;; esac
-    tok=$((10#$tok))
-    { [ "$tok" -ge 1 ] && [ "$tok" -le "$count" ]; } || continue
-    case "$seen" in *" $tok "*) continue ;; esac
-    seen="$seen$tok "
-    printf '%s ' "$tok"
-  done
-}
-
 # Resolve the left-pane width for --frame: [frame] left (percent), default 30,
 # clamped to 10..90. Non-numeric or absent → default.
 _amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left "$PWD")" 30; }
@@ -988,19 +969,6 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --help advertises --no-frame.
   case "$help" in *"--no-frame"*) _got="present" ;; *) _got="absent" ;; esac
   _assert "help advertises --no-frame" "present" "$_got"
-
-  # _amux_parse_selection tests
-  _assert "parse all"        "1 2 3" "$(_amux_parse_selection 3 a | tr -s ' ' | sed 's/ $//')"
-  _assert "parse all word"   "1 2 3" "$(_amux_parse_selection 3 all | tr -s ' ' | sed 's/ $//')"
-  _assert "parse none empty" ""      "$(_amux_parse_selection 3 '' | tr -d ' ')"
-  _assert "parse none n"     ""      "$(_amux_parse_selection 3 n | tr -d ' ')"
-  _assert "parse subset"     "1 3"   "$(_amux_parse_selection 3 '1,3' | tr -s ' ' | sed 's/ $//')"
-  _assert "parse spaces"     "2 3"   "$(_amux_parse_selection 3 '2 3' | tr -s ' ' | sed 's/ $//')"
-  _assert "parse dedup"      "2"     "$(_amux_parse_selection 3 '2,2' | tr -s ' ' | sed 's/ $//')"
-  _assert "parse out-of-range drops" "1" "$(_amux_parse_selection 3 '1,9' | tr -s ' ' | sed 's/ $//')"
-  _assert "parse junk drops" ""      "$(_amux_parse_selection 3 'x,y' | tr -d ' ')"
-  _assert "parse normalizes zero-pad" "8"   "$(_amux_parse_selection 10 '08' | tr -s ' ' | sed 's/ $//')"
-  _assert "parse dedups 8 and 08"     "8"   "$(_amux_parse_selection 10 '8,08' | tr -s ' ' | sed 's/ $//')"
 
   # --frame refuses to run inside tmux (guard returns 1 before any tmux call)
   # unless [frame] allow_nested is set. The example config sets none, so it's off.
