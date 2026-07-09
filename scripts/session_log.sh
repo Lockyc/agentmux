@@ -587,16 +587,18 @@ cat > "$ledger" <<JSON
 {"ts":$now,"event":"open","socket_path":"/s/live","server_pid":222,"session":"b","window_id":"@1","window_name":"claude","cwd":"/w/b","agent":"claude"}
 {"ts":$now,"event":"open","socket_path":"/s/recent","server_pid":333,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/c","agent":"claude"}
 JSON
-# seed the notified marker with all three servers (+ a blank line); prune must
-# trim it to the live-or-recent keep set, matching the ledger.
-printf '%s\n' '/s/dead|111' '/s/live|222' '' '/s/recent|333' > "$AGENTMUX_STATE_DIR/notified"
+# seed the notified marker with all three servers, in the real 3-field
+# socket|pid|cwd format sl_dropped --new writes (+ a blank line); prune must
+# trim it to the live-or-recent keep set (matched on the socket|pid prefix,
+# with the cwd suffix stripped), matching the ledger.
+printf '%s\n' '/s/dead|111|/w/a' '/s/live|222|/w/b' '' '/s/recent|333|/w/c' > "$AGENTMUX_STATE_DIR/notified"
 AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
 _assert "prune drops dead+old 111" "0" "$(grep -c '"server_pid":111' "$ledger")"
 _assert "prune keeps live 222"     "1" "$(grep -c '"server_pid":222' "$ledger")"
 _assert "prune keeps recent 333"   "1" "$(grep -c '"server_pid":333' "$ledger")"
-_assert "prune trims notified: drops dead"   "0" "$(grep -c '^/s/dead|111$' "$AGENTMUX_STATE_DIR/notified")"
-_assert "prune trims notified: keeps live"   "1" "$(grep -c '^/s/live|222$' "$AGENTMUX_STATE_DIR/notified")"
-_assert "prune trims notified: keeps recent" "1" "$(grep -c '^/s/recent|333$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: drops dead"   "0" "$(grep -c '^/s/dead|111|/w/a$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: keeps live"   "1" "$(grep -c '^/s/live|222|/w/b$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "prune trims notified: keeps recent" "1" "$(grep -c '^/s/recent|333|/w/c$' "$AGENTMUX_STATE_DIR/notified")"
 _assert "prune trims notified: drops blanks" "0" "$(grep -cx '' "$AGENTMUX_STATE_DIR/notified")"
 
 # --- fold tolerates a torn/corrupt line (kill-server mid-append) → roster survives ---
