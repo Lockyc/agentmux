@@ -127,6 +127,7 @@ _amux_parse_selection() {
   esac
   for tok in $(printf '%s' "$input" | tr ',' ' '); do
     case "$tok" in ''|*[!0-9]*) continue ;; esac
+    tok=$((10#$tok))   # normalize to decimal so a zero-padded token isn't read as octal
     { [ "$tok" -ge 1 ] && [ "$tok" -le "$count" ]; } || continue
     case "$seen" in *" $tok "*) continue ;; esac
     seen="$seen$tok "
@@ -998,6 +999,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "parse dedup"      "2"     "$(_amux_parse_selection 3 '2,2' | tr -s ' ' | sed 's/ $//')"
   _assert "parse out-of-range drops" "1" "$(_amux_parse_selection 3 '1,9' | tr -s ' ' | sed 's/ $//')"
   _assert "parse junk drops" ""      "$(_amux_parse_selection 3 'x,y' | tr -d ' ')"
+  _assert "parse normalizes zero-pad" "8"   "$(_amux_parse_selection 10 '08' | tr -s ' ' | sed 's/ $//')"
+  _assert "parse dedups 8 and 08"     "8"   "$(_amux_parse_selection 10 '8,08' | tr -s ' ' | sed 's/ $//')"
 
   # --frame refuses to run inside tmux (guard returns 1 before any tmux call)
   # unless [frame] allow_nested is set. The example config sets none, so it's off.
