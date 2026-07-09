@@ -114,15 +114,23 @@ _sl_live_windows() {  # <socket>
   tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null
 }
 
-# Path to a server's live-set sidecar (per pid; a reused pid means a *live* server,
-# which takes the list-windows path and overwrites the stale file on first write).
-_sl_live_file() { printf '%s/live/%s.windows' "$(_sl_state_dir)" "$1"; }  # <pid>
+# Path to a server's live-set sidecar, keyed by (socket, pid) — NOT pid alone.
+# The ledger identifies a server by (socket_path, server_pid); the sidecar name
+# must fold in the same socket or the two identities disagree: a same-boot pid
+# reuse on a DIFFERENT socket (pid-counter wrap) would let a live server B
+# (/s/b, pid 100) overwrite dead server A's (/s/a, pid 100) sidecar, and A's
+# recovery rows would then intersect against B's window set and silently vanish —
+# the exact loss this feature exists to prevent. Folding a cksum of the socket in
+# (whitelist-safe: digits + '-' + digits) keeps them aligned, mirroring
+# tmux-status.sh's pane_key.
+_sl_sock_hash() { printf '%s' "$1" | cksum | cut -d' ' -f1; }  # <socket>
+_sl_live_file() { printf '%s/live/%s-%s.windows' "$(_sl_state_dir)" "$(_sl_sock_hash "$1")" "$2"; }  # <socket> <pid>
 
 # Overwrite <pid>'s sidecar with the server's current window set. Reuses
 # _sl_live_windows so the SESSION_LOG_LIVE_WINDOWS test hook drives it too. Atomic
 # (temp + mv) so a reader never sees a half-written set; fails soft.
 _sl_snapshot() {  # <socket> <pid>
-  _lf=$(_sl_live_file "$2"); _dir=${_lf%/*}
+  _lf=$(_sl_live_file "$1" "$2"); _dir=${_lf%/*}
   mkdir -p "$_dir" 2>/dev/null || return 0
   _tmp="$_dir/.$2.$$.tmp"
   if _sl_live_windows "$1" > "$_tmp" 2>/dev/null; then
@@ -133,7 +141,7 @@ _sl_snapshot() {  # <socket> <pid>
 }
 
 # Read a dead server's recorded live-set (empty if the file is absent).
-_sl_snapshot_windows() { cat "$(_sl_live_file "$1")" 2>/dev/null; }  # <pid>
+_sl_snapshot_windows() { cat "$(_sl_live_file "$1" "$2")" 2>/dev/null; }  # <socket> <pid>
 
 # Public snapshot subcommand: re-record a live server's window set. Invoked by the
 # `window-unlinked` tmux hook on CLOSE (re-queries the whole set, so the closed
@@ -215,9 +223,9 @@ sl_list() {
     if _sl_server_live "$socket" "$pid"; then
       _lw=$(_sl_live_windows "$socket" | tr '\n' ' ')
       printf 'S\t%s\t%s\tlive\t%s\n' "$socket" "$pid" "$_lw"
-    elif [ -f "$(_sl_live_file "$pid")" ]; then
+    elif [ -f "$(_sl_live_file "$socket" "$pid")" ]; then
       # Dead, but we recorded its last live-set → intersect against that.
-      _sw=$(_sl_snapshot_windows "$pid" | tr '\n' ' ')
+      _sw=$(_sl_snapshot_windows "$socket" "$pid" | tr '\n' ' ')
       printf 'S\t%s\t%s\tlost\t%s\n' "$socket" "$pid" "$_sw"
     else
       # Dead with no sidecar (server predating the feature) → show all, best-effort.
@@ -309,8 +317,8 @@ sl_notice() {
     fi
     # How many windows were still open at death: intersect the ledger's windows
     # with the recorded live-set if we have one; else (pre-feature server) all.
-    if [ -f "$(_sl_live_file "$_pid")" ]; then
-      _snap=$(_sl_snapshot_windows "$_pid"); _wcount=0
+    if [ -f "$(_sl_live_file "$_socket" "$_pid")" ]; then
+      _snap=$(_sl_snapshot_windows "$_socket" "$_pid"); _wcount=0
       for _w in $_wids; do
         case "
 $_snap
@@ -424,12 +432,14 @@ $mp
     done
   fi
 
-  # Same for the live-set sidecars (<pid>.windows): drop those whose server pid is
-  # no longer in the ledger.
+  # Same for the live-set sidecars (<sockethash>-<pid>.windows): drop those whose
+  # server pid is no longer in the ledger. The pid is the trailing '-'-delimited
+  # field (the socket hash precedes it); strip `.windows`, then take everything
+  # after the last '-'.
   if [ -d "$(_sl_state_dir)/live" ]; then
     for m in "$(_sl_state_dir)"/live/*.windows; do
       [ -e "$m" ] || continue
-      mp=$(basename "$m"); mp=${mp%.*}
+      mp=$(basename "$m"); mp=${mp%.windows}; mp=${mp##*-}
       case "
 $_livepids
 " in *"
@@ -650,11 +660,26 @@ _assert "notice catches pre-boot reboot (pid reused)" "1" "$(printf '%s\n' "$n3"
 
 # ============ live-set sidecar: confident dead-server recovery ============
 
-# --- _sl_snapshot writes the current live window set to a per-pid sidecar ---
+# --- _sl_snapshot writes the current live window set to a (socket,pid) sidecar ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
 SESSION_LOG_LIVE_WINDOWS="@1 @2 @5" _sl_snapshot "/s/a" 4242
-_assert "snapshot writes sidecar file" "1" "$([ -f "$AGENTMUX_STATE_DIR/live/4242.windows" ] && echo 1 || echo 0)"
-_assert "snapshot records the window set" "@1 @2 @5" "$(tr '\n' ' ' < "$AGENTMUX_STATE_DIR/live/4242.windows" | sed 's/ *$//')"
+_lf_4242=$(_sl_live_file "/s/a" 4242)
+_assert "snapshot writes sidecar file" "1" "$([ -f "$_lf_4242" ] && echo 1 || echo 0)"
+_assert "snapshot records the window set" "@1 @2 @5" "$(tr '\n' ' ' < "$_lf_4242" | sed 's/ *$//')"
+
+# --- socket+pid keying: same pid on TWO sockets → DISTINCT sidecars (regression).
+#     A pid-only key let a reused pid on a new socket overwrite a dead server's
+#     sidecar, silently hiding its recoverable rows. Fold the socket in → no clash.
+rm -rf "$AGENTMUX_STATE_DIR/live"
+SESSION_LOG_LIVE_WINDOWS="@5 @6" _sl_snapshot "/s/a" 100
+SESSION_LOG_LIVE_WINDOWS="@1"    _sl_snapshot "/s/b" 100
+_assert "same pid, distinct sockets → distinct paths" "no" \
+  "$([ "$(_sl_live_file "/s/a" 100)" = "$(_sl_live_file "/s/b" 100)" ] && echo yes || echo no)"
+_assert "socket A sidecar intact after B snapshot" "@5 @6" \
+  "$(tr '\n' ' ' < "$(_sl_live_file "/s/a" 100)" | sed 's/ *$//')"
+_assert "socket B sidecar keeps its own set"       "@1" \
+  "$(tr '\n' ' ' < "$(_sl_live_file "/s/b" 100)" | sed 's/ *$//')"
+rm -rf "$AGENTMUX_STATE_DIR/live"
 
 # --- dead server WITH sidecar: open-at-death shown lost, closed-earlier omitted ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
@@ -664,7 +689,7 @@ cat > "$ledger" <<JSON
 {"ts":90,"event":"open","socket_path":"/s/d","server_pid":808,"session":"old","window_id":"@2","window_name":"claude","cwd":"/w/old","agent":"work"}
 {"ts":91,"event":"resume","socket_path":"/s/d","server_pid":808,"window_id":"@2","label":"closed2","resume_cmd":"claude --resume closed2"}
 JSON
-printf '@1\n' > "$AGENTMUX_STATE_DIR/live/808.windows"   # only @1 was open at death
+printf '@1\n' > "$(_sl_live_file "/s/d" 808)"   # only @1 was open at death
 out=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_RESUME_MAP="$RMAP" sl_list 2>&1)
 _assert "dead+sidecar: open-at-death shown"        "1" "$(printf '%s\n' "$out" | grep -c 'open1   ✗ lost')"
 _assert "dead+sidecar: closed-before-death omitted" "0" "$(printf '%s\n' "$out" | grep -c 'closed2')"
@@ -678,7 +703,7 @@ _assert "dead+no-sidecar: shows all (closed2)" "1" "$(printf '%s\n' "$out" | gre
 
 # --- notice counts only the sidecar's windows for a dead server ---
 rm -f "$AGENTMUX_STATE_DIR/notified"; mkdir -p "$AGENTMUX_STATE_DIR/live"
-printf '@1\n' > "$AGENTMUX_STATE_DIR/live/808.windows"   # only 1 of the 2 windows open at death
+printf '@1\n' > "$(_sl_live_file "/s/d" 808)"   # only 1 of the 2 windows open at death
 nn=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_notice)
 _assert "notice counts sidecar intersection (1 not 2)" "1" "$(printf '%s\n' "$nn" | grep -c '1 agent session lost')"
 
@@ -694,18 +719,19 @@ cat > "$ledger" <<JSON
 {"ts":$old,"event":"open","socket_path":"/s/dead","server_pid":111,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/a","agent":"claude"}
 {"ts":$now,"event":"open","socket_path":"/s/live","server_pid":222,"session":"b","window_id":"@1","window_name":"claude","cwd":"/w/b","agent":"claude"}
 JSON
-printf '@1\n' > "$AGENTMUX_STATE_DIR/live/111.windows"   # dead+old → sweep
-printf '@1\n' > "$AGENTMUX_STATE_DIR/live/222.windows"   # live → keep
+_lf_dead=$(_sl_live_file "/s/dead" 111); _lf_live=$(_sl_live_file "/s/live" 222)
+printf '@1\n' > "$_lf_dead"   # dead+old → sweep
+printf '@1\n' > "$_lf_live"   # live → keep
 AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
-_assert "prune removes dead sidecar"      "0" "$([ -f "$AGENTMUX_STATE_DIR/live/111.windows" ] && echo 1 || echo 0)"
-_assert "prune keeps live sidecar"        "1" "$([ -f "$AGENTMUX_STATE_DIR/live/222.windows" ] && echo 1 || echo 0)"
+_assert "prune removes dead sidecar"      "0" "$([ -f "$_lf_dead" ] && echo 1 || echo 0)"
+_assert "prune keeps live sidecar"        "1" "$([ -f "$_lf_live" ] && echo 1 || echo 0)"
 
 # --- snapshot subcommand re-records the live window set (the window-unlinked hook
 #     path — this is how CLOSES are caught: re-query the whole set, closed window
 #     already absent; no loop, no heartbeat) ---
 rm -rf "$AGENTMUX_STATE_DIR/live"
 SESSION_LOG_LIVE_WINDOWS="@3 @7" sl_snapshot "/s/a" 5150
-_assert "snapshot subcommand writes sidecar" "@3 @7" "$(tr '\n' ' ' < "$AGENTMUX_STATE_DIR/live/5150.windows" | sed 's/ *$//')"
+_assert "snapshot subcommand writes sidecar" "@3 @7" "$(tr '\n' ' ' < "$(_sl_live_file "/s/a" 5150)" | sed 's/ *$//')"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
