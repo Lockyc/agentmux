@@ -104,7 +104,9 @@ if [ "${1:-}" = "--stdin" ]; then
   _row=${2:-1}; _w=${3:-9999}
   case "$_row" in 1|2|3) ;; *) exit 0 ;; esac
   case "$_w" in ''|*[!0-9]*) _w=9999 ;; esac
-  _render "$(cat)" "$_row" "$_w"
+  # Flatten newlines to spaces (as the old file reader did): a stray newline in
+  # the content would otherwise reach the tmux option and break the status line.
+  _render "$(cat | tr '\n' ' ')" "$_row" "$_w"
   exit 0
 fi
 

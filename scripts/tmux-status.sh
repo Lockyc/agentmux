@@ -321,6 +321,11 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       >/dev/null 2>&1 </dev/null &
   fi
 elif [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ -x "$SUM" ]; then
+  # Misconfigured install (a required BIN missing): write the diagnostic to the
+  # diag FILE only. We deliberately don't push it to the @amux_rowN bar options
+  # here (the bar stays blank/last-good) — this branch only fires on a broken
+  # setup, and the file is the developer-facing hint. Not worth duplicating the
+  # render+push loop for it.
   [ -x "$CTX" ] || printf 'ctx: AGENTMUX_CTX_BIN not set\n' > "$diagfile"
   [ -x "$DIG" ] || printf 'digest: AGENTMUX_DIGEST_BIN not set\n' > "$diagfile"
 fi
