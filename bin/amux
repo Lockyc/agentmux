@@ -747,7 +747,7 @@ $gc
   printf 'amux: %d agent tab%s %s were dropped:\n' "$n" "$plural" "$scope_word" >&2
   # global spans projects → a project-dir header per group, tabs indented under it.
   # Single-project modes (auto/explicit) are one group, so no header is shown.
-  local i disp prev_cwd=""
+  local i disp prev_cwd="" guuid ggoal gind
   for ((i=1;i<=n;i++)); do
     if [ "$mode" = global ] && [ "${R_cwd[i]}" != "$prev_cwd" ]; then
       disp="${R_cwd[i]}"; case "$disp" in "$HOME"|"$HOME"/*) disp="~${disp#"$HOME"}" ;; esac
@@ -756,8 +756,22 @@ $gc
     fi
     if [ "$mode" = global ]; then
       printf '    %d) %-9s → %s   (%s)\n' "$i" "${R_agent[i]}" "${R_cmd[i]}" "$(_amux_ago "${R_ts[i]}")" >&2
+      gind="         "
     else
       printf '  %d) %-9s → %s   (%s)\n' "$i" "${R_agent[i]}" "${R_cmd[i]}" "$(_amux_ago "${R_ts[i]}")" >&2
+      gind="       "
+    fi
+    # Under each row, a dimmed one-line goal ("what this session was about"),
+    # re-derived from the recovered Claude session's transcript (goal.sh). The
+    # last token of the resume command is the resume UUID = the transcript name.
+    # Non-Claude / unresolvable rows show a muted "(no summary)" so row height
+    # stays uniform (keep-empty-state-in-place, not hide).
+    guuid="${R_cmd[i]##* }"
+    ggoal=$("$AGENTMUX_SCRIPTS/claude/goal.sh" "$guuid" 66 2>/dev/null)
+    if [ -n "$ggoal" ]; then
+      printf '%s\033[2m↳ %s\033[0m\n' "$gind" "$ggoal" >&2
+    else
+      printf '%s\033[2m↳ (no summary)\033[0m\n' "$gind" >&2
     fi
   done
   printf '\n%s\n' '──────────────────────────────────────────────' >&2
