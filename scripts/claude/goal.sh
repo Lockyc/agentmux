@@ -41,8 +41,18 @@ _goal() {
 
   # ctx.sh lives beside this script. head mode, 1 message, capped to width =
   # "earliest substantive user prose, one line".
+  #
+  # Terminal-safety: ctx.sh collapses whitespace but jq's `\s` does NOT match ESC
+  # (0x1b), BEL, or other C0 controls, so raw escape bytes in transcript prose (a
+  # user pasted colored output / discussed escape codes) survive. This line is
+  # printed straight into the restore picker via `printf` to a TTY, so a stray ESC
+  # would cancel the picker's dim, bleed colour, or (a surviving cursor/erase seq)
+  # garble the very menu the user reads after a crash. Strip control bytes at this
+  # display boundary — the one place ctx.sh output reaches a terminal raw (every
+  # other consumer feeds an LM). LC_ALL=C makes [:cntrl:] byte-wise = 0x00-0x1f +
+  # 0x7f, leaving UTF-8 continuation bytes (>=0x80) untouched.
   _dir=$(dirname "$0")
-  "$_dir/ctx.sh" "$_tp" 1 "$_width" head 2>/dev/null
+  "$_dir/ctx.sh" "$_tp" 1 "$_width" head 2>/dev/null | LC_ALL=C tr -d '[:cntrl:]'
 }
 
 if [ "${CLAUDE_GOAL_SELFTEST:-}" = "1" ]; then
@@ -76,6 +86,25 @@ JSONL
   # Empty token yields empty.
   mt=$(HOME="$root" _goal "")
   [ -z "$mt" ] || { echo "goal5 FAIL (empty token) got=[$mt]" >&2; fail=1; }
+
+  # Terminal-safety: ESC/C0 bytes in transcript prose (a user pasted colored
+  # output) must not survive into the picker's TTY. Claude Code stores such bytes
+  # as JSON unicode escapes; jq decodes them to real ESC bytes in the string, and
+  # ctx.sh's whitespace-collapse leaves them (jq's \s doesn't match ESC). The
+  # fixture writes a genuine JSON unicode escape for ESC (the backslash is built
+  # at runtime via printf octal, so no raw ESC / mangled escape sits in source).
+  # Stripping removes the ESC (0x1b); the now-inert printable "[31m" text may
+  # remain — fine, it can no longer drive the terminal. Output must carry no ESC.
+  euuid="4a5b6c7d-8e9f-4a1b-8c2d-3e4f5a6b7c8d"
+  eproj="$root/.claude/projects/-Users-x-esc"
+  mkdir -p "$eproj"
+  bs=$(printf '\134')   # one literal backslash so the fixture carries a JSON escape
+  printf '{"type":"user","message":{"content":"make the header %su001b[31mred%su001b[0m and fix the sidebar"}}\n' \
+    "$bs" "$bs" > "$eproj/$euuid.jsonl"
+  esc=$(HOME="$root" _goal "$euuid")
+  [ "$esc" = "make the header [31mred[0m and fix the sidebar" ] \
+    || { echo "goal6 FAIL (control bytes not stripped as expected) got=[$esc]" >&2; fail=1; }
+  case $esc in *"$(printf '\033')"*) echo "goal6b FAIL (ESC byte survived into output)" >&2; fail=1 ;; esac
 
   rm -rf "$root"
   [ "$fail" = 0 ] && echo "selftest OK"
