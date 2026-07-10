@@ -760,6 +760,7 @@ $gc
       printf '  %d) %-9s → %s   (%s)\n' "$i" "${R_agent[i]}" "${R_cmd[i]}" "$(_amux_ago "${R_ts[i]}")" >&2
     fi
   done
+  printf '\n%s\n' '──────────────────────────────────────────────' >&2
   printf 'restore? [a = all · 1,2 = some · n = none]› ' >&2
   local reply=""; IFS= read -r reply
   local picked; picked=$(_amux_parse_selection "$n" "$reply")
