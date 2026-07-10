@@ -751,7 +751,7 @@ $gc
   for ((i=1;i<=n;i++)); do
     if [ "$mode" = global ] && [ "${R_cwd[i]}" != "$prev_cwd" ]; then
       disp="${R_cwd[i]}"; case "$disp" in "$HOME"|"$HOME"/*) disp="~${disp#"$HOME"}" ;; esac
-      printf '  %s\n' "$disp" >&2
+      printf '\n  %s\n' "$disp" >&2
       prev_cwd="${R_cwd[i]}"
     fi
     if [ "$mode" = global ]; then
