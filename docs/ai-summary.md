@@ -47,6 +47,16 @@ agent hook  →  scripts/claude/status.sh  →  scripts/tmux-status.sh  ─┬�
   (overlap lock), `agentmux-sum-*.ts` (refresh throttle stamp),
   `agentmux-sum-*.drift` (sustained-drift counter). The `start` hook clears all
   of them.
+- **Restore goal line.** The `amux` restore picker shows a one-line goal under
+  each recovered session. It does **not** read the live AI summary — those
+  per-pane `/tmp` files are gone by restore time (dead server; the `start` hook
+  clears them) and were never keyed to anything a restore entry records. Instead
+  `scripts/claude/goal.sh` re-derives the goal from the durable transcript via
+  `ctx.sh` head (resume UUID = transcript filename), deterministically and with
+  no LM. It draws from the same head-anchored goal window as the subject (and,
+  like it, excludes `recent`), but is raw transcript prose from a single early
+  message — no todos, no LM-titling — so it is neither the LM-generated subject
+  label nor the moving stand line.
 
 ## Invariants
 
