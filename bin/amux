@@ -715,13 +715,47 @@ _amux_restore_pick() {
 $rows
 EOF
   [ "$n" -gt 0 ] || return 0
+  # Group the rows by project dir for display + selection: keep dropped's
+  # most-recent-first order, but pull each project's tabs together so its windows
+  # list as one block (freshest project first, freshest tab first within it).
+  # Numbering stays 1..n contiguous, so _amux_parse_selection is unaffected — we
+  # reindex the R_* arrays into grouped order, then render. gseen is a
+  # newline-delimited membership set (bash 3.2: no `local -A`; newlines also
+  # survive spaces in paths).
+  local -a G_agent=() G_cwd=() G_cmd=() G_ts=()
+  local gseen="" gc gi gj
+  for ((gi=1;gi<=n;gi++)); do
+    gc="${R_cwd[gi]}"
+    case "$gseen" in *"
+$gc
+"*) continue ;; esac
+    gseen="$gseen
+$gc
+"
+    for ((gj=1;gj<=n;gj++)); do
+      [ "${R_cwd[gj]}" = "$gc" ] || continue
+      G_agent+=("${R_agent[gj]}"); G_cwd+=("${R_cwd[gj]}")
+      G_cmd+=("${R_cmd[gj]}");     G_ts+=("${R_ts[gj]}")
+    done
+  done
+  for ((gi=0;gi<n;gi++)); do
+    R_agent[gi+1]="${G_agent[gi]}"; R_cwd[gi+1]="${G_cwd[gi]}"
+    R_cmd[gi+1]="${G_cmd[gi]}";     R_ts[gi+1]="${G_ts[gi]}"
+  done
+
   local plural=s; [ "$n" = 1 ] && plural=""
   printf 'amux: %d agent tab%s %s were dropped:\n' "$n" "$plural" "$scope_word" >&2
-  local i disp
+  # global spans projects → a project-dir header per group, tabs indented under it.
+  # Single-project modes (auto/explicit) are one group, so no header is shown.
+  local i disp prev_cwd=""
   for ((i=1;i<=n;i++)); do
-    disp="${R_cwd[i]}"; case "$disp" in "$HOME"|"$HOME"/*) disp="~${disp#"$HOME"}" ;; esac
+    if [ "$mode" = global ] && [ "${R_cwd[i]}" != "$prev_cwd" ]; then
+      disp="${R_cwd[i]}"; case "$disp" in "$HOME"|"$HOME"/*) disp="~${disp#"$HOME"}" ;; esac
+      printf '  %s\n' "$disp" >&2
+      prev_cwd="${R_cwd[i]}"
+    fi
     if [ "$mode" = global ]; then
-      printf '  %d) %-9s %s  → %s\n' "$i" "${R_agent[i]}" "$disp" "${R_cmd[i]}" >&2
+      printf '    %d) %-9s → %s   (%s)\n' "$i" "${R_agent[i]}" "${R_cmd[i]}" "$(_amux_ago "${R_ts[i]}")" >&2
     else
       printf '  %d) %-9s → %s   (%s)\n' "$i" "${R_agent[i]}" "${R_cmd[i]}" "$(_amux_ago "${R_ts[i]}")" >&2
     fi
