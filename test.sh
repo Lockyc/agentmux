@@ -91,6 +91,7 @@ run_selftest summarise           env SUMMARISE_SELFTEST=1            scripts/sum
 run_selftest strip_unbacked_done env STRIP_UNBACKED_DONE_SELFTEST=1 scripts/strip_unbacked_done.sh
 run_selftest summary_rows        env SUMMARY_ROWS_SELFTEST=1        scripts/summary_rows.sh
 run_selftest claude/ctx          env CLAUDE_CTX_SELFTEST=1          scripts/claude/ctx.sh
+run_selftest claude/goal         env CLAUDE_GOAL_SELFTEST=1         scripts/claude/goal.sh
 run_selftest claude/digest       env CLAUDE_DIGEST_SELFTEST=1       scripts/claude/digest.sh
 run_selftest agentmux-config     env AGENTMUX_CONFIG_SELFTEST=1     bash scripts/agentmux-config.sh
 run_selftest agent_window_style  env AGENTMUX_STYLE_SELFTEST=1      bash scripts/agent_window_style.sh
