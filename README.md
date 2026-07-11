@@ -300,7 +300,7 @@ Two optional overrides let an adapter swap in custom helpers; defaults work for 
 
 **Contracts for `ctx.sh` and `digest.sh`** (both read the transcript path as `$1`):
 
-- `ctx.sh <transcript> <max_msgs> [percap] [head|tail]` — prints prose-only turns joined by ` / `; used to derive the stable subject and to anchor recent activity. Filters out tool noise and pasted dumps.
+- `ctx.sh <transcript> <max_msgs> [percap] [head|tail|todos]` — prints prose-only turns joined by ` / `; used to derive the stable subject and to anchor recent activity. Filters out tool noise and pasted dumps. `head`/`tail` select the earliest/most-recent turns; `todos` emits the latest task-list snapshot (the session's goal/plan) — the shared core calls all three, so an adapter must handle `todos` too or the plan anchor silently stays empty.
 - `digest.sh <transcript> [start_line] [char_budget]` — prints a chronological digest (prose + mutating tool one-liners) for the done/now/next summariser. Drops oldest prose first when over budget; keeps tool lines.
 
 Both must print nothing and exit 0 on any error — the shared core treats them as cosmetic.
