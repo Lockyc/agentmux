@@ -29,7 +29,7 @@ The command checks dependencies, runs the installer, and interactively wires you
 ### Manual
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Lockyc/agentmux/main/install.sh | bash
 ```
 
 This clones agentmux into `~/.agentmux/` (a git clone — update later with
