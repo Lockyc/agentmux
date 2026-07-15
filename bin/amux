@@ -567,6 +567,14 @@ _amux_frame() {
   # server; this keeps any pre-existing frame current (same shared-long-lived-server reason).
   tmux -L "$sock" set-option -s extended-keys always
   tmux -L "$sock" set-option -as terminal-features 'xterm*:extkeys,screen*:extkeys'
+  # Synchronized output (DECSET 2026): the frame must bracket its redraws to the host in
+  # mode 2026, or ghostty tears frames and an unfocused surface flashes its hollow cursor
+  # mid-redraw ("cursor flashes around the screen" in a background window). tmux does NOT
+  # derive `sync` from the terminfo Sync cap, so it must be named. frame.conf sets it for a
+  # fresh server; this keeps a pre-existing frame current (same shared-long-lived-server
+  # reason as extkeys). The feature is computed at attach, so a live frame picks it up on
+  # the next reattach, not instantly.
+  tmux -L "$sock" set-option -as terminal-features 'xterm*:sync,screen*:sync,tmux*:sync'
   # Reset-split binding + its per-session data, asserted here (not just frame.conf)
   # for the same shared-long-lived-server reason as the hook above: a frame server
   # predating this feature has no @amux_left/@amux_left_pane and no `0` override.
