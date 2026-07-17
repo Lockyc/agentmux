@@ -260,7 +260,7 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "build_cmd opencode"  "opencode" "$(agentmux_build_cmd 3)"
   _assert "llm_field url"       "http://localhost:1234/v1/chat/completions" "$(agentmux_llm_field url)"
   _assert "llm_field model"     "qwen2.5-14b-instruct"                     "$(agentmux_llm_field model)"
-  _assert "llm_field timeout"   "20"                                        "$(agentmux_llm_field timeout)"
+  _assert "llm_field timeout"   "45"                                        "$(agentmux_llm_field timeout)"
   _assert "llm_field absent"    ""                                          "$(agentmux_llm_field nonexistent)"
   _assert "frame_field left"    "30"                                        "$(agentmux_frame_field left)"
   _assert "frame_field absent"  ""                                          "$(agentmux_frame_field nonexistent)"
