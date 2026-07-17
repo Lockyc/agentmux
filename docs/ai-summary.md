@@ -87,6 +87,29 @@ These are load-bearing. Breaking one reintroduces a failure below.
 8. **Third-party scope.** "another agent is doing X", "my other branch" etc. are
    background context, not the current activity.
 
+## LM backend: the context budget
+
+**Each request needs ~4k tokens of context; 4096 is the practical floor.** Stand
+mode sends `digest.sh` output — capped at 10000 chars (~2700 tokens) by the
+`tmux-status.sh` call — plus a ~500-token system prompt. Label mode sends far
+less.
+
+- **Footgun — a server's parallel slots DIVIDE the context, and the shortfall is
+  silent.** A model served with N parallel slots splits its configured context N
+  ways, so LM Studio's default-looking "8192" at `parallel 4` is really **2048
+  per request**. Every stand call then overflows (`Context size has been
+  exceeded`, HTTP 500); invariant 2 swallows it, so the only symptom is a
+  permanently blank stand row — no error, anywhere. **The tell is the asymmetry:
+  label mode is short enough to fit, so the subject keeps working while the stand
+  line alone stays blank.** Read the real budget as CONTEXT ÷ PARALLEL from
+  `lms ps` (the LM Studio UI shows only the undivided figure).
+- **This reads exactly like "the local model is too weak", which is the wrong
+  diagnosis** — and it is why the eval below must equalise the per-slot window
+  before comparing anything. A candidate loaded fresh at `parallel 1` beats a
+  starved incumbent on nothing but window size. Verified 2026-07: on identical
+  digests, `qwen2.5-14b-instruct` produced empty stand lines at 2048 and good
+  ones at 8192.
+
 ## Failure taxonomy (ruled out — do not re-try)
 
 | Approach | Why it fails |
@@ -128,6 +151,15 @@ screenshots.
    pipe through `summarise.sh 6 label`. Compare the produced subject to the goal.
 3. Requires a reachable LM (`llm-config.sh` resolves the endpoint;
    `summarise.sh` no-ops if unreachable). Output is deterministic (temperature 0).
+4. **Load every candidate with the same per-slot context** (`lms load <m> --gpu max
+   --context-length 8192 --parallel 1`) and confirm it with `lms ps` — an unequal
+   window silently decides the comparison (see "the context budget" above). Note
+   `--parallel` is per-model saved state, so a model configured in the UI keeps its
+   own value unless you override it here.
+5. **Explicitly load each candidate; do not rely on JIT.** A model whose default
+   context is huge (qwen3-coder-30b ships 256k) fails to JIT-load outright —
+   `Failed to load model … Operation canceled` — and, being an unreachable
+   endpoint, degrades to the same silent all-empty output as a bad model.
 
 `SUMMARISE_SMOKE=1 scripts/summarise.sh` is the live prompt-regression check
 (third-party scope + anti-invention). Per-script selftests are listed in
