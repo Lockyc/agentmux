@@ -102,6 +102,7 @@ run_selftest version_check       env VERSION_CHECK_SELFTEST=1       sh scripts/v
 run_selftest colours             env COLOURS_SELFTEST=1             sh scripts/colours.sh
 run_selftest update_colors       env UPDATE_COLORS_SELFTEST=1       sh scripts/update_colors.sh
 run_selftest frame_reattach      env FRAME_REATTACH_SELFTEST=1      sh scripts/frame_reattach.sh
+run_selftest fork_session        env FORK_SESSION_SELFTEST=1        bash scripts/fork_session.sh
 
 # --- summary ---------------------------------------------------------------
 echo

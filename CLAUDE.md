@@ -40,6 +40,7 @@ When adding a script, pick the shell by that rule, not by default. `toml2json` +
 | `scripts/` | Shared runtime scripts (`tmux-status.sh`, `summarise.sh`, etc.) |
 | `scripts/clear_icon.sh` | `prefix v` binding target — one-shot strips the leading state emoji off the current window name (emoji-agnostic; relies on `tmux-status.sh`'s `"<emoji> <label>"` invariant). Hooks re-badge on the next event |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`, `goal.sh`) |
+| `scripts/fork_session.sh` | `prefix f` binding target — forks the current tab's agent session into a new tab, using the `fork_cmd` its adapter recorded in the session log. Passes the fork command as the new window's `pane_start_command`, which is what makes `launch_agent.sh` skip its auto-launch |
 | `scripts/session_log.sh` | Durable open/close ledger of agent windows amux opens, for crash recovery. The `dropped [<cwd>\|--global\|--new <cwd>]` subcommand emits restorable dropped tabs (agent tab, dead server, open-at-death, resume-program-swapped from `[[agents]] resume`); `amux`'s launch picker (and `amux --restore`) consume it. `--new` gates the launch offer once per (dead-server, cwd) via the `notified` marker |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
@@ -131,6 +132,7 @@ CLAUDE_DIGEST_SELFTEST=1     scripts/claude/digest.sh
 AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 SESSION_LOG_SELFTEST=1       sh scripts/session_log.sh
+FORK_SESSION_SELFTEST=1      bash scripts/fork_session.sh
 AMUX_SELFTEST=1              bash bin/amux
 CLEAR_ICON_SELFTEST=1        sh scripts/clear_icon.sh
 VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
