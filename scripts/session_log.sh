@@ -738,6 +738,10 @@ cat > "$seedk" <<'EOF'
 {"ts":6,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@4","session":"proj","window_name":"oc","cwd":"/tmp/proj","agent":"opencode"}
 {"ts":7,"event":"resume","socket_path":"/s/k","server_pid":6001,"window_id":"@4","label":"uu4","resume_cmd":"opencode --resume uu4","fork_cmd":""}
 {"ts":8,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@5","session":"proj","window_name":"fresh","cwd":"/tmp/proj","agent":"work"}
+{"ts":9,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@6","session":"proj","window_name":"gm","cwd":"/tmp/proj","agent":"gemini"}
+{"ts":10,"event":"resume","socket_path":"/s/k","server_pid":6001,"window_id":"@6","label":"uu6","resume_cmd":"gemini --resume uu6","fork_cmd":"gemini --resume uu6 --fork-session"}
+{"ts":11,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@7","session":"proj","window_name":"nospace","cwd":"/tmp/proj","agent":"work"}
+{"ts":12,"event":"resume","socket_path":"/s/k","server_pid":6001,"window_id":"@7","label":"uu7","resume_cmd":"claude --resume uu7","fork_cmd":"claude"}
 EOF
 cp "$seedk" "$(_sl_ledger)"
 SESSION_LOG_RESUME_MAP="work${TAB}claude-work
@@ -755,6 +759,15 @@ _assert "forkcmd: personal tab → claude-personal" \
 _assert "forkcmd: shell agent → nothing" "" "$(_fc @3)"
 _assert "forkcmd: agent with no fork_cmd → nothing" "" "$(_fc @4)"
 _assert "forkcmd: tab with no resume record → nothing" "" "$(_fc @5)"
+# swap_prog empty-program branch (p==""): the common case — an agent with no
+# [[agents]] resume override (not in SESSION_LOG_RESUME_MAP at all) must pass
+# its fork_cmd through UNCHANGED, not blanked or truncated.
+_assert "forkcmd: agent outside resume map passes through unswapped" \
+  "gemini${TAB}gemini --resume uu6 --fork-session" "$(_fc @6)"
+# swap_prog no-space branch (return p): a single-token fork_cmd for an agent
+# that IS in the map must collapse to just the swapped program.
+_assert "forkcmd: single-token fork_cmd swaps to bare program" \
+  "work${TAB}claude-work" "$(_fc @7)"
 _assert "forkcmd: unknown window → nothing" "" "$(_fc @99)"
 _assert "forkcmd: emits at most one line" "1" "$(_fc @1 | wc -l | tr -d ' ')"
 

@@ -29,14 +29,17 @@ EOF
 
   if [ -z "${FORK_CMD:-}" ]; then
     tmux display-message -t "$WIN" \
-      "amux: nothing to fork — no agent session recorded for this tab yet"
+      "amux: nothing to fork — this tab has no forkable agent session"
     exit 0
   fi
 
   CWD=$(tmux display-message -p -t "$WIN" '#{pane_current_path}' 2>/dev/null)
   [ -n "$CWD" ] || CWD="$HOME"
 
-  NEW=$(tmux new-window -a -t "$WIN" -c "$CWD" -P -F '#{window_id}' "$FORK_CMD") || exit 1
+  if ! NEW=$(tmux new-window -a -t "$WIN" -c "$CWD" -P -F '#{window_id}' "$FORK_CMD"); then
+    tmux display-message -t "$WIN" "amux: fork failed — could not create the new window"
+    exit 1
+  fi
   tmux rename-window -t "$NEW" "$AGENT"
   agentmux_set_window_style "$AGENT" "$NEW"
   # The fork is an ordinary agent tab: log it so it is itself crash-restorable
