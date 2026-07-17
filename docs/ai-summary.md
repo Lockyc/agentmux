@@ -87,7 +87,36 @@ These are load-bearing. Breaking one reintroduces a failure below.
 8. **Third-party scope.** "another agent is doing X", "my other branch" etc. are
    background context, not the current activity.
 
-## LM backend: the context budget
+## LM backend: why a healthy-looking endpoint returns nothing
+
+**Two independent backend faults both present as a permanently blank summary and
+nothing else.** Invariant 2 (degrade silently) means a 500, a truncation, and a
+genuinely weak model are indistinguishable from the outside — so when the summary
+is blank, *measure the endpoint before blaming the model*. Both faults below were
+live simultaneously in July 2026 and each was misread as "the local model is too
+weak for this".
+
+### Reasoning tokens eat the whole output budget
+
+`summarise.sh` sends `max_tokens: 200`, and **reasoning tokens are drawn from that
+same budget**. A hybrid-reasoning model left to think spends all 200 on reasoning
+and returns `finish_reason: "length"` with `content: ""` — forever, on every call.
+Measured on qwen3.5-4b: 199/200 reasoning tokens, empty content.
+
+- The fix is `reasoning_effort: "none"` in the request body (sent unconditionally;
+  non-reasoning models ignore it — byte-identical output verified on
+  qwen2.5-14b-instruct and qwen3-coder-30b).
+- **Do not "fix" this by raising `max_tokens`.** That buys output by paying seconds
+  of thinking for a tmux label, and the model still reasons.
+- **Do not swap in `chat_template_kwargs: {enable_thinking: false}`** — it is Qwen's
+  documented switch and LM Studio ignores it (still 199 reasoning tokens, still
+  empty). Verify any replacement by asserting `reasoning_tokens == 0` in the
+  response `usage`, not by reading a vendor doc.
+- This is not a niche case: hybrid reasoning is the default posture of the current
+  small-model generation (Qwen3.5, Gemma 4), so a "non-reasoning instruct model"
+  can no longer be assumed — it must be forced per-request.
+
+### The context budget
 
 **Each request needs ~4k tokens of context; 4096 is the practical floor.** Stand
 mode sends `digest.sh` output — capped at 10000 chars (~2700 tokens) by the
@@ -160,6 +189,21 @@ screenshots.
    context is huge (qwen3-coder-30b ships 256k) fails to JIT-load outright —
    `Failed to load model … Operation canceled` — and, being an unreachable
    endpoint, degrades to the same silent all-empty output as a bad model.
+6. **Load under a private `--identifier` and prove the endpoint is answering as
+   it.** Requesting a model by its bare key routes to whichever instance holds
+   that key — including the parallel-4 one a *live* amux keeps JIT-reloading
+   underneath you — and an identifier that is absent or stale is resolved to some
+   other loaded model rather than erroring. Both silently attribute one model's
+   output to another. Assert the identifier is in `lms ps` before measuring, and
+   re-assert after: a run whose model you cannot name measured nothing.
+
+**The meta-lesson: every failure mode in this pipeline converges on the same
+symptom — an empty string.** Backend 500, reasoning truncation, unloaded model,
+misrouted identifier, and a genuinely bad model are one observation. So an eval
+that reads only the cleaned stdout of `summarise.sh` cannot tell them apart, and
+will confidently rank configuration noise as model quality. Read the raw response
+— `finish_reason`, `usage.reasoning_tokens`, `.error` — whenever a cell is empty,
+*before* concluding anything about the model.
 
 `SUMMARISE_SMOKE=1 scripts/summarise.sh` is the live prompt-regression check
 (third-party scope + anti-invention). Per-script selftests are listed in
