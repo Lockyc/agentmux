@@ -8,6 +8,7 @@
 #   resume <label> <cmd> [fork_cmd]   append/refresh a generic resume hint (+ optional
 #                            fork hint) for the current window. fork_cmd is owned by the
 #                            agent adapter, never composed here — this core stays agnostic.
+#   forkcmd [target]         emit `agent<TAB>fork_cmd` for one LIVE window (or nothing)
 #   dropped <cwd>|--global|--new <cwd>   restorable dropped tabs (dead server, open-at-death)
 #   prune                    trim the ledger (dead, old server instances)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
@@ -198,6 +199,22 @@ _sl_fold() {  # <ledger>
   ' "$1"
 }
 
+# The ONE encoding of the agent→program swap: replace a command's leading token
+# with the agent's `[[agents]] resume` program (claude --resume X → claude-work
+# --resume X), leaving the rest — the adapter-owned syntax — untouched. An empty
+# program means no override, so the command passes through.
+#
+# Carried as awk SOURCE rather than a shell function because both consumers apply
+# it mid-awk-pipeline: sl_dropped (resume commands) and sl_forkcmd (fork commands)
+# each interpolate this ahead of their own program. Do not re-encode it inline —
+# two copies of one rule is exactly the drift this exists to prevent.
+_SL_SWAP_FN='
+function swap_prog(cmd, p,   sp) {
+  if (p == "") return cmd
+  sp = index(cmd," ")
+  return (sp > 0) ? p substr(cmd, sp) : p
+}'
+
 # Map of agent name → resume program, from amux.toml's [[agents]] `resume` fields.
 # Emits `agent<TAB>program` lines. The program replaces the leading token of a
 # window's stored resume_cmd at display time (claude → claude-work), letting the
@@ -275,7 +292,7 @@ sl_dropped() {
       printf 'P\t%s\t%s\n' "$_ag" "$_prog"
     done
     awk '{print "R\t" $0}' "$rows"
-  } | awk -F"$TAB" -v OFS="$TAB" -v scope="$_scope" '
+  } | awk -F"$TAB" -v OFS="$TAB" -v scope="$_scope" "$_SL_SWAP_FN"'
       $1=="S" { dead[$2 SUBSEP $3]=1; lw[$2 SUBSEP $3]=$4; next }
       $1=="P" { prog[$2]=$3; next }
       $1=="R" {
@@ -290,8 +307,7 @@ sl_dropped() {
         }
         if (agent=="shell" || rcmd=="") next
         if (scope!="--global" && cwd!=scope) next
-        p=prog[agent]
-        if (p!="") { sp=index(rcmd," "); rcmd=(sp>0)?p substr(rcmd,sp):p }
+        rcmd=swap_prog(rcmd, prog[agent])
         # Carry the server key + ts so the next stage can isolate ONE crash.
         print socket "|" pid, ts, agent, cwd, rcmd
       }
@@ -313,6 +329,44 @@ sl_dropped() {
     '
 
   rm -f "$rows" "$state"
+}
+
+# sl_forkcmd [target]
+# Emit the fork command for ONE LIVE window as `agent<TAB>fork_cmd`, or nothing
+# when the window has no forkable session (no resume record yet, the `shell`
+# agent, or an agent whose adapter records no fork_cmd — i.e. one that cannot
+# fork). Target defaults to $TMUX_PANE via _sl_ctx.
+#
+# Distinct from sl_dropped, which by design only reports windows on DEAD servers.
+# The (socket,pid,window_id) triple is the key: window ids are unique per tmux
+# SERVER only, so two servers collide — guaranteed under `amux --frame`, where
+# the agent runs a second tmux deep.
+#
+# The `[[agents]] resume` program is swapped into the leading token exactly as
+# sl_dropped does it (claude → claude-work), so the fork targets the right profile.
+sl_forkcmd() {  # [target]
+  _sl_enabled || return 0
+  IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
+$(_sl_ctx "${1:-}")
+EOF
+  [ -n "$_pid" ] || return 0
+  _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
+  {
+    _sl_resume_map | while IFS="$TAB" read -r _ag _prog; do
+      [ -n "$_ag" ] || continue
+      printf 'P\t%s\t%s\n' "$_ag" "$_prog"
+    done
+    _sl_fold "$_ledger" | awk '{print "R\t" $0}'
+  } | awk -F"$TAB" -v OFS="$TAB" -v s="$_socket" -v p="$_pid" -v w="$_wid" "$_SL_SWAP_FN"'
+      $1=="P" { prog[$2]=$3; next }
+      $1=="R" {
+        if ($2!=s || $3!=p || $4!=w) next
+        agent=$8; fcmd=$11
+        if (agent=="shell" || fcmd=="") next
+        print agent, swap_prog(fcmd, prog[agent])
+        exit
+      }
+    '
 }
 
 # Generic resume-hint enrichment. Runs inside the agent's own pane, on EVERY
@@ -455,6 +509,7 @@ if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
     open)      sl_open      "$@" ;;
     resume)    sl_resume    "$@" ;;
     dropped)   sl_dropped   "$@" ;;
+    forkcmd)   sl_forkcmd   "$@" ;;
     prune)     sl_prune     "$@" ;;
     snapshot)  sl_snapshot  "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
@@ -671,6 +726,44 @@ _assert "marker: repeat of the enriched record dedups" "2" \
   "$(grep -c '"event":"resume"' "$ledger")"
 unset SESSION_LOG_CTX
 rm -f "$seedf" "$seedo"
+
+# --- forkcmd: one LIVE window's fork command, program-swapped ----------------
+seedk=$(mktemp)
+cat > "$seedk" <<'EOF'
+{"ts":1,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@1","session":"proj","window_name":"work","cwd":"/tmp/proj","agent":"work"}
+{"ts":2,"event":"resume","socket_path":"/s/k","server_pid":6001,"window_id":"@1","label":"uu1","resume_cmd":"claude --resume uu1","fork_cmd":"claude --resume uu1 --fork-session"}
+{"ts":3,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@2","session":"proj","window_name":"pers","cwd":"/tmp/proj","agent":"personal"}
+{"ts":4,"event":"resume","socket_path":"/s/k","server_pid":6001,"window_id":"@2","label":"uu2","resume_cmd":"claude --resume uu2","fork_cmd":"claude --resume uu2 --fork-session"}
+{"ts":5,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@3","session":"proj","window_name":"shell","cwd":"/tmp/proj","agent":"shell"}
+{"ts":6,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@4","session":"proj","window_name":"oc","cwd":"/tmp/proj","agent":"opencode"}
+{"ts":7,"event":"resume","socket_path":"/s/k","server_pid":6001,"window_id":"@4","label":"uu4","resume_cmd":"opencode --resume uu4","fork_cmd":""}
+{"ts":8,"event":"open","socket_path":"/s/k","server_pid":6001,"window_id":"@5","session":"proj","window_name":"fresh","cwd":"/tmp/proj","agent":"work"}
+EOF
+cp "$seedk" "$(_sl_ledger)"
+SESSION_LOG_RESUME_MAP="work${TAB}claude-work
+personal${TAB}claude-personal"
+export SESSION_LOG_RESUME_MAP
+
+_fc() {  # <window_id> — run forkcmd with ctx pinned to that window
+  SESSION_LOG_CTX="/s/k${TAB}6001${TAB}proj${TAB}$1${TAB}w${TAB}/tmp/proj" \
+    sl_forkcmd
+}
+_assert "forkcmd: work tab → claude-work, program swapped" \
+  "work${TAB}claude-work --resume uu1 --fork-session" "$(_fc @1)"
+_assert "forkcmd: personal tab → claude-personal" \
+  "personal${TAB}claude-personal --resume uu2 --fork-session" "$(_fc @2)"
+_assert "forkcmd: shell agent → nothing" "" "$(_fc @3)"
+_assert "forkcmd: agent with no fork_cmd → nothing" "" "$(_fc @4)"
+_assert "forkcmd: tab with no resume record → nothing" "" "$(_fc @5)"
+_assert "forkcmd: unknown window → nothing" "" "$(_fc @99)"
+_assert "forkcmd: emits at most one line" "1" "$(_fc @1 | wc -l | tr -d ' ')"
+
+# A DIFFERENT server with the same window_id must not bleed through: window ids
+# are unique per server only, and under --frame the agent runs two tmux deep.
+_assert "forkcmd: other server's @1 is not ours" "" \
+  "$(SESSION_LOG_CTX="/s/other${TAB}6002${TAB}proj${TAB}@1${TAB}w${TAB}/tmp/proj" sl_forkcmd)"
+unset SESSION_LOG_RESUME_MAP
+rm -f "$seedk"
 
 # --- resume FAST path: dedup keyed by tmux's exported env ($TMUX serverpid +
 #     $TMUX_PANE), so a repeat label short-circuits WITHOUT spawning tmux. A
