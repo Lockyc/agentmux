@@ -5,7 +5,9 @@
 #
 # Subcommands:
 #   open  <agent> [target]   append an open record (target defaults to current pane)
-#   resume <label> <cmd>     append/refresh a generic resume hint for the current window
+#   resume <label> <cmd> [fork_cmd]   append/refresh a generic resume hint (+ optional
+#                            fork hint) for the current window. fork_cmd is owned by the
+#                            agent adapter, never composed here — this core stays agnostic.
 #   dropped <cwd>|--global|--new <cwd>   restorable dropped tabs (dead server, open-at-death)
 #   prune                    trim the ledger (dead, old server instances)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
@@ -59,6 +61,12 @@ _sl_append() {
 # `display-message` resolves to the session's ACTIVE window, not our own — which
 # misattributes the resume hint to whatever window you happen to be viewing.
 _sl_ctx() {
+  # SESSION_LOG_CTX overrides the tmux query for tests (mirrors the
+  # SESSION_LOG_LIVE_* / SESSION_LOG_RESUME_MAP hooks), bypassing tmux entirely.
+  if [ -n "${SESSION_LOG_CTX+x}" ]; then
+    printf '%s\n' "$SESSION_LOG_CTX"
+    return 0
+  fi
   fmt="#{socket_path}${TAB}#{pid}${TAB}#{session_name}${TAB}#{window_id}${TAB}#{window_name}${TAB}#{pane_current_path}"
   _t="${1:-${TMUX_PANE:-}}"
   if [ -n "$_t" ]; then
@@ -166,10 +174,11 @@ _sl_boot_epoch() {
 
 # Fold ledger → TSV, one row per opened window (latest open + latest resume per
 # (socket,pid,window_id) tuple). Columns: socket pid window_id session
-# window_name cwd agent resume_cmd maxts. `maxts` (the newest event ts for the
-# window) drives sl_dropped's most-recent-first ordering. Whether a window is
-# still open is decided at read time by sl_dropped (live server → intersect with
-# reality), not here.
+# window_name cwd agent resume_cmd maxts fork_cmd. `maxts` (the newest event ts
+# for the window) drives sl_dropped's most-recent-first ordering. fork_cmd is
+# APPENDED last on purpose: sl_dropped reads these columns positionally, so a
+# new column may only go on the end. Whether a window is still open is decided
+# at read time by sl_dropped (live server → intersect with reality), not here.
 # Read line-by-line with `fromjson?` so a single torn/blank line (e.g. a
 # kill-server mid-append) is skipped, not fatal — the whole point is surviving
 # a crash, and a slurp (`-s`) aborts the entire roster on one bad line.
@@ -184,7 +193,7 @@ _sl_fold() {  # <ledger>
         | ( map(select(.event=="resume")) | last ) as $r
         | [ $o.socket_path, ($o.server_pid|tostring), $o.window_id, $o.session,
             $o.window_name, $o.cwd, $o.agent, ($r.resume_cmd // ""),
-            (map(.ts) | max | tostring) ] | @tsv )
+            (map(.ts) | max | tostring), ($r.fork_cmd // "") ] | @tsv )
     | .[]
   ' "$1"
 }
@@ -319,10 +328,17 @@ sl_dropped() {
 # call) is DEFERRED to a miss, where the authoritative socket/window_id are needed
 # for the ledger line + sidecar. No usable $TMUX (manual/selftest) → fall back to
 # deriving the key from _sl_ctx too.
-sl_resume() {  # <label> <resume_cmd>
-  _label="$1"; _rcmd="$2"
+sl_resume() {  # <label> <resume_cmd> [fork_cmd]
+  _label="$1"; _rcmd="$2"; _fcmd="${3:-}"
   [ -n "$_label" ] || return 0
   _dir=$(_sl_state_dir)
+  # The marker stores the FULL record signature, not just the label: its job is
+  # "have we already recorded THIS record for this pane". Keying on the label
+  # alone meant a live pane whose marker already matched could never write an
+  # enriched record — so an added field (e.g. fork_cmd, on upgrade) would never
+  # reach a running tab. Signature-keying self-heals on the next prompt, and
+  # costs nothing extra: it is a string compare either way.
+  _sig="$_label|$_rcmd|$_fcmd"
 
   # Fast path: env-derived key, no subprocess. Trust $TMUX only if well-formed.
   _epid=""
@@ -330,7 +346,7 @@ sl_resume() {  # <label> <resume_cmd>
   _emark=""
   if [ -n "$_epid" ] && [ -n "${TMUX_PANE:-}" ]; then
     _emark="$_dir/seen/${_epid}-p$(printf '%s' "$TMUX_PANE" | tr -d '%')"
-    [ -f "$_emark" ] && [ "$(cat "$_emark" 2>/dev/null)" = "$_label" ] && return 0
+    [ -f "$_emark" ] && [ "$(cat "$_emark" 2>/dev/null)" = "$_sig" ] && return 0
   fi
 
   _sl_enabled || return 0
@@ -342,14 +358,14 @@ EOF
   [ -n "$_pid" ] || return 0
   _marker="${_emark:-$_dir/seen/${_pid}-$(printf '%s' "$_wid" | tr -d '@')}"
   # Fallback-path dedup: when no env key short-circuited above, re-check here.
-  [ -z "$_emark" ] && [ -f "$_marker" ] && [ "$(cat "$_marker" 2>/dev/null)" = "$_label" ] && return 0
+  [ -z "$_emark" ] && [ -f "$_marker" ] && [ "$(cat "$_marker" 2>/dev/null)" = "$_sig" ] && return 0
 
   mkdir -p "$_dir/seen" 2>/dev/null || return 0
-  printf '%s' "$_label" > "$_marker" 2>/dev/null || true
+  printf '%s' "$_sig" > "$_marker" 2>/dev/null || true
   _line=$(jq -cn \
     --argjson ts "$(date +%s)" --arg sp "$_socket" --argjson pid "$_pid" \
-    --arg wid "$_wid" --arg label "$_label" --arg rc "$_rcmd" \
-    '{ts:$ts,event:"resume",socket_path:$sp,server_pid:$pid,window_id:$wid,label:$label,resume_cmd:$rc}')
+    --arg wid "$_wid" --arg label "$_label" --arg rc "$_rcmd" --arg fc "$_fcmd" \
+    '{ts:$ts,event:"resume",socket_path:$sp,server_pid:$pid,window_id:$wid,label:$label,resume_cmd:$rc,fork_cmd:$fc}')
   _sl_append "$_line"
   # A resume reaches a server that may have been attached-to (not opened) this
   # session — refresh its live-set sidecar.
@@ -494,8 +510,8 @@ JSON
 foldout=$(_sl_fold "$ledger")
 _assert "fold lists every opened window" "2" "$(printf '%s\n' "$foldout" | grep -c .)"
 _assert "fold spans 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
-# trailing column is max(ts) over the window's events: locus = max(10,42) = 42
-_assert "fold trailing col is max ts"    "42" "$(printf '%s\n' "$foldout" | awk -F'\t' '$6=="/w/locus"{print $NF}')"
+# maxts is column 9 (fork_cmd is appended after it, at column 10): locus = max(10,42) = 42
+_assert "fold trailing col is max ts"    "42" "$(printf '%s\n' "$foldout" | awk -F'\t' '$6=="/w/locus"{print $9}')"
 
 # ============ sl_dropped: restorable dropped tabs ============
 RMAP="work$(printf '\t')claude-work
@@ -609,6 +625,53 @@ _assert "resume dedups same label" "1" "$(grep -c '"event":"resume"' "$ledger")"
 sl_resume "abcd" "claude --resume abcd"
 _assert "resume writes on new label" "2" "$(grep -c '"event":"resume"' "$ledger")"
 
+# --- fork_cmd: recorded by the adapter, surfaced as fold column 10 ------------
+ledger=$(_sl_ledger)
+: > "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
+SESSION_LOG_CTX="/s/f${TAB}5150${TAB}sess${TAB}@7${TAB}win${TAB}/tmp/proj"
+export SESSION_LOG_CTX
+sl_resume "u1" "claude --resume u1" "claude --resume u1 --fork-session"
+_assert "fork_cmd: stored on the resume event" \
+  "claude --resume u1 --fork-session" \
+  "$(jq -r 'select(.event=="resume") | .fork_cmd' "$ledger")"
+
+# fold must surface fork_cmd as column 10, leaving 1..9 untouched.
+seedf=$(mktemp)
+cat > "$seedf" <<'EOF'
+{"ts":1,"event":"open","socket_path":"/s/f","server_pid":5150,"window_id":"@7","session":"sess","window_name":"win","cwd":"/tmp/proj","agent":"work"}
+{"ts":2,"event":"resume","socket_path":"/s/f","server_pid":5150,"window_id":"@7","label":"u1","resume_cmd":"claude --resume u1","fork_cmd":"claude --resume u1 --fork-session"}
+EOF
+_assert "fold: fork_cmd is column 10" "claude --resume u1 --fork-session" \
+  "$(_sl_fold "$seedf" | cut -f10)"
+_assert "fold: maxts stays column 9" "2" "$(_sl_fold "$seedf" | cut -f9)"
+_assert "fold: resume_cmd stays column 8" "claude --resume u1" \
+  "$(_sl_fold "$seedf" | cut -f8)"
+
+# A pre-fork_cmd event (no field) folds to an empty column 10, not a crash.
+seedo=$(mktemp)
+cat > "$seedo" <<'EOF'
+{"ts":1,"event":"open","socket_path":"/s/f","server_pid":5150,"window_id":"@7","session":"sess","window_name":"win","cwd":"/tmp/proj","agent":"work"}
+{"ts":2,"event":"resume","socket_path":"/s/f","server_pid":5150,"window_id":"@7","label":"u1","resume_cmd":"claude --resume u1"}
+EOF
+_assert "fold: legacy event → empty fork_cmd" "" "$(_sl_fold "$seedo" | cut -f10)"
+
+# --- marker keys on the FULL record signature, not the label -----------------
+# The upgrade trap: a live tab whose marker already holds its label must still
+# write a new event once the record gains a fork_cmd, else prefix-f no-ops forever.
+: > "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"
+sl_resume "u2" "claude --resume u2"
+_assert "marker: first record writes" "1" "$(grep -c '"event":"resume"' "$ledger")"
+sl_resume "u2" "claude --resume u2"
+_assert "marker: identical record dedups" "1" "$(grep -c '"event":"resume"' "$ledger")"
+sl_resume "u2" "claude --resume u2" "claude --resume u2 --fork-session"
+_assert "marker: same label + NEW fork_cmd writes (upgrade self-heal)" "2" \
+  "$(grep -c '"event":"resume"' "$ledger")"
+sl_resume "u2" "claude --resume u2" "claude --resume u2 --fork-session"
+_assert "marker: repeat of the enriched record dedups" "2" \
+  "$(grep -c '"event":"resume"' "$ledger")"
+unset SESSION_LOG_CTX
+rm -f "$seedf" "$seedo"
+
 # --- resume FAST path: dedup keyed by tmux's exported env ($TMUX serverpid +
 #     $TMUX_PANE), so a repeat label short-circuits WITHOUT spawning tmux. A
 #     call-logging stub records every _sl_ctx invocation to a file (survives the
@@ -617,7 +680,7 @@ rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"; mkdir -p "$AGENTMUX_STATE_DI
 _ctxlog="$AGENTMUX_STATE_DIR/ctxlog"; : > "$_ctxlog"
 tmux() { echo x >> "$_ctxlog"; printf '/tmp/s\t7777\tsess\t@1\twin\t/w\n'; }
 export TMUX="/tmp/s,7777,0" TMUX_PANE="%9"
-printf 'lbl1' > "$AGENTMUX_STATE_DIR/seen/7777-p9"          # pre-seed the env-keyed marker
+printf 'lbl1|claude --resume lbl1|' > "$AGENTMUX_STATE_DIR/seen/7777-p9"   # pre-seed the env-keyed marker (full signature)
 sl_resume "lbl1" "claude --resume lbl1"                      # repeat label → dedup
 _assert "fast path dedups without spawning tmux" "0" "$(grep -c x "$_ctxlog")"
 _assert "fast path dedup writes nothing"         "0" "$([ -f "$ledger" ] && grep -c . "$ledger" || echo 0)"
