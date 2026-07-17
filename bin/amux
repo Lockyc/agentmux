@@ -849,6 +849,16 @@ _amux_probe() {
   if [ "$by_dir" -eq 1 ]; then
     _amux_agent_session_is_mine "$base" && return 0
     _amux_frame_session_is_mine "${base}-frame" && return 0
+    # No live session — but a crashed one here may still be restorable. Exit 3 means
+    # "a plain `amux` launch in this dir would offer you a restore picker"; warden
+    # renders it as a ghost on the presence dot. Read-only (--pending, never --new):
+    # warden polls this, and a marking read would burn the once-per-(server,cwd) gate
+    # so the offer would be consumed by the probe instead of by you.
+    # 3 is non-zero, so every existing `if amux --probe` consumer still reads "absent".
+    # Explicit-name probes skip this: they target by name, with no cwd to query with.
+    if [ -n "$("$AGENTMUX_SCRIPTS/session_log.sh" dropped --pending "$PWD" 2>/dev/null)" ]; then
+      return 3
+    fi
     return 1
   fi
   _amux_session_exists "$base" && return 0
@@ -1020,7 +1030,9 @@ amux [(-<flag> | <agent_name>)] [session_name]
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
   --restore      pick dropped agent tabs (from a crash) to relaunch; --global for all projects
-  --probe        exit 0 if a session [session] (agent or frame) exists (default: current dir); silent
+  --probe        exit 0 if a session [session] (agent or frame) exists (default: current dir); silent.
+                 With no explicit session: exit 3 if absent but a crashed session here is
+                 restorable (a plain `amux` launch would offer the restore picker); else exit 1.
   --kill         kill an agent session [session] + its frame/term (default: current dir)
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
   --update       update to the latest agentmux (git pull)
@@ -1546,6 +1558,32 @@ EOF
   else
     echo "SKIP: --probe test (tmux not found)"
   fi
+
+  # --probe exit 3: absent session + a pending drop for this cwd → "recoverable".
+  # warden renders this as a ghost. Exit 3 (not 0) so every existing `if amux --probe`
+  # consumer still reads it as absent.
+  (
+    _sldir=$(mktemp -d) || exit 0
+    cd /tmp || exit 0
+
+    # No session, no drop → plain absent (1), NOT 3.
+    _amux_probe >/dev/null 2>&1; _got=$?
+    _assert "probe: absent with no drop exits 1" "1" "$_got"
+
+    # Stub the ledger query: a pending drop for this cwd. (The real interface is
+    # `session_log.sh dropped --pending <cwd>`, so $2 carries --pending, not $1.)
+    _sl_stub="$_sldir/session_log.sh"
+    cat > "$_sl_stub" <<'STUB'
+#!/bin/sh
+case "$2" in
+  --pending) printf 'work\t/tmp\tclaude --resume x\t1\n' ;;
+esac
+STUB
+    chmod +x "$_sl_stub"
+    AGENTMUX_SCRIPTS="$_sldir"
+    _amux_probe >/dev/null 2>&1; _got=$?
+    _assert "probe: absent with pending drop exits 3" "3" "$_got"
+  )
 
   # --probe/--kill dir-guard (basename-collision safety): amux names a session
   # after $PWD's basename, so two dirs sharing a basename collide. The CWD-derived
