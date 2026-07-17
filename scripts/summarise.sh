@@ -138,8 +138,19 @@ else
   sys="The text below is messages from a software-engineering session. Write a ticket-style TITLE for the work — a concrete noun phrase naming the component/feature/file/system being changed, the way a git branch or Jira summary reads. NOT a sentence, NOT a description of what an assistant or model should do, no 'feeding/using/enhancing X to do Y'. Prefer the technical subject over process words (spec, plan, approve, options, continue, enhancement). ${scope_rule} Ignore acknowledgements, pasted command output and logs. If unclear, use the most specific technical noun phrase present. Length: 4 to ${maxwords} words; you may add the specific aspect. Good: auth token refresh flow | document link audit and fixes | tmux per-session status summaries. Bad: feeding conversation context to a local model for summaries. Lowercase, no punctuation, no hyphens; output ONLY the title; never repeat or describe these instructions or answer with words like label, tab, terminal, summary, prompt, instructions."
 fi
 
+# reasoning_effort:"none" is load-bearing, not a tuning knob. A hybrid-reasoning
+# model (Qwen3.5, Gemma 4, …) left to think spends the whole max_tokens budget on
+# reasoning tokens and returns EMPTY content (finish_reason "length") — so the
+# summary silently never appears, forever. Non-reasoning models ignore the field
+# (byte-identical output verified on qwen2.5-14b-instruct and qwen3-coder-30b),
+# so it is safe to send unconditionally. Do NOT swap this for
+# chat_template_kwargs {enable_thinking:false} — that is Qwen's documented switch
+# but LM Studio does not honour it (still 199 reasoning tokens, still empty).
+# Raising max_tokens is NOT the fix either: it buys output at the cost of the
+# model burning seconds thinking about a tmux label.
 body=$(jq -n --arg m "$model" --arg s "$sys" --arg u "$prompt" '{
   model:$m, temperature:0, max_tokens:200, stream:false,
+  reasoning_effort:"none",
   messages:[{role:"system",content:$s},{role:"user",content:$u}]
 }') || exit 0
 
