@@ -32,6 +32,13 @@ _amux_config_json() {
   fi
 }
 
+# Default request timeout, seconds. Anchored here as the ONE source of truth —
+# both use sites and the selftest read it, so they cannot drift. MUST stay above
+# the selftest block, which compares against it.
+# 45, not the original 20: the default model's stand-mode calls measure 33-43s,
+# so 20 cut off every refresh (config/amux.toml.example carries the numbers).
+_AMUX_LLM_TIMEOUT_DEFAULT=45
+
 # LLM_CONFIG_SELFTEST=1 — asserts the positional read below survives a [llm]
 # block that omits fields. Guards the `// ""` vs `// empty` trap: with `empty`,
 # a config setting only some keys shifts the rest into the wrong variables and
@@ -55,20 +62,21 @@ if [ "${LLM_CONFIG_SELFTEST:-}" = "1" ]; then
   }
   _DU=http://localhost:1234/v1/chat/completions
   _DM=qwen2.5-14b-instruct
+  _DT=$_AMUX_LLM_TIMEOUT_DEFAULT
   # Every partial block must land each key in its OWN variable, missing ones
   # falling back to defaults — not shifting into the next slot.
-  _t 'model = "M"'                        "$_DU" "M"  "20"
+  _t 'model = "M"'                        "$_DU" "M"  "$_DT"
   _t 'timeout = 99'                       "$_DU" "$_DM" "99"
-  _t 'url = "U"'                          "U"    "$_DM" "20"
+  _t 'url = "U"'                          "U"    "$_DM" "$_DT"
   _t 'model = "M"
 timeout = 99'                             "$_DU" "M"  "99"
   _t 'url = "U"
 model = "M"
 timeout = 99'                             "U"    "M"  "99"
   # Empty [llm] block -> all defaults.
-  _t ''                                   "$_DU" "$_DM" "20"
+  _t ''                                   "$_DU" "$_DM" "$_DT"
   # Non-numeric timeout is rejected back to the default.
-  _t 'timeout = "abc"'                    "$_DU" "$_DM" "20"
+  _t 'timeout = "abc"'                    "$_DU" "$_DM" "$_DT"
   [ "$_fail" = 0 ] && echo "selftest OK"
   exit "$_fail"
 fi
@@ -91,6 +99,6 @@ _amux_load_llm() {
   fi
   _llm_url="${AGENTMUX_LLM_URL:-${_llm_url:-http://localhost:1234/v1/chat/completions}}"
   _llm_model="${AGENTMUX_LLM_MODEL:-${_llm_model:-qwen2.5-14b-instruct}}"
-  _llm_timeout="${AGENTMUX_LLM_TIMEOUT:-${_llm_timeout:-20}}"
-  case "$_llm_timeout" in ''|*[!0-9.]*) _llm_timeout=20 ;; esac
+  _llm_timeout="${AGENTMUX_LLM_TIMEOUT:-${_llm_timeout:-$_AMUX_LLM_TIMEOUT_DEFAULT}}"
+  case "$_llm_timeout" in ''|*[!0-9.]*) _llm_timeout=$_AMUX_LLM_TIMEOUT_DEFAULT ;; esac
 }

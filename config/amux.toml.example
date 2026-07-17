@@ -36,9 +36,32 @@ check = false
 # OpenAI-compatible endpoint used for AI session summaries (summarise.sh).
 # Works with LM Studio, Ollama, llama.cpp, etc. — any /v1/chat/completions server.
 # AGENTMUX_LLM_URL / AGENTMUX_LLM_MODEL / AGENTMUX_LLM_TIMEOUT env vars override these.
+#
+# YOUR SERVER MUST GIVE EACH REQUEST >= 4096 TOKENS OF CONTEXT. The done/now/next
+# line sends a ~2700-token digest; below ~4k it fails and — because the summary
+# path degrades silently on purpose — you get a permanently BLANK line with no
+# error. The tab label still works (it sends far less), so "label fine, stand
+# line always empty" is the signature of a too-small window, not a bad model.
+#   LM Studio DIVIDES context across parallel slots: its default 8192 at
+#   parallel 4 is only 2048 per request — not enough. Set Context Length 32768
+#   (32768/4 = 8192 each) in the model's Default Load Config, and check the real
+#   budget with `lms ps` (CONTEXT / PARALLEL), not the number in the UI.
+#
+# Any small instruct model works; pick for latency, since this runs on every
+# agent event. Reference points measured on an M3 Max via the replay eval in
+# docs/ai-summary.md (5 real transcripts, all produced usable output):
+#   qwen/qwen3.5-9b        6.0 GB   stand  7-22s   <- best quality/cost balance
+#   qwen/qwen3.5-4b        3.1 GB   stand 12-20s   <- lightest
+#   qwen2.5-14b-instruct   9.0 GB   stand 33-43s   <- the default below
+# The default is NOT the fastest — it is the one that just works: the Qwen3.5
+# models will not JIT-load at their stock 256k context ("Operation canceled"),
+# so they need a Default Load Config set (context 32768) before you name one
+# here. Do that first, then switch model and keep timeout >= 30.
 url     = "http://localhost:1234/v1/chat/completions"
 model   = "qwen2.5-14b-instruct"
-timeout = 20
+# 20 was too low even for the default above (its stand calls run 33-43s and were
+# cut off every refresh). Raise further if you use a bigger model.
+timeout = 45
 
 [amux]
 # The amux (agent) session runs on your default tmux socket and reads your own
