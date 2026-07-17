@@ -9,7 +9,8 @@
 #                            fork hint) for the current window. fork_cmd is owned by the
 #                            agent adapter, never composed here — this core stays agnostic.
 #   forkcmd [target]         emit `agent<TAB>fork_cmd` for one LIVE window (or nothing)
-#   dropped <cwd>|--global|--new <cwd>   restorable dropped tabs (dead server, open-at-death)
+#   dropped <cwd>|--global|--new <cwd>|--pending <cwd>
+#                                        restorable dropped tabs (dead server, open-at-death)
 #   prune                    trim the ledger (dead, old server instances)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
 #
@@ -245,14 +246,21 @@ _sl_resume_map() {
 # resume session id (the same session resumed across several server lifetimes, or in two
 # windows of one server, surfaces once). `<cwd>` filters to that dir; `--global` = no
 # filter; `--new <cwd>` additionally emits ONLY servers not yet offered for that cwd and
-# marks them offered (the once-per-server-per-project launch gate).
+# marks them offered (the once-per-server-per-project launch gate); `--pending <cwd>` applies
+# that same gate READ-ONLY (no marking) — warden's presence probe polls it to decide whether a
+# plain `amux` launch here would offer a restore, and a marking read would burn the gate.
 sl_dropped() {
   _sl_enabled || return 0
-  _mark_new=0; _scope=""
+  # _gate_new: apply the once-per-(server,cwd) offer filter. _mark_new: also record the
+  # offer. --new does both (the launch picker consumes it once). --pending gates WITHOUT
+  # marking: warden's presence probe polls this every few seconds, so a marking read would
+  # burn the gate on the first pass and the ghost would render once and never again.
+  _mark_new=0; _gate_new=0; _scope=""
   case "$1" in
-    --new)    _mark_new=1; _scope="${2:-}" ;;
-    --global) _scope="--global" ;;
-    *)        _scope="${1:-}" ;;
+    --new)     _mark_new=1; _gate_new=1; _scope="${2:-}" ;;
+    --pending) _gate_new=1; _scope="${2:-}" ;;
+    --global)  _scope="--global" ;;
+    *)         _scope="${1:-}" ;;
   esac
   _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
   _boot=$(_sl_boot_epoch)
@@ -270,12 +278,14 @@ sl_dropped() {
     if _sl_server_live "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
       continue
     fi
-    if [ "$_mark_new" = 1 ]; then
+    if [ "$_gate_new" = 1 ]; then
       _gk="$socket|$pid|$_scope"
       if [ -f "$_notmark" ] && grep -qxF "$_gk" "$_notmark" 2>/dev/null; then
         continue                                   # already offered for this cwd
       fi
-      mkdir -p "$(_sl_state_dir)" 2>/dev/null && printf '%s\n' "$_gk" >> "$_notmark" 2>/dev/null || true
+      if [ "$_mark_new" = 1 ]; then
+        mkdir -p "$(_sl_state_dir)" 2>/dev/null && printf '%s\n' "$_gk" >> "$_notmark" 2>/dev/null || true
+      fi
     fi
     if [ -f "$(_sl_live_file "$socket" "$pid")" ]; then
       _sw=$(_sl_snapshot_windows "$socket" "$pid" | tr '\n' ' ')
@@ -605,6 +615,28 @@ outg=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_
 _assert "dropped(--global): two rows"    "2"          "$(printf '%s\n' "$outg" | grep -c .)"
 _assert "dropped(--global): has drop1"   "1"          "$(printf '%s\n' "$outg" | grep -c 'claude-work --resume drop1')"
 _assert "dropped(--global): has drop3"   "1"          "$(printf '%s\n' "$outg" | grep -c 'claude-personal --resume drop3')"
+
+# ============ --pending: --new's filter, without --new's marking ============
+# --pending sees an un-offered drop, exactly as --new would.
+outp=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
+_assert "pending: sees un-offered drop"  "1"  "$(printf '%s\n' "$outp" | grep -c 'claude-work --resume drop1')"
+
+# THE REGRESSION GUARD: --pending must not write the notified marker. If it did, warden's
+# 5s probe would burn the gate on its first pass and the ghost would render once, never again.
+rm -f "$(_sl_state_dir)/notified"
+SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus" >/dev/null
+_assert "pending: does NOT mark notified" "0" "$([ -s "$(_sl_state_dir)/notified" ] && echo 1 || echo 0)"
+
+# --pending is repeatable: N calls give the same answer (the polling case).
+outp2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
+_assert "pending: repeatable"            "$outp"  "$outp2"
+
+# --pending respects a marker --new already wrote (the ghost clears once amux has offered).
+rm -f "$(_sl_state_dir)/notified"
+SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/locus" >/dev/null
+outp3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
+_assert "pending: empty after --new offered" "0" "$(printf '%s' "$outp3" | grep -c .)"
+rm -f "$(_sl_state_dir)/notified"
 
 # dead server with NO sidecar (pre-feature) → all its windows count as dropped.
 rm -rf "$AGENTMUX_STATE_DIR/live"
