@@ -219,5 +219,19 @@ will confidently rank configuration noise as model quality. Read the raw respons
 - **Goal anchoring without a task list.** Most non-orchestration sessions have no
   TodoWrite. Is the first user message enough, or do we need to weight it
   explicitly over early assistant prose?
-- **Local-model naming quality.** Input scoping matters more than the model, but
-  the chosen instruct model is worth a periodic re-check against the replay eval.
+- **Local-model naming quality.** Re-run the replay eval when the model lineup
+  moves; the last pass was 2026-07 (5 transcripts, M3 Max). What it settled:
+  **every candidate that got a fair window produced usable output on all five** —
+  qwen3.5-4b (3.1 GB), qwen3.5-9b (6.0 GB), qwen2.5-14b-instruct (9.0 GB) and
+  qwen3-coder-30b (17.2 GB) all scored 5/5, differing in latency (stand: 12-20s /
+  7-22s / 33-43s / 18-30s) far more than in quality. So **model choice is a
+  latency-and-memory decision, not a quality one**, and the sub-10B tier is
+  ample — a bigger model buys nothing here. Weight the next pass toward *format
+  adherence*, the only axis that separated them: the 4B drifts to
+  `subject: done:` (the prompt asks for `subject. done:`) and pads `done:` with
+  seven-item lists; 9B and 14B hold the shape.
+  The real lesson was that this question had been asking the wrong thing: the
+  summary was blank because of backend *configuration* (see "why a healthy-looking
+  endpoint returns nothing"), and every apparent quality gap was that in
+  disguise. Before re-opening it, confirm the endpoint is sane — otherwise you
+  are ranking window sizes.
