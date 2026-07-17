@@ -123,6 +123,7 @@ Several scripts also have built-in selftests — run the relevant one directly f
 a targeted check while changing a script:
 
 ```bash
+LLM_CONFIG_SELFTEST=1        sh scripts/llm-config.sh
 SUMMARISE_SELFTEST=1         scripts/summarise.sh
 STRIP_UNBACKED_DONE_SELFTEST=1 scripts/strip_unbacked_done.sh
 SUMMARY_ROWS_SELFTEST=1      scripts/summary_rows.sh

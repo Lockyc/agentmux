@@ -87,6 +87,7 @@ run_selftest() {
   fi
 }
 
+run_selftest llm-config          env LLM_CONFIG_SELFTEST=1          sh scripts/llm-config.sh
 run_selftest summarise           env SUMMARISE_SELFTEST=1            scripts/summarise.sh
 run_selftest strip_unbacked_done env STRIP_UNBACKED_DONE_SELFTEST=1 scripts/strip_unbacked_done.sh
 run_selftest summary_rows        env SUMMARY_ROWS_SELFTEST=1        scripts/summary_rows.sh
