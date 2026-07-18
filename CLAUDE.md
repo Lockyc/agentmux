@@ -1,3 +1,6 @@
+---
+type: architecture
+---
 # agentmux
 
 Configurable tmux agent launcher. Shell scripts only — no Python, Node, or other runtime dependencies.

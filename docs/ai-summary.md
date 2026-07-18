@@ -1,3 +1,10 @@
+---
+type: decision
+links:
+  - rel: part-of
+    to: CLAUDE.md
+    note: the AI-summary design rationale CLAUDE.md's Layout table points into
+---
 # AI summary — design rationale
 
 Durable notes for the per-pane AI summary feature (the session subject + the

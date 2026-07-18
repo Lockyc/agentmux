@@ -1,3 +1,10 @@
+---
+type: reference
+links:
+  - rel: part-of
+    to: CLAUDE.md
+    note: the deferred-work register CLAUDE.md's Layout table points into
+---
 # Deferred work / follow-ups
 
 Non-blocking items intentionally left for later, with enough context to pick up
