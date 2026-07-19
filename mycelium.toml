@@ -1,5 +1,5 @@
 name    = "agentmux"
-summary = "tmux-based agent launcher — the companion a warden/curator tab runs to spawn, probe, and kill agent sessions"
+summary = "A configurable tmux launcher for agent sessions. Define your AI agents — or any CLI — in TOML; each opens in its own colour-coded tmux window and prefix-m cycles between them. Runs in any terminal."
 kind    = "tool"
 status  = "active"
 tags    = ["tmux", "agents", "cli", "launcher"]
