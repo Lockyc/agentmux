@@ -5,6 +5,9 @@ status  = "active"
 tags    = ["tmux", "agents", "cli", "launcher"]
 stack   = ["bash", "tmux"]
 
+[github]
+topics_extra = ["ai-agents", "claude-code", "coding-agents", "llm", "terminal", "session-manager"]
+
 [[provides]]
 name    = "agent-sessions"
 summary = "Spawns, probes, and kills tmux-backed agent sessions (the warden → agentmux → tmux stack)"
