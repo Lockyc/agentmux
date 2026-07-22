@@ -143,10 +143,14 @@ _amux_atmux() {
 # known to exist) nor by split-window/list-panes. Don't drop the `=`.
 _amux_session_exists() { _amux_atmux has-session -t "=$1" 2>/dev/null; }
 
-# Newline-separated names of agentmux-managed sessions (@autoagent=1) on the agent
-# socket; empty if none. Backs --sessions, --kill-all, and --complete-sessions.
+# Newline-separated names of agentmux-managed sessions (@autoagent=1) across ALL
+# agent socket shards; empty if none. Backs --sessions, --kill-all, and
+# --complete-sessions.
 _amux_agent_session_names() {
-  _amux_atmux list-sessions -F '#{?@autoagent,#{session_name},}' 2>/dev/null | grep .
+  local s
+  for s in $(_amux_agent_socks); do
+    tmux -L "$s" list-sessions -F '#{?@autoagent,#{session_name},}' 2>/dev/null
+  done | grep .
 }
 
 # --- Directory-guarded session ownership -------------------------------------
@@ -731,13 +735,17 @@ _amux_frame_kill_all() {
   echo "killed all frames + scratch terminals (agent sessions, if any, still run)"
 }
 
-# List agentmux-managed (@autoagent) sessions on the agent socket: name, agent
-# mode, window count, attach state. The view that shows exact session names.
+# List agentmux-managed (@autoagent) sessions across ALL agent socket shards
+# (agentmux-agent-<cksum $PWD> per project): name, agent mode, window count,
+# attach state. The view that shows exact session names.
 _amux_sessions() {
   local rows
-  rows=$(_amux_atmux list-sessions \
-    -F '#{?@autoagent,#{session_name}	#{@agent-mode}	#{session_windows} win	#{?session_attached,attached,detached},}' \
-    2>/dev/null | grep .)
+  local _s
+  rows=$(for _s in $(_amux_agent_socks); do
+    tmux -L "$_s" list-sessions \
+      -F '#{?@autoagent,#{session_name}	#{@agent-mode}	#{session_windows} win	#{?session_attached,attached,detached},}' \
+      2>/dev/null
+  done | grep .)
   if [ -n "$rows" ]; then
     # Align the tab-separated columns with awk (already a dependency); column(1)
     # is not POSIX and is used nowhere else, so don't pull it in just for this.
@@ -760,6 +768,16 @@ _amux_sessions() {
 # skips the auto-launch. Sets the session opts a normal launch would.
 _amux_restore_into() {
   local cwd="$1" name="${2:-}" agent rcmd win created=0 exists=0
+  # Restore into the RESTORED project's shard, not the invoking process's $PWD
+  # shard (bash dynamic scoping makes every _amux_atmux/_amux_session_exists
+  # call inside this function honor this local override). A pre-set override
+  # (test isolation) is preserved verbatim rather than recomputed: `local
+  # AGENTMUX_AGENT_SOCKET; AGENTMUX_AGENT_SOCKET=$(cd "$cwd" && _amux_agent_sock)`
+  # as two statements would shadow the override with an unset local BEFORE the
+  # command substitution runs, so _amux_agent_sock inside it would never see the
+  # override — capturing the old value on the same `local NAME=value` line avoids that.
+  local AGENTMUX_AGENT_SOCKET="${AGENTMUX_AGENT_SOCKET:-}"
+  [ -n "$AGENTMUX_AGENT_SOCKET" ] || AGENTMUX_AGENT_SOCKET=$(cd "$cwd" 2>/dev/null && _amux_agent_sock)
   # Default to the per-cwd basename; overridable so the auto path can honour the
   # launch's already-resolved session name (else it restores into a second session).
   [ -n "$name" ] || name=$(_amux_sanitize_session "$(basename "$cwd")")
@@ -954,7 +972,7 @@ _amux_probe() {
     fi
     return 1
   fi
-  _amux_session_exists "$base" && return 0
+  [ -n "$(_amux_agent_socks | _amux_sock_hosting "$base")" ] && return 0
   # -L names the frame socket explicitly, so this ignores any inherited $TMUX
   # (same as _amux_atmux's own explicit -L to the agent socket).
   [ -n "$(_amux_frame_socks | _amux_sock_hosting "${base}-frame")" ]
@@ -985,9 +1003,13 @@ _amux_kill() {
   # torn down. An explicit name skips the guard (unchanged behaviour). The term
   # session carries no @amux_dir — it's paired 1:1 with the frame, so its
   # ownership follows the frame's.
-  if { [ "$by_dir" -eq 0 ] && _amux_session_exists "$base"; } \
+  local _asock=""
+  if [ "$by_dir" -eq 0 ]; then _asock=$(_amux_agent_socks | _amux_sock_hosting "$base"); fi
+  if { [ "$by_dir" -eq 0 ] && [ -n "$_asock" ]; } \
      || { [ "$by_dir" -eq 1 ] && _amux_agent_session_is_mine "$base"; }; then
-    _amux_atmux kill-session -t "=$base" 2>/dev/null; parts="agent '$base'"
+    if [ "$by_dir" -eq 0 ]; then tmux -L "$_asock" kill-session -t "=$base" 2>/dev/null
+    else _amux_atmux kill-session -t "=$base" 2>/dev/null; fi
+    parts="agent '$base'"
   fi
   if [ -n "$fsock" ] && { { [ "$by_dir" -eq 0 ] && tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; } \
      || { [ "$by_dir" -eq 1 ] && _amux_frame_session_is_mine "${base}-frame"; }; }; then
@@ -1007,10 +1029,10 @@ _amux_kill() {
 }
 
 # Kill EVERY agentmux project at once: every @autoagent session, plus all frames
-# and scratch terminals. Destroys running agents, so it confirms first. The agent
-# socket is the user's DEFAULT tmux server (it may also host non-agentmux
-# sessions), so this kills @autoagent sessions one by one — never kill-server —
-# while the frame/term sockets, which are exclusively ours, are torn down whole.
+# and scratch terminals. Destroys running agents, so it confirms first. Each
+# agent socket is a per-project shard (agentmux-agent-<cksum $PWD>) exclusively
+# agentmux's own, like the frame/term sockets, so all three are torn down whole
+# via kill-server.
 _amux_kill_all() {
   local names count fsocks have_frames=0 _fs _s
   fsocks=$(_amux_frame_socks)
@@ -1031,9 +1053,8 @@ _amux_kill_all() {
     [yY]|[yY][eE][sS]) ;;
     *) echo "aborted" >&2; return 1 ;;
   esac
-  printf '%s\n' "$names" | while IFS= read -r s; do
-    [ -n "$s" ] && _amux_atmux kill-session -t "=$s" 2>/dev/null
-  done
+  local _as
+  for _as in $(_amux_agent_socks); do tmux -L "$_as" kill-server 2>/dev/null; done
   for _s in $fsocks; do tmux -L "$_s" kill-server 2>/dev/null; done
   for _s in $(_amux_term_socks); do tmux -L "$_s" kill-server 2>/dev/null; done
   echo "killed $count agent session(s) + all frames/terminals"
@@ -1397,6 +1418,26 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     [ -n "$_rf_save2" ] && AGENTMUX_FRAME_SOCKET="$_rf_save2"
   else
     echo "SKIP: sharded socket scan test (tmux not found)"
+  fi
+
+  # --- name-targeted agent commands span shards: _amux_agent_session_names and
+  #     _amux_sock_hosting must see sessions on EVERY agentmux-agent-<n> socket,
+  #     not just the caller's own $PWD shard. Needs a real tmux; skip cleanly if
+  #     absent. Short TMUX_TMPDIR to stay under the AF_UNIX 104-char socket-path
+  #     limit (bin/amux is bash-3.2 clean; no associative arrays here either).
+  if command -v tmux >/dev/null 2>&1; then
+    _ms_save="${AGENTMUX_AGENT_SOCKET:-}"; unset AGENTMUX_AGENT_SOCKET
+    _ms_dir="/tmp/amuxtest-agents-$$"; export TMUX_TMPDIR="$_ms_dir"; mkdir -p "$_ms_dir"
+    tmux -L agentmux-agent-101 new-session -d -s projX; tmux -L agentmux-agent-101 set -t projX @autoagent 1
+    tmux -L agentmux-agent-202 new-session -d -s projY; tmux -L agentmux-agent-202 set -t projY @autoagent 1
+    _names=$(_amux_agent_session_names | sort | tr '\n' ' ')
+    _assert "session_names spans shards" "projX projY " "$_names"
+    _assert "sock_hosting finds projY" "agentmux-agent-202" "$(_amux_agent_socks | _amux_sock_hosting projY)"
+    tmux -L agentmux-agent-101 kill-server 2>/dev/null; tmux -L agentmux-agent-202 kill-server 2>/dev/null
+    rm -rf "$_ms_dir"; unset TMUX_TMPDIR
+    [ -n "$_ms_save" ] && AGENTMUX_AGENT_SOCKET="$_ms_save"
+  else
+    echo "SKIP: multi-shard agent commands test (tmux not found)"
   fi
 
   # --- _amux_atmux lands on the $PWD agent shard (production path, override unset).
