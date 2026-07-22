@@ -1123,6 +1123,44 @@ _amux_kill_all() {
   echo "killed $count agent session(s) + all frames/terminals"
 }
 
+# Re-source agent.conf on every LIVE agent shard, applying config changes to
+# already-running servers. tmux reads a config only when the server STARTS, so
+# an edit to agent.conf (or agentmux.conf, which agent.conf sources) doesn't
+# reach a running per-project agent server on its own — a fresh launch gets it
+# via `-f agent.conf`, but existing servers keep whatever they loaded at start.
+# Every line in the file is an idempotent `set -g`/`setw -g`/`bind`/`set-hook -g`,
+# so re-sourcing a live server is safe (same reasoning as the CLAUDE.md
+# status-format deploy footgun). Non-destructive, so no confirm.
+#
+# Agent sockets ONLY. Frame/term sockets are deliberately not touched:
+# re-sourcing frame.conf would reset the per-user `[frame] prefix` that bin/amux
+# applies per launch (frame.conf hard-codes C-f), clobbering it until the next
+# relaunch — so frame/term config changes are picked up by relaunching the frame,
+# not by --reload. terminal-features in agentmux.conf are computed at client
+# attach, so those (unchanged here) apply on the next reattach; the plain
+# `set -g` options this file adds take effect immediately.
+_amux_reload() {
+  local conf="$AGENTMUX_TMUX/agent.conf" _as ok=0 dead=0 fail=0
+  if [ ! -f "$conf" ]; then
+    echo "amux: $conf not found (update the install: amux --update)" >&2; return 1
+  fi
+  for _as in $(_amux_agent_socks); do
+    # A socket file isn't proof of a live server — skip stale ones (dead servers
+    # leave the socket behind), like --sessions / named --kill do.
+    if ! tmux -L "$_as" list-sessions >/dev/null 2>&1; then dead=$((dead+1)); continue; fi
+    if tmux -L "$_as" source-file "$conf" 2>/dev/null; then ok=$((ok+1))
+    else fail=$((fail+1)); echo "amux: failed to reload $_as" >&2; fi
+  done
+  if [ "$ok" -eq 0 ] && [ "$fail" -eq 0 ]; then
+    echo "amux: no live agent servers to reload"; return 0
+  fi
+  printf 'reloaded %s live agent server(s)' "$ok"
+  [ "$dead" -gt 0 ] && printf ' (%s stale socket(s) skipped)' "$dead"
+  [ "$fail" -gt 0 ] && printf ', %s failed' "$fail"
+  printf '\n'
+  [ "$fail" -eq 0 ]
+}
+
 # One-time notice: agents on the OLD shared default socket can't be relocated to a
 # per-project shard (tmux can't move a live session between servers), so tell the user
 # once to relaunch them. Production never creates on the default socket again, so legacy
@@ -1213,6 +1251,10 @@ amux() {
         _amux_kill_all
         return $?
         ;;
+      --reload)
+        _amux_reload
+        return $?
+        ;;
       attach)
         shift
         if [ $# -eq 0 ]; then echo "amux: usage: amux attach <name>" >&2; return 1; fi
@@ -1247,6 +1289,8 @@ amux [(-<flag> | <agent_name>)] [session_name]
                  restorable (a plain `amux` launch would offer the restore picker); else exit 1.
   --kill         kill an agent session [session] + its frame/term (default: current dir)
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
+  --reload       re-source agent.conf on every running agent server (apply config
+                 changes without relaunching; a fresh launch picks them up on its own)
   attach <name>  attach to a running agent session by name (from any directory)
   --update       update to the latest agentmux (git pull)
   --colours      preview the colour palette (grid|pick subcommands)
@@ -1625,6 +1669,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "help advertises --kill" "present" "$_got"
   case "$help" in *"--kill-all"*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --kill-all" "present" "$_got"
+  case "$help" in *"--reload"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --reload" "present" "$_got"
   case "$help" in *"--frame-kill-all"*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --frame-kill-all" "present" "$_got"
   # The old name is gone (renamed, no alias).
@@ -1654,6 +1700,12 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$_ka" in *"no agent sessions"*) _got=ok ;; *) _got="bad:$_ka" ;; esac
   _assert "kill-all empty msg"  "ok" "$_got"
   _assert "kill-all empty exit" "1"  "$_karc"
+  # --reload against the isolated (dead) socket: the stale socket is skipped and
+  # there's nothing live to re-source, so it reports cleanly and exits 0.
+  _rl=$(amux --reload 2>&1); _rlrc=$?
+  case "$_rl" in *"no live agent servers"*) _got=ok ;; *) _got="bad:$_rl" ;; esac
+  _assert "reload no-live msg"  "ok" "$_got"
+  _assert "reload no-live exit" "0"  "$_rlrc"
 
   # --colours render lists curated names; the line helper emits a paste field.
   cols=$(amux --colours 2>/dev/null)
