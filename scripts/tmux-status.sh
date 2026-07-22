@@ -97,9 +97,9 @@ sumlockdir="$runtime_dir/agentmux-sum-${pane_key}.lock.d"
 TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
 label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
 # Target our own pane explicitly: an un-targeted display-message resolves against
-# the most recently active client, which is the wrong session when several agent
-# panes share the default socket. $TMUX_PANE is set inside the agent's pane (see
-# pane_key above), so it always points at us here.
+# the most recently active client, which is the wrong pane when a project's agent
+# tmux server hosts several windows/clients. $TMUX_PANE is set inside the agent's pane
+# (see pane_key above), so it always points at us here.
 project=$(tmux display-message -t "$TMUX_PANE" -p "#{session_name}" 2>/dev/null)
 [ -z "$project" ] && project=$(basename "$PWD" 2>/dev/null)
 [ -z "$project" ] && project="$label"
@@ -345,7 +345,7 @@ _tmux_nest_depth() {
   _nd_depth=1
   # Target our own pane explicitly (same reason as `project` above): an un-targeted
   # display-message resolves against the most recently active client, which is the
-  # wrong session when several agent panes share the default socket.
+  # wrong pane when a project's agent tmux server hosts several windows/clients.
   _nd_client=$(tmux display-message -t "$TMUX_PANE" -p '#{client_tty}' 2>/dev/null)
   while [ -n "$_nd_client" ]; do
     _nd_next=''

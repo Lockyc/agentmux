@@ -679,8 +679,6 @@ _amux_frame() {
   tmux -L "$sock" attach-session -t "=$fsess"
 }
 
-# List active frame wrappers (they live on their own socket, so a plain `tmux ls`
-# in the base terminal — the default socket — never shows them).
 # Attach to a running agent session by name from anywhere (no $PWD to derive from):
 # find the agent socket hosting it, attach there. Errors cleanly if not found/live.
 _amux_attach_by_name() {
@@ -693,6 +691,8 @@ _amux_attach_by_name() {
   env -u TMUX tmux -L "$sock" attach-session -t "=$name"
 }
 
+# List active frame wrappers (they live on their own per-project socket, so a plain
+# `tmux ls` in the base terminal never shows them).
 _amux_frames() {
   local s any=0
   for s in $(_amux_frame_socks); do

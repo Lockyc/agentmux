@@ -3,8 +3,8 @@
 # Arg: <pane_id> — the respawned pane, passed explicitly by the prefix-x binding.
 #
 # Targeting MUST be explicit. An un-targeted `tmux display-message`/`send-keys`
-# resolves against the most recently active CLIENT, so when several agent
-# sessions share the default socket the relaunch command was typed into whichever
+# resolves against the most recently active CLIENT, so when a project's agent tmux
+# server hosts several windows/clients the relaunch command was typed into whichever
 # agent was last focused — not the pane being respawned. Everything is derived
 # from the passed pane with -t queries (mirrors launch_agent.sh).
 
