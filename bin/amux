@@ -697,9 +697,12 @@ _amux_frame_kill() {
 # the default socket survive. Handy to refresh all frames after a frame.conf change,
 # since a frame only reads config when (re)created.
 _amux_frame_kill_all() {
-  local socks s
+  local socks s any=0
   socks=$(_amux_frame_socks)
-  if [ -z "$socks" ]; then
+  for s in $socks; do
+    tmux -L "$s" list-sessions >/dev/null 2>&1 && { any=1; break; }
+  done
+  if [ "$any" -eq 0 ]; then
     echo "amux: no active frames (try: amux --frames)" >&2; return 1
   fi
   for s in $socks; do tmux -L "$s" kill-server 2>/dev/null; done
@@ -988,7 +991,7 @@ _amux_kill() {
 # sessions), so this kills @autoagent sessions one by one — never kill-server —
 # while the frame/term sockets, which are exclusively ours, are torn down whole.
 _amux_kill_all() {
-  local names count fsocks have_frames=0 _fs
+  local names count fsocks have_frames=0 _fs _s
   fsocks=$(_amux_frame_socks)
   names=$(_amux_agent_session_names)
   count=$(printf '%s' "$names" | grep -c . 2>/dev/null)
@@ -1010,7 +1013,6 @@ _amux_kill_all() {
   printf '%s\n' "$names" | while IFS= read -r s; do
     [ -n "$s" ] && _amux_atmux kill-session -t "=$s" 2>/dev/null
   done
-  local _s
   for _s in $fsocks; do tmux -L "$_s" kill-server 2>/dev/null; done
   for _s in $(_amux_term_socks); do tmux -L "$_s" kill-server 2>/dev/null; done
   echo "killed $count agent session(s) + all frames/terminals"
@@ -1379,6 +1381,12 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _fk=$(cd "$_ckdir" && amux --frame-kill 2>&1)
   case "$_fk" in *"no frame 'has_colon-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
   _assert "frame-kill default sanitises colon" "ok" "$_got"
+  # --frame-kill-all with nothing live aborts cleanly (no false success from a
+  # configured-but-dead socket name).
+  _fka=$(amux --frame-kill-all 2>&1); _fkarc=$?
+  case "$_fka" in *"no active frames (try: amux --frames)"*) _got=ok ;; *) _got="bad:$_fka" ;; esac
+  _assert "frame-kill-all empty msg"  "ok" "$_got"
+  _assert "frame-kill-all empty exit" "1"  "$_fkarc"
 
   # --help advertises the agent-session lifecycle commands + the renamed kill-all.
   case "$help" in *"--sessions"*) _got=present ;; *) _got=absent ;; esac
