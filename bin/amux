@@ -94,6 +94,23 @@ _amux_term_socks() {
   for f in "$d"/agentmux-term*; do [ -S "$f" ] && printf '%s\n' "${f##*/}"; done
 }
 
+# The agent socket for THIS project ($PWD). Override wins verbatim; else shard by hash.
+# Agents are co-keyed with the frame/term (same $PWD hash → agentmux-{frame,term,agent}-<h>).
+_amux_agent_sock() {
+  if [ -n "${AGENTMUX_AGENT_SOCKET:-}" ]; then printf '%s\n' "$AGENTMUX_AGENT_SOCKET"
+  else printf 'agentmux-agent-%s\n' "$(_amux_pwd_hash)"; fi
+}
+
+# ALL agent socket FILES, for name-targeted commands with no $PWD to derive from.
+# Override wins (single socket); else glob the tmux socket dir. [ -S ] tests "is a
+# socket", NOT "is a LIVE server" (macOS leaves a stale file after kill-server) — callers
+# needing liveness filter via list-sessions/has-session (as --sessions and named --kill do).
+_amux_agent_socks() {
+  if [ -n "${AGENTMUX_AGENT_SOCKET:-}" ]; then printf '%s\n' "$AGENTMUX_AGENT_SOCKET"; return; fi
+  local d f; d=$(_amux_tmux_sockdir)
+  for f in "$d"/agentmux-agent*; do [ -S "$f" ] && printf '%s\n' "${f##*/}"; done
+}
+
 # Read a newline socket list on stdin; echo the first socket hosting session <sess>.
 # Socket names never contain spaces/globs, so the plain read loop is safe.
 _amux_sock_hosting() {
@@ -1353,6 +1370,20 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # restore whatever the surrounding selftest expects
   [ -n "$_rf_save" ] && AGENTMUX_FRAME_SOCKET="$_rf_save"
   [ -n "$_rt_save" ] && AGENTMUX_TERM_SOCKET="$_rt_save"
+
+  # --- agent socket resolvers ---
+  _ra_save="${AGENTMUX_AGENT_SOCKET:-}"; unset AGENTMUX_AGENT_SOCKET
+  ( cd / && case "$(_amux_agent_sock)" in agentmux-agent-[0-9]*) exit 0 ;; *) exit 1 ;; esac ) \
+    && _got=ok || _got=bad
+  _assert "agent_sock shards when unset" "ok" "$_got"
+  _aa=$(cd / && _amux_agent_sock); _ab=$(cd /tmp && _amux_agent_sock)
+  [ "$_aa" != "$_ab" ] && _got=differ || _got=same
+  _assert "agent_sock distinct \$PWD" "differ" "$_got"
+  AGENTMUX_AGENT_SOCKET="agent-verbatim-xyz"
+  _assert "agent_sock override verbatim"  "agent-verbatim-xyz" "$(_amux_agent_sock)"
+  _assert "agent_socks override verbatim" "agent-verbatim-xyz" "$(_amux_agent_socks)"
+  unset AGENTMUX_AGENT_SOCKET
+  [ -n "$_ra_save" ] && AGENTMUX_AGENT_SOCKET="$_ra_save"
 
   # --- name-targeted scan finds a sharded frame socket. Needs a real tmux; skip
   #     cleanly if absent (same pattern as the other tmux-gated cases below).
