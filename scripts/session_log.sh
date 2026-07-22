@@ -106,7 +106,13 @@ sl_open() {  # <agent> [target] [socket]
   IFS="$TAB" read -r _socket _pid _session _wid _wname _cwd <<EOF
 $(_sl_ctx "$_target" "$_sock")
 EOF
-  [ -n "$_pid" ] || return 0
+  # Require BOTH pid and window id: a display-message against a target that
+  # doesn't resolve on the queried socket can still exit 0 with the server's
+  # #{pid} populated (socket-level, not target-scoped) while the target-scoped
+  # fields (window_id/cwd) come back empty — pid alone is not proof the target
+  # actually resolved. Writing that row would corrupt the ledger with a
+  # windowless "open" event. A real target always populates window_id too.
+  [ -n "$_pid" ] && [ -n "$_wid" ] || return 0
   _line=$(jq -cn \
     --argjson ts "$(date +%s)" \
     --arg sp "$_socket" --argjson pid "$_pid" --arg s "$_session" \
@@ -582,6 +588,21 @@ _assert "open agent"   "claude" "$(jq -r '.agent' "$ledger")"
 _assert "open pid num" "4242"   "$(jq -r '.server_pid' "$ledger")"
 _assert "open cwd"     "/tmp/work" "$(jq -r '.cwd' "$ledger")"
 
+# --- guard requires wid too: pid-populated-but-window-id-empty must NOT write
+#     (Finding 2 — a display-message that resolves the SERVER but not the
+#     TARGET can exit 0 with #{pid} populated and the target-scoped fields
+#     empty; the guard must fail soft on that, never emit a windowless row).
+#     Shape verified empirically against a real tmux server: `display-message
+#     -p -t <nonexistent-session>` exits 0 and emits "<socket>\t<pid>\t\t\t\t\n"
+#     — session_name/window_id/window_name/cwd all empty, pid alone populated
+#     (SESSION_LOG_CTX below mirrors that exact shape; it bypasses tmux
+#     entirely so this is independent of the stub above). ---
+rm -f "$ledger"
+SESSION_LOG_CTX="/s/x${TAB}4242${TAB}${TAB}${TAB}${TAB}" sl_open claude
+_assert "open: pid without window id writes nothing" "0" \
+  "$([ -f "$ledger" ] && wc -l < "$ledger" | tr -d ' ' || echo 0)"
+rm -f "$ledger"
+
 # --- disabled → no write ---
 rm -f "$ledger"
 AGENTMUX_SESSION_LOG=0 sl_open claude
@@ -967,6 +988,45 @@ _assert "prune keeps live sidecar"        "1" "$([ -f "$_lf_live" ] && echo 1 ||
 rm -rf "$AGENTMUX_STATE_DIR/live"
 SESSION_LOG_LIVE_WINDOWS="@3 @7" sl_snapshot "/s/a" 5150
 _assert "snapshot subcommand writes sidecar" "@3 @7" "$(tr '\n' ' ' < "$(_sl_live_file "/s/a" 5150)" | sed 's/ *$//')"
+
+# ============ Task 5 regression: sl_open's [socket] param must reach the REAL
+#     tmux server, not silently fall back to the default socket (this is the
+#     one test in the file that drives an actual tmux server instead of the
+#     stubbed tmux() shell function above — that's what makes it a genuine
+#     end-to-end guard). Non-vacuous: if the [socket] threading in sl_open/
+#     _sl_ctx were reverted, `sktest` doesn't exist on the (empty) default
+#     socket a bare `tmux -t sktest` would fall back to, display-message finds
+#     nothing, _pid comes back empty, and sl_open writes NOTHING — the "writes
+#     one line" assertion catches that; the socket_path assertion catches a
+#     narrower revert that still resolves but against the wrong socket. Needs
+#     a real tmux; skip cleanly if absent. Short TMUX_TMPDIR for the AF_UNIX
+#     104-char socket-path limit, matching bin/amux's real-tmux selftest
+#     blocks. Keep this block LAST — it drops the canned tmux() stub. ============
+unset -f tmux 2>/dev/null   # drop the canned stub — this block must hit the real binary
+if command -v tmux >/dev/null 2>&1; then
+  _sk_dir="/tmp/slsktest-$$"; export TMUX_TMPDIR="$_sk_dir"; mkdir -p "$_sk_dir"
+  _sk_sock="agentmux-agent-777"
+  tmux -L "$_sk_sock" new-session -d -s sktest -c /tmp 2>/dev/null
+  _sk_realsock=$(tmux -L "$_sk_sock" display-message -p '#{socket_path}' 2>/dev/null)
+  _sk_pid=$(tmux -L "$_sk_sock" display-message -p '#{pid}' 2>/dev/null)
+  _sk_wid=$(tmux -L "$_sk_sock" display-message -p -t sktest '#{window_id}' 2>/dev/null)
+  rm -f "$ledger"
+  sl_open claude sktest "$_sk_sock"
+  _assert "sharded socket open: writes one line" "1" \
+    "$([ -f "$ledger" ] && wc -l < "$ledger" | tr -d ' ' || echo 0)"
+  _assert "sharded socket open: records that socket" "$_sk_realsock" \
+    "$(jq -r '.socket_path' "$ledger" 2>/dev/null)"
+  _assert "sharded socket open: not the default socket" "0" \
+    "$(jq -r '.socket_path' "$ledger" 2>/dev/null | grep -c '/default$')"
+  _assert "sharded socket open: records correct pid" "$_sk_pid" \
+    "$(jq -r '.server_pid' "$ledger" 2>/dev/null)"
+  _assert "sharded socket open: records correct window" "$_sk_wid" \
+    "$(jq -r '.window_id' "$ledger" 2>/dev/null)"
+  tmux -L "$_sk_sock" kill-server 2>/dev/null
+  rm -rf "$_sk_dir"; unset TMUX_TMPDIR
+else
+  echo "SKIP: sharded-socket open recording test (tmux not found)"
+fi
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
