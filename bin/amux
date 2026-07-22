@@ -35,9 +35,10 @@ AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>
 # value that _amux_frame exports at launch. AGENTMUX_FRAME_SOCKET needs no export
 # (read only in-process, via the resolvers).
 export AGENTMUX_TERM_SOCKET
-# Agent sessions live on tmux's DEFAULT socket (no -L). This override exists only
-# so selftests can isolate the session-management commands onto a throwaway socket
-# instead of the user's real tmux; empty = default socket, as in production.
+# Agent sessions live on the per-project shard `agentmux-agent-<cksum $PWD>` (see
+# _amux_agent_sock), like the frame/term sockets above. This override exists only so
+# selftests can isolate the session-management commands onto a throwaway socket instead
+# of that derived shard; empty = the derived per-project shard, as in production.
 AGENTMUX_AGENT_SOCKET="${AGENTMUX_AGENT_SOCKET:-}"
 # Absolute path to this launcher (for --frame's right-pane re-invocation), resolved
 # once here from the same BASH_SOURCE the dirs above use.
@@ -122,15 +123,14 @@ _amux_sock_hosting() {
   [ -n "$found" ] && printf '%s\n' "$found"
 }
 
-# tmux on the agent (default) socket, honouring AGENTMUX_AGENT_SOCKET for test
-# isolation. In production AGENTMUX_AGENT_SOCKET is empty → default socket, but we
-# must clear $TMUX first: a bare `tmux` inherits the surrounding server's socket
-# from $TMUX, so when amux runs INSIDE the frame (its own server) every agent-socket
-# op would silently hit the frame server instead of the default one. That made
-# `amux --kill` skip the agent (has-session against the frame socket is false) while
-# still killing the frame. `env -u TMUX` forces the real default socket regardless.
+# tmux on THIS project's agent socket. AGENTMUX_AGENT_SOCKET set → that socket verbatim
+# (test isolation); empty → the per-project shard `agentmux-agent-<cksum $PWD>`. `env -u
+# TMUX` is kept belt-and-suspenders: `-L` already overrides an inherited $TMUX, but clearing
+# it means a stray bare `tmux` in a subprocess can't mis-target the frame server either.
+# This is the CWD-context helper — name-targeted commands scan `_amux_agent_socks` instead.
 _amux_atmux() {
-  if [ -n "$AGENTMUX_AGENT_SOCKET" ]; then tmux -L "$AGENTMUX_AGENT_SOCKET" "$@"; else env -u TMUX tmux "$@"; fi
+  local sock; sock=$(_amux_agent_sock)
+  env -u TMUX tmux -L "$sock" "$@"
 }
 
 # tmux resolves a `-t` session target by exact → prefix → fnmatch, so a bare
@@ -461,8 +461,8 @@ _amux_colours() {
 }
 
 # amux --frame [(-<flag> | <agent>)] [session]
-# Build the right-pane command: a single amux attach on the DEFAULT socket (TMUX
-# cleared so it attach-sessions there rather than switch-client'ing the frame
+# Build the right-pane command: a single amux attach on THIS project's agent socket
+# (TMUX cleared so it attach-sessions there rather than switch-client'ing the frame
 # socket). Deliberately a plain one-shot, NOT a re-exec loop: a loop would
 # recreate (resurrect) the agent session moments after you kill it, and tmux runs
 # this through the user's login shell — maybe fish — which couldn't parse an sh
@@ -509,8 +509,8 @@ _amux_frame() {
   session=$(printf '%s' "$target" | sed -n 2p)
 
   # The frame session lives on its own socket and is named distinctly from the
-  # amux session it wraps (which runs on the default socket): a same-named frame
-  # blurs the two, and a stale frame is harder to tell apart from the real one.
+  # amux session it wraps (which runs on the project's own agent socket): a same-named
+  # frame blurs the two, and a stale frame is harder to tell apart from the real one.
   local sock; sock=$(_amux_frame_sock)
   local fsess="${session}-frame"
   # Export the $PWD-derived term socket so the frame server (and its C-f Q binding /
@@ -688,7 +688,7 @@ _amux_frames() {
 
 # Kill a frame from the base terminal (default: the current dir's). Tears down the
 # wrapper (frame socket) AND its scratch terminal (term socket); the agent session
-# on the default socket is left running (kill it separately with
+# on the project's own agent socket is left running (kill it separately with
 # `tmux kill-session -t <session>`).
 _amux_frame_kill() {
   local arg base explicit=0
@@ -715,8 +715,8 @@ _amux_frame_kill() {
 
 # Kill EVERY frame at once: tears down the whole frame server (all wrappers on the
 # frame socket) and the entire scratch-terminal server with it. Agent sessions on
-# the default socket survive. Handy to refresh all frames after a frame.conf change,
-# since a frame only reads config when (re)created.
+# their own per-project sockets survive. Handy to refresh all frames after a
+# frame.conf change, since a frame only reads config when (re)created.
 _amux_frame_kill_all() {
   local socks s any=0
   socks=$(_amux_frame_socks)
@@ -956,7 +956,7 @@ _amux_probe() {
   fi
   _amux_session_exists "$base" && return 0
   # -L names the frame socket explicitly, so this ignores any inherited $TMUX
-  # (unlike the agent socket, which _amux_atmux must clear $TMUX to reach).
+  # (same as _amux_atmux's own explicit -L to the agent socket).
   [ -n "$(_amux_frame_socks | _amux_sock_hosting "${base}-frame")" ]
 }
 
@@ -1399,6 +1399,21 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     echo "SKIP: sharded socket scan test (tmux not found)"
   fi
 
+  # --- _amux_atmux lands on the $PWD agent shard (production path, override unset).
+  #     Needs a real tmux; skip cleanly if absent (same pattern as neighbouring cases).
+  if command -v tmux >/dev/null 2>&1; then
+    _at_save="${AGENTMUX_AGENT_SOCKET:-}"; unset AGENTMUX_AGENT_SOCKET
+    _at_tmpdir="/tmp/amuxtest-atmux-$$"; export TMUX_TMPDIR="$_at_tmpdir"; mkdir -p "$_at_tmpdir"
+    ( cd /tmp && _amux_atmux new-session -d -s atmuxprobe 2>/dev/null )
+    _at_expect="agentmux-agent-$(cd /tmp && _amux_pwd_hash)"
+    if [ -S "$_at_tmpdir/tmux-$(id -u)/$_at_expect" ]; then _got=onshard; else _got=missing; fi
+    _assert "atmux creates on \$PWD agent shard" "onshard" "$_got"
+    tmux -L "$_at_expect" kill-server 2>/dev/null; rm -rf "$_at_tmpdir"; unset TMUX_TMPDIR
+    [ -n "$_at_save" ] && AGENTMUX_AGENT_SOCKET="$_at_save"
+  else
+    echo "SKIP: atmux \$PWD shard test (tmux not found)"
+  fi
+
   # --frames / --frame-kill against an isolated empty socket (no real frames touched).
   AGENTMUX_FRAME_SOCKET="amux-selftest-$$"
   _assert "frames empty" "amux: no active frames" "$(amux --frames 2>/dev/null)"
@@ -1668,21 +1683,23 @@ EOF
   fi
 
   # $TMUX isolation (the --kill-only-killed-the-frame bug): a bare `tmux` inherits
-  # the surrounding server's socket from $TMUX, so when amux runs inside the frame
-  # an agent-socket op would hit the frame server. The production path
-  # (AGENTMUX_AGENT_SOCKET empty) must clear $TMUX and reach the DEFAULT socket. We
-  # put a uniquely-named probe session on an isolated "frame" server, point $TMUX at
-  # it, then assert _amux_session_exists (production path) does NOT find it — i.e. it
-  # ignored $TMUX. The only op against the real default socket is this read-only
-  # has-session for a name that cannot exist there.
+  # the surrounding server's socket from $TMUX, so an agent-socket op that didn't pass
+  # -L explicitly could hit the frame server. _amux_atmux always resolves its target via
+  # _amux_agent_sock and passes it to -L (never a bare `tmux`), so this holds whether
+  # AGENTMUX_AGENT_SOCKET is set or empty (shard) — isolate onto a throwaway socket here
+  # rather than the empty/production path, which now resolves to a real per-project
+  # shard. We put a uniquely-named probe session on an isolated "frame" server, point
+  # $TMUX at it, then assert _amux_session_exists on OUR isolated socket does NOT find
+  # it — i.e. it ignored $TMUX.
   if command -v tmux >/dev/null 2>&1; then
     _fsock="amux-selftest-frame-$$"; _probe="amux-nested-probe-$$"
     tmux -L "$_fsock" new-session -d -s "$_probe" -c /tmp 2>/dev/null
     _spath=$(tmux -L "$_fsock" display-message -p '#{socket_path}' 2>/dev/null)
-    AGENTMUX_AGENT_SOCKET=""
+    AGENTMUX_AGENT_SOCKET="amux-selftest-$$"
     if TMUX="$_spath,1,0" _amux_session_exists "$_probe"; then _got=leaked; else _got=isolated; fi
-    _assert "agent ops ignore inherited \$TMUX (reach default socket)" "isolated" "$_got"
+    _assert "agent ops ignore inherited \$TMUX (reach the resolved agent socket)" "isolated" "$_got"
     tmux -L "$_fsock" kill-server 2>/dev/null
+    AGENTMUX_AGENT_SOCKET=""
   else
     echo "SKIP: \$TMUX isolation test (tmux not found)"
   fi
