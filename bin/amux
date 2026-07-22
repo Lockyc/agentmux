@@ -128,9 +128,23 @@ _amux_sock_hosting() {
 # TMUX` is kept belt-and-suspenders: `-L` already overrides an inherited $TMUX, but clearing
 # it means a stray bare `tmux` in a subprocess can't mis-target the frame server either.
 # This is the CWD-context helper — name-targeted commands scan `_amux_agent_socks` instead.
+#
+# `-f agent.conf` is passed on EVERY call, but tmux reads it ONLY when a call starts the
+# server (the first new-session on a cold per-project shard) — it's ignored for commands
+# against an already-running server. That's the whole fix for the sharding startup regression:
+# without it a cold agent server fell through to ~/.tmux.conf and ran TPM's synchronous
+# `run` line (seconds per project). agent.conf is the AGENT peer of -f frame.conf/-f term.conf;
+# routing it through this one chokepoint (not each new-session site) means no future
+# server-creating path can silently forget it. Guarded on the file existing so a stale
+# pre-update install (tmux/ without agent.conf yet) still launches — just without the speedup.
 _amux_atmux() {
   local sock; sock=$(_amux_agent_sock)
-  env -u TMUX tmux -L "$sock" "$@"
+  local conf="$AGENTMUX_TMUX/agent.conf"
+  if [ -f "$conf" ]; then
+    env -u TMUX tmux -L "$sock" -f "$conf" "$@"
+  else
+    env -u TMUX tmux -L "$sock" "$@"
+  fi
 }
 
 # tmux resolves a `-t` session target by exact → prefix → fnmatch, so a bare
@@ -408,7 +422,10 @@ _amux_launch_window0() {
   cmd=$(agentmux_build_cmd "$idx")
 
   _amux_atmux rename-window -t "=$session:0" "$agent"
-  agentmux_set_window_style "$agent" "$session:0"
+  # Explicit socket: this CLI process has no ambient $TMUX pointing at the
+  # (possibly sharded) agent socket, so a bare tmux would style the default
+  # socket instead — same reasoning as the session_log.sh open below.
+  agentmux_set_window_style "$agent" "$session:0" "$(_amux_agent_sock)"
   _amux_atmux send-keys -t "=$session:0" "$cmd" Enter
   # Explicit socket: this CLI process hasn't attached to the (possibly sharded)
   # agent session yet, so it has no ambient $TMUX pointing at it — see _sl_ctx.
@@ -800,13 +817,13 @@ _amux_restore_into() {
       _amux_atmux new-session -d -s "$name" -c "$cwd"
       _amux_atmux set-option -t "$name" "@agent-mode" "$agent"
       _amux_atmux rename-window -t "=$name:0" "$agent"
-      agentmux_set_window_style "$agent" "$name:0"
+      agentmux_set_window_style "$agent" "$name:0" "$(_amux_agent_sock)"
       _amux_atmux send-keys -t "=$name:0" "$rcmd" Enter
       win="=$name:0"; created=1
     else
       win=$(_amux_atmux new-window -t "=$name" -c "$cwd" -P -F '#{window_id}' "$rcmd")
       _amux_atmux rename-window -t "$win" "$agent"
-      agentmux_set_window_style "$agent" "$win"
+      agentmux_set_window_style "$agent" "$win" "$(_amux_agent_sock)"
     fi
     # Explicit socket (same reason as _amux_launch_window0): this CLI process
     # has no ambient $TMUX pointing at the restored project's (possibly
@@ -1513,6 +1530,14 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     _at_expect="agentmux-agent-$(cd /tmp && _amux_pwd_hash)"
     if [ -S "$_at_tmpdir/tmux-$(id -u)/$_at_expect" ]; then _got=onshard; else _got=missing; fi
     _assert "atmux creates on \$PWD agent shard" "onshard" "$_got"
+    # The startup-regression fix: a cold agent server must be born from agent.conf
+    # (-f), NOT fall through to ~/.tmux.conf + TPM. Proof it applied: agent.conf's
+    # interactive defaults are set (escape-time 0), and TPM's plugin-install key is
+    # NOT bound (TPM never ran on this server). Both target the socket _amux_atmux made.
+    _assert "atmux server got agent.conf (escape-time 0)" "0" \
+      "$(tmux -L "$_at_expect" show -sv escape-time 2>/dev/null)"
+    _assert "atmux server did not run TPM" "0" \
+      "$(tmux -L "$_at_expect" list-keys 2>/dev/null | grep -c install_plugins)"
     tmux -L "$_at_expect" kill-server 2>/dev/null; rm -rf "$_at_tmpdir"; unset TMUX_TMPDIR
     [ -n "$_at_save" ] && AGENTMUX_AGENT_SOCKET="$_at_save"
   else
@@ -1912,7 +1937,12 @@ STUB
     _rsave="$AGENTMUX_AGENT_SOCKET"; AGENTMUX_AGENT_SOCKET="amux-restore-selftest-$$"
     _rsdsave="${AGENTMUX_STATE_DIR:-}"; _rstate=$(mktemp -d); export AGENTMUX_STATE_DIR="$_rstate"
     _rdir=$(mktemp -d); _rm1="$_rdir/m1"; _rm2="$_rdir/m2"
-    printf "work\tsh -c 'echo one > %s'\npersonal\tsh -c 'echo two > %s'\n" "$_rm1" "$_rm2" \
+    # Window 0 goes through send-keys into a persistent shell; the extra window's
+    # resume command IS its pane process, so it must stay alive (real agents like
+    # `claude --resume` do) for the @window-agent style assertion below to observe
+    # it — a one-shot `echo` would exit and close the window first. `sleep 30` is
+    # reaped by kill-server at the end of the block.
+    printf "work\tsh -c 'echo one > %s'\npersonal\tsh -c 'echo two > %s; sleep 30'\n" "$_rm1" "$_rm2" \
       | _amux_restore_into "$_rdir"
     _rn=0; while [ "$_rn" -lt 50 ]; do [ -s "$_rm1" ] && [ -s "$_rm2" ] && break; sleep 0.1; _rn=$((_rn + 1)); done
     _assert "restore: window-0 (send-keys) ran its cmd"      "one"  "$(cat "$_rm1" 2>/dev/null)"
@@ -1921,11 +1951,42 @@ STUB
     if _amux_atmux has-session -t "=$_rname" 2>/dev/null; then _got=yes; else _got=no; fi
     _assert "restore: session created on the agent socket"   "yes"  "$_got"
     _assert "restore: @agent-mode = window-0 restored agent" "work" "$(_amux_atmux show-options -qv -t "$_rname" @agent-mode 2>/dev/null)"
+    # Window styling must land ON THE SHARD, not the default socket: agentmux_set_window_style
+    # is run from this CLI process (no ambient $TMUX), so it needs the agent socket passed
+    # explicitly. @window-agent is the cleanest signal — a custom option set only by that
+    # function, empty on the shard if the call mis-targeted the default socket. Covers both
+    # restore call sites: window 0 (send-keys replace) and window 1 (new-window start-cmd).
+    _assert "restore: window 0 styled on the shard (@window-agent)" "work" \
+      "$(_amux_atmux show-options -wqv -t "=$_rname:0" @window-agent 2>/dev/null)"
+    _assert "restore: window 1 styled on the shard (@window-agent)" "personal" \
+      "$(_amux_atmux show-options -wqv -t "=$_rname:1" @window-agent 2>/dev/null)"
     _amux_atmux kill-server 2>/dev/null
     rm -rf "$_rdir" "$_rstate"; AGENTMUX_AGENT_SOCKET="$_rsave"
     if [ -n "$_rsdsave" ]; then export AGENTMUX_STATE_DIR="$_rsdsave"; else unset AGENTMUX_STATE_DIR; fi
   else
     echo "SKIP: restore integration test (tmux not found)"
+  fi
+
+  # --- window-0 styling on the agent shard (real tmux). The reported bug: the
+  #     FIRST agent pane (window 0, styled by THIS CLI process in
+  #     _amux_launch_window0 — not by the after-new-window hook that handles
+  #     later windows) never got @window-agent or its colour, because
+  #     agentmux_set_window_style ran a bare `tmux` that lands on the DEFAULT
+  #     socket instead of this project's sharded agent socket. Prove window 0 is
+  #     styled ON THE SHARD. A benign-cmd config keeps the send-keys inert. ---
+  if command -v tmux >/dev/null 2>&1; then
+    _w0save="$AGENTMUX_AGENT_SOCKET"; AGENTMUX_AGENT_SOCKET="amux-win0style-selftest-$$"
+    _w0cfgsave="$AGENTMUX_CONFIG"; _w0cache="$_amux_json_cache"
+    _w0cfg=$(mktemp); printf '[[agents]]\nname = "solo"\nlabel = "s"\ncolour = "green"\ncmd = ":"\n' > "$_w0cfg"
+    AGENTMUX_CONFIG="$_w0cfg"; _amux_json_cache=""
+    _amux_atmux new-session -d -s w0proj -c /tmp
+    _amux_launch_window0 w0proj solo
+    _assert "window0: @window-agent set on the agent shard" "solo" \
+      "$(_amux_atmux show-options -wqv -t "=w0proj:0" @window-agent 2>/dev/null)"
+    _amux_atmux kill-server 2>/dev/null; rm -f "$_w0cfg"
+    AGENTMUX_AGENT_SOCKET="$_w0save"; AGENTMUX_CONFIG="$_w0cfgsave"; _amux_json_cache="$_w0cache"
+  else
+    echo "SKIP: window-0 style test (tmux not found)"
   fi
 
   # --- legacy notice: fires once for an @autoagent session on the REAL default
