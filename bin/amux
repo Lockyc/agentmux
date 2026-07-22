@@ -74,11 +74,15 @@ _amux_term_sock() {
   else printf 'agentmux-term-%s\n' "$(_amux_pwd_hash)"; fi
 }
 
-# ALL live sockets, for name-targeted commands with no $PWD to derive from. Override
-# wins (single socket); else glob the tmux socket dir. The glob matches the legacy
-# bare 'agentmux-frame'/'agentmux-term' AND sharded '<name>-<hash>', so frames already
-# running from before the upgrade stay enumerated and killable. [ -S ] filters the
-# literal pattern out when the dir has no matches (nullglob-safe, no arrays).
+# ALL agentmux socket FILES, for name-targeted commands with no $PWD to derive from.
+# Override wins (single socket); else glob the tmux socket dir. The glob matches the
+# legacy bare 'agentmux-frame'/'agentmux-term' AND sharded '<name>-<hash>', so frames
+# already running from before the upgrade stay enumerated and killable. [ -S ] drops
+# the literal pattern when the dir has no matches (nullglob-safe, no arrays) — but it
+# tests "is a socket", NOT "is a LIVE server": macOS leaves a stale socket file behind
+# after `tmux kill-server`, so this can return dead sockets. Callers needing liveness
+# must filter via list-sessions/has-session (as _amux_frames, the *_kill_all liveness
+# loops, and _amux_sock_hosting do) — never act on a returned socket blind.
 _amux_frame_socks() {
   if [ -n "${AGENTMUX_FRAME_SOCKET:-}" ]; then printf '%s\n' "$AGENTMUX_FRAME_SOCKET"; return; fi
   local d f; d=$(_amux_tmux_sockdir)
