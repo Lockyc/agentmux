@@ -150,8 +150,12 @@ _amux_agent_session_is_mine() {
   [ -z "$sdir" ] || [ "$sdir" = "$PWD" ]
 }
 _amux_frame_session_is_mine() {
-  tmux -L "$AGENTMUX_FRAME_SOCKET" has-session -t "=$1" 2>/dev/null || return 1
-  local sdir; sdir=$(tmux -L "$AGENTMUX_FRAME_SOCKET" show-options -qv -t "$1" @amux_dir 2>/dev/null)
+  # CWD-context guard: the frame for THIS dir lives on the $PWD-derived socket, so the
+  # socket itself already isolates same-basename projects; the @amux_dir check stays as
+  # belt-and-suspenders (and covers the override/selftest single-socket case).
+  local sock; sock=$(_amux_frame_sock)
+  tmux -L "$sock" has-session -t "=$1" 2>/dev/null || return 1
+  local sdir; sdir=$(tmux -L "$sock" show-options -qv -t "$1" @amux_dir 2>/dev/null)
   [ -z "$sdir" ] || [ "$sdir" = "$PWD" ]
 }
 
@@ -486,7 +490,12 @@ _amux_frame() {
   # The frame session lives on its own socket and is named distinctly from the
   # amux session it wraps (which runs on the default socket): a same-named frame
   # blurs the two, and a stale frame is harder to tell apart from the real one.
-  local sock="$AGENTMUX_FRAME_SOCKET" fsess="${session}-frame"
+  local sock; sock=$(_amux_frame_sock)
+  local fsess="${session}-frame"
+  # Export the $PWD-derived term socket so the frame server (and its C-f Q binding /
+  # frame_reattach hook, which read $AGENTMUX_TERM_SOCKET back) pair to THIS project's
+  # term server. In the override/selftest case _amux_term_sock returns it verbatim.
+  export AGENTMUX_TERM_SOCKET; AGENTMUX_TERM_SOCKET=$(_amux_term_sock)
 
   # Optional left-column vertical split (empty = off) and its top-region pane count.
   # Resolved up front so the staleness check below knows the expected pane count.
