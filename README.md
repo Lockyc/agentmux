@@ -105,7 +105,7 @@ Normal shell commands — type them at a prompt.
 | `amux --colours [grid\|pick]` | Preview the colour palette (curated names + 256 codes). `pick [agent]` interactively builds a paste-ready `colour =` line |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 | `amux --no-frame` | One-off plain launch when `[frame] default = true` is set (skips the frame) |
-| `amux --frames` | List active `--frame` wrappers (they live on a separate tmux socket) |
+| `amux --frames` | List active `--frame` wrappers (each lives on its own per-project tmux socket) |
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
 
@@ -161,13 +161,13 @@ Matching uses the logical path — `$PWD` as your shell shows it — and symlink
 ### Side-terminal layout (`--frame`)
 
 `amux --frame [agent] [session]` puts a persistent scratch terminal in the left
-pane beside amux in the right. It's a nested tmux on its own socket
-(`agentmux-frame`, session `<session>-frame`), so amux runs completely unchanged
+pane beside amux in the right. It's a nested tmux on its own **per-project** socket
+(`agentmux-frame-<hash>`, session `<session>-frame`), so amux runs completely unchanged
 on the right. There are **three status bars**: a thin full-width outer bar (the
 frame, showing the project + clock), and a per-pane bar under each side — the left
 terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
 
-- The **left pane is its own dedicated tmux** on a separate `agentmux-term` socket
+- The **left pane is its own dedicated tmux** on a separate per-project `agentmux-term-<hash>` socket
   (config `tmux/term.conf`): its own tab bar, and it **never dies** — exit the
   shell and it respawns. It's a bare tmux (not your `~/.tmux.conf`), kept isolated
   on purpose.
@@ -220,11 +220,14 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
   `amux --frame <session>` (a closed pane is rebuilt).
 - **Three sessions across three sockets.** `<session>` — your agent, on the
-  **default** socket (what plain `tmux ls` shows). `<session>-frame` — the wrapper,
-  on `agentmux-frame`. `<session>-term` — the left terminal, on `agentmux-term`.
-  The frame is the *outer* layer in the nesting sense, but each lives on its own
-  socket so their stripped configs never bleed into your normal tmux — which is
-  also why a base-terminal `tmux ls` (default socket) only shows the agent.
+  **default** socket (what plain `tmux ls` shows). `<session>-frame` (the wrapper) and
+  `<session>-term` (the left terminal) each live on their **own per-project socket**
+  (`agentmux-frame-<hash>` / `agentmux-term-<hash>`, where `<hash>` is derived from the
+  project's directory). Every project gets its own frame/term tmux server, so a busy
+  agent streaming output in one project never slows your typing in another. The frame is
+  the *outer* layer in the nesting sense, but each lives on its own socket so their
+  stripped configs never bleed into your normal tmux — which is also why a base-terminal
+  `tmux ls` (default socket) only shows the agent.
 - **Managing it from the base terminal:**
   - Leave the frame from inside: `C-f d` (detach, all kept) or `C-f Q` (quit the
     wrapper; the agent survives, reattach later).
