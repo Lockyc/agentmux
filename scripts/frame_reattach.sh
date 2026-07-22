@@ -63,6 +63,14 @@ frame_reattach() {
 
 if [ -n "${FRAME_REATTACH_SELFTEST:-}" ]; then
   fail=0
+  # Isolate from an ambient amux frame. The assertions below expect frame_reattach
+  # to resolve the DEFAULT socket names (empty agent socket, `agentmux-term`), but
+  # lines 52/54 honour AGENTMUX_{AGENT,TERM}_SOCKET — which ARE exported when this
+  # selftest is run from inside a live amux frame (the maintainer's normal shell),
+  # so an inherited sharded value (e.g. `agentmux-term-<hash>`) would make every
+  # socket assertion mismatch. Unset them so the selftest is env-independent (CI,
+  # with no such vars, already passed — this makes local runs match).
+  unset AGENTMUX_AGENT_SOCKET AGENTMUX_TERM_SOCKET AGENTMUX_FRAME_SOCKET
   # Stubs: `tmux` answers display-message by format and records the respawn
   # target; `sock_tmux` records the socket/session it was asked about and
   # answers has-session per-case via $_alive.
