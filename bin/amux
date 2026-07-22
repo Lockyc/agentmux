@@ -62,7 +62,33 @@ _amux_sanitize_session() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_'; 
 
 # --- Per-project socket resolution -------------------------------------------------
 # See the AGENTMUX_TERM_SOCKET comment above for the override-vs-shard rule.
-_amux_pwd_hash() { printf '%s' "$PWD" | cksum | cut -d' ' -f1; }
+#
+# The socket resolvers below are called MANY times per launch (every _amux_atmux /
+# frame / term / agent call resolves its socket), and each resolution used to re-fork
+# `printf | cksum | cut`. On macOS a fork+exec is ~10ms idle and 50-250ms under load,
+# so dozens of these dominate a cold-start. Memoize the hash, keyed on $PWD so a
+# subshell that `cd`s to another project (the restore path) still recomputes correctly.
+# The cache only persists across the many `sock=$(_amux_*_sock)` COMMAND-SUBSTITUTION
+# subshells if it was populated in the PARENT shell first — those subshells fork from
+# the parent and inherit its vars, but their own writes die with them. So a real launch
+# warms it once in parent context (see _amux_warm_launch_caches); a cold call (unwarmed
+# key, or a different $PWD) falls back to the fork. Same technique warms _amux_json.
+_amux_pwd_hash() {
+  if [ "${_amux_pwd_hash_key-}" = "$PWD" ] && [ -n "${_amux_pwd_hash_val-}" ]; then
+    printf '%s\n' "$_amux_pwd_hash_val"; return
+  fi
+  _amux_pwd_hash_key="$PWD"
+  _amux_pwd_hash_val=$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)
+  printf '%s\n' "$_amux_pwd_hash_val"
+}
+# Populate the per-process caches ONCE, in the parent shell, so the launch's many
+# `$(...)` subshells inherit them instead of re-forking cksum/stat/cat/toml2json per
+# call. Must be called as a direct (non-substituted) statement so the globals it sets
+# land in the caller's shell, not a throwaway subshell. Idempotent and cheap to repeat.
+_amux_warm_launch_caches() {
+  _amux_pwd_hash >/dev/null 2>&1 || true   # → _amux_pwd_hash_key/_val for $PWD
+  _amux_json      >/dev/null 2>&1 || true   # → _amux_json_cache (config JSON)
+}
 _amux_tmux_sockdir() { printf '%s/tmux-%s\n' "${TMUX_TMPDIR:-/tmp}" "$(id -u)"; }
 
 # The socket for THIS project ($PWD). Override wins verbatim; else shard by hash.
@@ -511,6 +537,10 @@ _amux_frame_left_cmd() { # <term-socket> <term-conf> <term-session>
 # Outer "frame": a bare $SHELL in the left pane, amux in the right pane, as a
 # nested tmux on a dedicated socket. Must be run from a plain terminal.
 _amux_frame() {
+  # Warm the per-process caches in THIS (parent) shell before the many $()-subshell
+  # socket/config lookups below inherit them — the frame path resolves the frame,
+  # term, and agent sockets and reads a dozen [frame]/[amux] fields.
+  _amux_warm_launch_caches
   if [ -n "${TMUX:-}" ] && [ -z "$(_amux_frame_allow_nested)" ]; then
     echo "amux: --frame must be run from a plain terminal, not inside tmux (set [frame] allow_nested = true to override)" >&2
     return 1
@@ -1248,6 +1278,11 @@ EOF
     return $?
   fi
 
+  # Plain (non-frame) launch: warm the caches in parent context, same reason as
+  # _amux_frame — the launch below resolves the agent socket and reads config fields
+  # through many $()-subshells that would otherwise each re-fork cksum/stat/cat.
+  _amux_warm_launch_caches
+
   local _amux_target
   _amux_target=$(_amux_resolve_target "$@") || return 1
   agent_name=$(printf '%s' "$_amux_target" | sed -n 1p)
@@ -1447,6 +1482,16 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _a=$(cd / && _amux_frame_sock); _b=$(cd /tmp && _amux_frame_sock)
   [ "$_a" != "$_b" ] && _got=differ || _got=same
   _assert "distinct \$PWD -> distinct socket" "differ" "$_got"
+  # Hash memoization (the cold-start spawn fix): a warmed cache for THIS $PWD is
+  # returned verbatim without re-forking cksum; a different $PWD misses and recomputes
+  # (cd-safe, so the restore path that cd's to another project still gets its own hash).
+  _amux_pwd_hash_key="$PWD"; _amux_pwd_hash_val="SENTINELHASH"
+  _assert "pwd_hash returns memoized value on cache hit" "SENTINELHASH" "$(_amux_pwd_hash)"
+  case "$(cd / && _amux_pwd_hash)" in
+    SENTINELHASH) _got=leaked ;; [0-9]*) _got=recomputed ;; *) _got=bad ;;
+  esac
+  _assert "pwd_hash recomputes when \$PWD != cached key" "recomputed" "$_got"
+  unset _amux_pwd_hash_key _amux_pwd_hash_val
   AGENTMUX_FRAME_SOCKET="verbatim-xyz"
   _assert "frame_sock honours override verbatim" "verbatim-xyz" "$(_amux_frame_sock)"
   _assert "frame_socks honours override verbatim" "verbatim-xyz" "$(_amux_frame_socks)"
