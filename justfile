@@ -18,3 +18,24 @@ default:
 # Non-mutating pre-merge gate: shellcheck + fish -n + every selftest (delegates to test.sh)
 gate:
     bash test.sh
+
+# Micro-benchmark the presence-probe hot path: cost of `dropped --pending` for a cwd that is
+# NOT in the ledger (the common `[[window.root]]` case) vs one that IS, over a large synthetic
+# ledger. warden forks this per session-less tab every 5s; Task 2 adds the fast path. The
+# recipe IS the generator (seeds its own ledger) — no external fixture.
+bench:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
+    export AGENTMUX_STATE_DIR="$dir" AGENTMUX_SESSION_LOG=1
+    ledger="$dir/sessions.jsonl"; : > "$ledger"
+    # 60 dead-server windows across 60 distinct dirs (/w/p1../w/p60).
+    for i in $(seq 1 60); do
+      printf '{"ts":%d,"event":"open","socket_path":"/s/%d","server_pid":%d,"session":"p%d","window_id":"@1","window_name":"claude","cwd":"/w/p%d","agent":"work"}\n' $((100+i)) "$i" $((9000+i)) "$i" "$i" >> "$ledger"
+      printf '{"ts":%d,"event":"resume","socket_path":"/s/%d","server_pid":%d,"window_id":"@1","label":"d%d","resume_cmd":"claude --resume d%d"}\n' $((101+i)) "$i" $((9000+i)) "$i" "$i" >> "$ledger"
+    done
+    echo "ledger lines: $(wc -l < "$ledger")"; runs=50
+    echo "== absent cwd (/w/does-not-exist) x$runs =="
+    time for _ in $(seq $runs); do SESSION_LOG_BOOT_EPOCH=1 sh scripts/session_log.sh dropped --pending /w/does-not-exist >/dev/null; done
+    echo "== present cwd (/w/p30) x$runs =="
+    time for _ in $(seq $runs); do SESSION_LOG_BOOT_EPOCH=1 sh scripts/session_log.sh dropped --pending /w/p30 >/dev/null; done
