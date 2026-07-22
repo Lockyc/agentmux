@@ -97,6 +97,7 @@ Normal shell commands — type them at a prompt.
 | `amux <agent>` | New/attach session, agent by name |
 | `amux <agent> <session>` | New/attach named session with specified agent |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
+| `amux attach <name>` | Attach to a running agent session by name, from any directory — resolves which project's per-project socket is hosting it |
 | `amux --restore [--global]` | Pick dropped agent tabs (lost to a crash/reboot) to relaunch — this project by default, `--global` for all. Also offered automatically when you launch `amux` in a project with dropped tabs |
 | `amux --probe [session]` | Exit 0 if a session exists — the agent **or** a lingering frame (default: current dir). Silent; for scripting a presence indicator (e.g. warden's cyan dot) off the exit code. With no `session` arg it matches only the session launched *from this dir*, so two projects sharing a folder name never cross-light — and exits **3** if there's no live session but a crashed one here is restorable (a plain `amux` launch would offer the restore picker), which warden renders as a ghost dot; **1** if there's nothing at all. An explicit `session` arg is a plain 0/1 presence check. Exit 3 is non-zero, so an `if amux --probe` consumer that only tests success still reads it as absent |
 | `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir). Like `--probe`, the no-arg form only reaps the session launched *from this dir* — a same-named sibling project is left alone |
@@ -219,15 +220,16 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   ```
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
   `amux --frame <session>` (a closed pane is rebuilt).
-- **Three sessions across three sockets.** `<session>` — your agent, on the
-  **default** socket (what plain `tmux ls` shows). `<session>-frame` (the wrapper) and
-  `<session>-term` (the left terminal) each live on their **own per-project socket**
-  (`agentmux-frame-<hash>` / `agentmux-term-<hash>`, where `<hash>` is derived from the
-  project's directory). Every project gets its own frame/term tmux server, so a busy
-  agent streaming output in one project never slows your typing in another. The frame is
-  the *outer* layer in the nesting sense, but each lives on its own socket so their
-  stripped configs never bleed into your normal tmux — which is also why a base-terminal
-  `tmux ls` (default socket) only shows the agent.
+- **Three sessions, each on its own per-project socket.** `<session>` (your agent),
+  `<session>-frame` (the wrapper), and `<session>-term` (the left terminal) each live
+  on their **own per-project socket** (`agentmux-agent-<hash>` / `agentmux-frame-<hash>`
+  / `agentmux-term-<hash>`, where `<hash>` is derived from the project's directory).
+  Every project gets its own agent/frame/term tmux servers, so a busy agent streaming
+  output in one project never slows your typing in another. The frame is the *outer*
+  layer in the nesting sense, but each lives on its own socket so their stripped
+  configs never bleed into your normal tmux — which is also why **none of this shows
+  up in a plain `tmux ls`**: agentmux sessions live off your default tmux socket
+  entirely. Use `amux --sessions` (agents) and `amux --frames` (frames) instead.
 - **Managing it from the base terminal:**
   - Leave the frame from inside: `C-f d` (detach, all kept) or `C-f Q` (quit the
     wrapper; the agent survives, reattach later).
@@ -238,6 +240,9 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
     its frame and terminal (default: current dir's). Use this instead of a raw
     `tmux kill-session` so nothing is left orphaned. `amux --sessions` lists the
     exact session names.
+  - `amux attach <name>` — attach to an agent session by name from any directory
+    (it finds which project's socket is hosting it); useful when you're not
+    currently `cd`'d into that project.
 
 ## Adding an agent
 

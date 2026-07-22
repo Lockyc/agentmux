@@ -72,3 +72,20 @@ an independent scan, so the pair always belongs to one project.
 
 **Trigger to revisit:** the same-basename distinct-naming change is picked up, or a hand-typed
 `amux --kill <name>` is observed killing the wrong project's terminal.
+
+**Agent sharding widens the same collision to live agent sessions, not just frame/term.**
+Before agent-socket sharding, two same-basename projects (`~/work/api`, `~/personal/api`)
+could never both hold a *live agent* session at once — one shared agent socket meant tmux's
+own session-name uniqueness made the second project's `amux` just attach to the first's
+session. Now that agents are sharded too (`agentmux-agent-<cksum $PWD>`, see the `@amux_dir`
+guard footgun in CLAUDE.md), each project gets its own agent server, so both `api` sessions
+*can* be live simultaneously. `_amux_sock_hosting` (used by named `amux --kill <name>`,
+`amux --probe <name>`, and the new `amux attach <name>`) resolves a name by scanning every
+agent shard and returning the **first** match — so with two live same-basename agents,
+`amux --kill api` / `amux attach api` deterministically addresses whichever shard sorts
+first in the glob, not necessarily the one the caller meant. Same root cause and same fix as
+the frame/term case above (distinct session names removes it outright); until then this is
+the agent-session sibling of the frame/term cross-fire, not a separate bug.
+
+**Trigger to revisit (agent case):** as above, plus any report of `amux --kill <name>` or
+`amux attach <name>` landing on the wrong same-basename project's agent session.
