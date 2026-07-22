@@ -658,7 +658,11 @@ _amux_frame() {
 # List active frame wrappers (they live on their own socket, so a plain `tmux ls`
 # in the base terminal — the default socket — never shows them).
 _amux_frames() {
-  tmux -L "$AGENTMUX_FRAME_SOCKET" list-sessions 2>/dev/null || echo "amux: no active frames"
+  local s any=0
+  for s in $(_amux_frame_socks); do
+    if tmux -L "$s" list-sessions 2>/dev/null; then any=1; fi
+  done
+  [ "$any" -eq 1 ] || echo "amux: no active frames"
 }
 
 # Kill a frame from the base terminal (default: the current dir's). Tears down the
@@ -666,16 +670,22 @@ _amux_frames() {
 # on the default socket is left running (kill it separately with
 # `tmux kill-session -t <session>`).
 _amux_frame_kill() {
-  local arg base
+  local arg base explicit=0
   # Sanitise the same way the frame was named (. and : → _) so an explicit arg or
   # the no-arg default basename resolves to the name the frame was created under.
-  if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
+  if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); explicit=1; else arg=$(_amux_default_session_name); fi
   case "$arg" in *-frame) base="${arg%-frame}" ;; *) base="$arg" ;; esac
-  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
-  local fsess="${base}-frame" tsess="${base}-term"
-  if tmux -L "$fsock" has-session -t "=$fsess" 2>/dev/null; then
+  local fsess="${base}-frame" tsess="${base}-term" fsock tsock
+  if [ "$explicit" -eq 1 ]; then
+    # No $PWD to derive from — find whichever sharded socket hosts this named session.
+    fsock=$(_amux_frame_socks | _amux_sock_hosting "$fsess")
+    tsock=$(_amux_term_socks | _amux_sock_hosting "$tsess")
+  else
+    fsock=$(_amux_frame_sock); tsock=$(_amux_term_sock)
+  fi
+  if [ -n "$fsock" ] && tmux -L "$fsock" has-session -t "=$fsess" 2>/dev/null; then
     tmux -L "$fsock" kill-session -t "=$fsess" 2>/dev/null
-    tmux -L "$tsock" kill-session -t "=$tsess" 2>/dev/null   # its scratch terminal
+    [ -n "$tsock" ] && tmux -L "$tsock" kill-session -t "=$tsess" 2>/dev/null   # its scratch terminal
     echo "killed frame '$fsess' + terminal '$tsess' (agent session, if any, still runs)"
   else
     echo "amux: no frame '$fsess' (try: amux --frames)" >&2; return 1
@@ -687,14 +697,14 @@ _amux_frame_kill() {
 # the default socket survive. Handy to refresh all frames after a frame.conf change,
 # since a frame only reads config when (re)created.
 _amux_frame_kill_all() {
-  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET"
-  if tmux -L "$fsock" list-sessions >/dev/null 2>&1; then
-    tmux -L "$fsock" kill-server 2>/dev/null
-    tmux -L "$tsock" kill-server 2>/dev/null   # the paired scratch terminals
-    echo "killed all frames + scratch terminals (agent sessions, if any, still run)"
-  else
+  local socks s
+  socks=$(_amux_frame_socks)
+  if [ -z "$socks" ]; then
     echo "amux: no active frames (try: amux --frames)" >&2; return 1
   fi
+  for s in $socks; do tmux -L "$s" kill-server 2>/dev/null; done
+  for s in $(_amux_term_socks); do tmux -L "$s" kill-server 2>/dev/null; done
+  echo "killed all frames + scratch terminals (agent sessions, if any, still run)"
 }
 
 # List agentmux-managed (@autoagent) sessions on the agent socket: name, agent
@@ -923,7 +933,7 @@ _amux_probe() {
   _amux_session_exists "$base" && return 0
   # -L names the frame socket explicitly, so this ignores any inherited $TMUX
   # (unlike the agent socket, which _amux_atmux must clear $TMUX to reach).
-  tmux -L "$AGENTMUX_FRAME_SOCKET" has-session -t "=${base}-frame" 2>/dev/null
+  [ -n "$(_amux_frame_socks | _amux_sock_hosting "${base}-frame")" ]
 }
 
 # Kill ONE project completely: the agent session (agent socket) plus its paired
@@ -938,8 +948,14 @@ _amux_kill() {
     *-term)  base="${arg%-term}" ;;
     *)       base="$arg" ;;
   esac
-  local fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET" parts="" by_dir=0 own_frame=0
+  local fsock tsock parts="" by_dir=0 own_frame=0
   [ $# -eq 0 ] && by_dir=1
+  if [ "$by_dir" -eq 1 ]; then
+    fsock=$(_amux_frame_sock); tsock=$(_amux_term_sock)   # CWD path: derive from $PWD
+  else
+    fsock=$(_amux_frame_socks | _amux_sock_hosting "${base}-frame")  # named: scan shards
+    tsock=$(_amux_term_socks | _amux_sock_hosting "${base}-term")
+  fi
   # CWD-derived kill (no explicit name → warden's call): only reap sessions whose
   # recorded @amux_dir is THIS dir, so a same-basename sibling project is never
   # torn down. An explicit name skips the guard (unchanged behaviour). The term
@@ -949,12 +965,12 @@ _amux_kill() {
      || { [ "$by_dir" -eq 1 ] && _amux_agent_session_is_mine "$base"; }; then
     _amux_atmux kill-session -t "=$base" 2>/dev/null; parts="agent '$base'"
   fi
-  if { [ "$by_dir" -eq 0 ] && tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; } \
-     || { [ "$by_dir" -eq 1 ] && _amux_frame_session_is_mine "${base}-frame"; }; then
+  if [ -n "$fsock" ] && { { [ "$by_dir" -eq 0 ] && tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; } \
+     || { [ "$by_dir" -eq 1 ] && _amux_frame_session_is_mine "${base}-frame"; }; }; then
     tmux -L "$fsock" kill-session -t "=${base}-frame" 2>/dev/null
     parts="${parts:+$parts + }frame '${base}-frame'"; own_frame=1
   fi
-  if { [ "$by_dir" -eq 0 ] || [ "$own_frame" -eq 1 ]; } \
+  if [ -n "$tsock" ] && { [ "$by_dir" -eq 0 ] || [ "$own_frame" -eq 1 ]; } \
      && tmux -L "$tsock" has-session -t "=${base}-term" 2>/dev/null; then
     tmux -L "$tsock" kill-session -t "=${base}-term" 2>/dev/null
     parts="${parts:+$parts + }terminal '${base}-term'"
@@ -972,10 +988,16 @@ _amux_kill() {
 # sessions), so this kills @autoagent sessions one by one — never kill-server —
 # while the frame/term sockets, which are exclusively ours, are torn down whole.
 _amux_kill_all() {
-  local names count fsock="$AGENTMUX_FRAME_SOCKET" tsock="$AGENTMUX_TERM_SOCKET" have_frames=0
+  local names count fsocks have_frames=0 _fs
+  fsocks=$(_amux_frame_socks)
   names=$(_amux_agent_session_names)
   count=$(printf '%s' "$names" | grep -c . 2>/dev/null)
-  tmux -L "$fsock" list-sessions >/dev/null 2>&1 && have_frames=1
+  # A configured socket NAME isn't proof of a live frame (an override with no
+  # server behind it must still read as "no frames") — actually query each
+  # resolved socket, same as _amux_frames does.
+  for _fs in $fsocks; do
+    tmux -L "$_fs" list-sessions >/dev/null 2>&1 && { have_frames=1; break; }
+  done
   if [ "$count" -eq 0 ] && [ "$have_frames" -eq 0 ]; then
     echo "amux: no agent sessions or frames (try: amux --sessions)" >&2; return 1
   fi
@@ -988,8 +1010,9 @@ _amux_kill_all() {
   printf '%s\n' "$names" | while IFS= read -r s; do
     [ -n "$s" ] && _amux_atmux kill-session -t "=$s" 2>/dev/null
   done
-  tmux -L "$fsock" kill-server 2>/dev/null
-  tmux -L "$tsock" kill-server 2>/dev/null
+  local _s
+  for _s in $fsocks; do tmux -L "$_s" kill-server 2>/dev/null; done
+  for _s in $(_amux_term_socks); do tmux -L "$_s" kill-server 2>/dev/null; done
   echo "killed $count agent session(s) + all frames/terminals"
 }
 
@@ -1324,6 +1347,20 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # restore whatever the surrounding selftest expects
   [ -n "$_rf_save" ] && AGENTMUX_FRAME_SOCKET="$_rf_save"
   [ -n "$_rt_save" ] && AGENTMUX_TERM_SOCKET="$_rt_save"
+
+  # --- name-targeted scan finds a sharded frame socket. Needs a real tmux; skip
+  #     cleanly if absent (same pattern as the other tmux-gated cases below).
+  if command -v tmux >/dev/null 2>&1; then
+    _rf_save2="${AGENTMUX_FRAME_SOCKET:-}"; unset AGENTMUX_FRAME_SOCKET
+    _scan_sock="agentmux-frame-99999999"    # matches the agentmux-frame* glob
+    tmux -L "$_scan_sock" new-session -d -s "scanme-frame" 2>/dev/null
+    _assert "sock_hosting finds sharded session" "$_scan_sock" \
+      "$(_amux_frame_socks | _amux_sock_hosting scanme-frame)"
+    tmux -L "$_scan_sock" kill-server 2>/dev/null
+    [ -n "$_rf_save2" ] && AGENTMUX_FRAME_SOCKET="$_rf_save2"
+  else
+    echo "SKIP: sharded socket scan test (tmux not found)"
+  fi
 
   # --frames / --frame-kill against an isolated empty socket (no real frames touched).
   AGENTMUX_FRAME_SOCKET="amux-selftest-$$"
