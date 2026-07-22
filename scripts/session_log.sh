@@ -291,6 +291,17 @@ sl_dropped() {
     *)         _scope="${1:-}" ;;
   esac
   _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
+  # Fast path: a scoped query for a cwd that never appears in the ledger has nothing to emit,
+  # so skip the (expensive) fold + per-server liveness checks entirely. warden's presence probe
+  # forks this per session-less tab every few seconds, and a `[[window.root]]` over a repo tree
+  # is mostly dirs that never ran amux. grep -F is a NECESSARY condition — the exact cwd string
+  # being absent from the ledger means it is absent from the cwd field, so this never yields a
+  # false "nothing"; a substring/other-field match simply falls through to the full path below.
+  # --global (no cwd) and the empty scope skip the gate.
+  case "$_scope" in
+    --global|"") ;;
+    *) grep -qF "$_scope" "$_ledger" || return 0 ;;
+  esac
   _boot=$(_sl_boot_epoch)
   _notmark="$(_sl_state_dir)/notified"
   rows=$(mktemp) || return 1
@@ -663,6 +674,11 @@ _assert "dropped(--global): has drop3"   "1"          "$(printf '%s\n' "$outg" |
 # --pending sees an un-offered drop, exactly as --new would.
 outp=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
 _assert "pending: sees un-offered drop"  "1"  "$(printf '%s\n' "$outp" | grep -c 'claude-work --resume drop1')"
+
+# GATE (Task 2): a cwd that never appears in the ledger returns empty via the fast path — the
+# same answer as the slow path, so this must hold both before and after the gate is added.
+outabs=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/never-logged")
+_assert "pending: absent cwd → empty" "0" "$(printf '%s' "$outabs" | grep -c .)"
 
 # THE REGRESSION GUARD: --pending must not write the notified marker. If it did, warden's
 # 5s probe would burn the gate on its first pass and the ghost would render once, never again.
