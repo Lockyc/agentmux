@@ -292,14 +292,15 @@ sl_dropped() {
   esac
   _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
   # Fast path: a scoped query for a cwd that never appears in the ledger has nothing to emit,
-  # so skip the (expensive) fold + per-server liveness checks entirely. warden's presence probe
-  # forks this per session-less tab every few seconds, and a `[[window.root]]` over a repo tree
-  # is mostly dirs that never ran amux. grep -F is a NECESSARY condition — the exact cwd string
-  # being absent from the ledger means it is absent from the cwd field, so this never yields a
-  # false "nothing"; a substring/other-field match simply falls through to the full path below.
-  # --global (no cwd) and the empty scope skip the gate.
+  # so skip the (expensive) fold + per-server liveness checks. grep -qF searches the raw,
+  # JSON-ENCODED ledger, so it is only a sound necessary condition when $_scope needs no JSON
+  # escaping — a cwd containing " , \ , or a control char is stored escaped in the ledger, and
+  # grepping the bare form would false-miss a real session. So those fall through to the correct
+  # (decoded) slow path; every ordinary path (spaces and UTF-8 included) takes the fast path.
+  # --global (no cwd) and the empty scope skip the gate entirely.
   case "$_scope" in
     --global|"") ;;
+    *[\"\\]* | *[[:cntrl:]]*) ;;
     *) grep -qF "$_scope" "$_ledger" || return 0 ;;
   esac
   _boot=$(_sl_boot_epoch)
@@ -679,6 +680,18 @@ _assert "pending: sees un-offered drop"  "1"  "$(printf '%s\n' "$outp" | grep -c
 # same answer as the slow path, so this must hold both before and after the gate is added.
 outabs=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/never-logged")
 _assert "pending: absent cwd → empty" "0" "$(printf '%s' "$outabs" | grep -c .)"
+
+# GATE FALSE-NEGATIVE GUARD (review fix): a cwd containing a literal " is stored
+# JSON-escaped in the ledger ( \" ), so a naive grep -qF for the BARE scope would never
+# match it — the gate must recognise that and fall through to the (always-correct) slow,
+# jq-decoded path instead of wrongly returning empty for a cwd that has a real restorable
+# session. Append a dead, sidecar-less server whose cwd carries a literal ".
+cat >> "$ledger" <<JSON
+{"ts":150,"event":"open","socket_path":"/s/q","server_pid":9993,"session":"quo","window_id":"@1","window_name":"claude","cwd":"/w/qu\"ote","agent":"work"}
+{"ts":151,"event":"resume","socket_path":"/s/q","server_pid":9993,"window_id":"@1","label":"dropq","resume_cmd":"claude --resume dropq"}
+JSON
+outq=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending '/w/qu"ote')
+_assert "pending: quote-containing cwd not false-dropped (gate falls through)" "1" "$(printf '%s\n' "$outq" | grep -c 'dropq')"
 
 # THE REGRESSION GUARD: --pending must not write the notified marker. If it did, warden's
 # 5s probe would burn the gate on its first pass and the ghost would render once, never again.
