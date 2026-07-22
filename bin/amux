@@ -1323,33 +1323,34 @@ EOF
     [ "$_amux_auto_restored" = 1 ] || _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
   fi
 
-  _amux_atmux set-option -t "$name" "@autoagent" "1"
-  # Record the launch dir so the CWD-derived --probe/--kill can tell this session
-  # apart from another project that shares its basename (see the dir-guard block).
-  # Set on every (re)launch, so a legacy session picks it up the next time amux runs.
-  _amux_atmux set-option -t "$name" "@amux_dir" "$PWD"
-  # Optional per-session prefix ([amux] prefix). Set unconditionally (new and
-  # reattached sessions) so a config change applies on the next launch, and as a
-  # session option so it never touches other sessions' ~/.tmux.conf prefix. Empty
-  # = unset/collided → leave the default prefix untouched.
-  local _prefix; _prefix=$(_amux_prefix)
-  [ -n "$_prefix" ] && _amux_atmux set-option -t "$name" prefix "$_prefix"
-
-  # Pin this project's bar colour (if [amux.dirs."$PWD"].session_colour set) by
-  # pre-freezing @l1idx to the named slot, and publish every pinned slot globally
-  # so the hook keeps them out of the auto-assign pool.
-  #
-  # ORDERING IS LOAD-BEARING: @autoagent (above) and @l1reserved (here) must both
-  # be set BEFORE _amux_attach. update_colors.sh only paints @autoagent sessions,
-  # so the session-created hook is a no-op while this session is still un-flagged;
-  # the first real paint happens on attach, by which point the reservation is
-  # published. Move either set after the attach and a colliding newcomer can steal
-  # a reserved colour before the reservation exists. Don't reorder.
-  local _pin_slot _reserved
+  # Compute the optional session-option values, then emit ALL the session options in
+  # ONE chained tmux invocation (';'-separated) instead of up to five separate
+  # _amux_atmux calls — each is an exec + socket round-trip (~4x the wall time of one
+  # chained call; same win as agent_window_style.sh). These options are independent, so
+  # order among them is irrelevant; the only constraint below still holds.
+  #   @amux_dir  — the launch dir, so the CWD-derived --probe/--kill can tell this
+  #                session apart from another project sharing its basename (dir-guard
+  #                block). Set on every (re)launch so a legacy session picks it up.
+  #   prefix     — optional [amux] prefix, per-session so it never touches other
+  #                sessions' ~/.tmux.conf prefix. Empty = unset/collided → omit.
+  #   @l1idx     — optional pinned bar-colour slot ([amux.dirs."$PWD"].session_colour).
+  #   @l1reserved— publish every pinned slot globally so the hook keeps them out of the
+  #                auto-assign pool.
+  # ORDERING IS LOAD-BEARING: @autoagent and @l1reserved must both be set BEFORE
+  # _amux_attach. update_colors.sh only paints @autoagent sessions, so the
+  # session-created hook is a no-op while this session is un-flagged; the first real
+  # paint happens on attach, by which point the reservation is published. Emitting them
+  # in one pre-attach call preserves this; don't move any set after the attach.
+  local _prefix _pin_slot _reserved
+  _prefix=$(_amux_prefix)
   _pin_slot=$(_amux_bar_pin_slot "$PWD")
-  [ -n "$_pin_slot" ] && _amux_atmux set-option -t "$name" @l1idx "$_pin_slot"
   _reserved=$(_amux_bar_reserved)
-  _amux_atmux set-option -g @l1reserved "$_reserved"
+  local -a _opts=(set-option -t "$name" "@autoagent" "1"
+                  ';' set-option -t "$name" "@amux_dir" "$PWD")
+  [ -n "$_prefix" ]   && _opts+=(';' set-option -t "$name" prefix "$_prefix")
+  [ -n "$_pin_slot" ] && _opts+=(';' set-option -t "$name" @l1idx "$_pin_slot")
+  _opts+=(';' set-option -g @l1reserved "$_reserved")
+  _amux_atmux "${_opts[@]}"
 
   _amux_attach "$name"
 }

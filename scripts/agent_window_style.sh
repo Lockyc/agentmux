@@ -56,11 +56,20 @@ agentmux_set_window_style() {
   local -a t=()
   [ -n "$target" ] && t=(-t "$target")
 
-  [ -n "$inactive" ] && "${tx[@]}" set-window-option "${t[@]}" window-status-style         "$inactive"
-  [ -n "$active"   ] && "${tx[@]}" set-window-option "${t[@]}" window-status-current-style "$active"
-  "${tx[@]}" set-window-option "${t[@]}" window-status-format         " #I: #W "
-  "${tx[@]}" set-window-option "${t[@]}" window-status-current-format "[#I: #W]"
-  "${tx[@]}" set-window-option "${t[@]}" "@window-agent" "$name"
+  # Chain all the set-window-option calls into ONE tmux client invocation (commands
+  # separated by a literal ';' arg) instead of 5 separate ones. Each separate call is
+  # an env+tmux exec plus a socket round-trip — ~4x the wall time of one chained call
+  # (measured 66ms vs 17ms/styling), and this runs per agent window (window 0 + every
+  # restored window + the after-new-window hook), so on a loaded machine it adds up.
+  # @window-agent is unconditional and goes last so no ';' ever trails (a dangling
+  # separator = an empty command tmux rejects). Optional style pairs prepend their own.
+  local -a cmd=()
+  [ -n "$inactive" ] && cmd+=(set-window-option "${t[@]}" window-status-style         "$inactive" ';')
+  [ -n "$active"   ] && cmd+=(set-window-option "${t[@]}" window-status-current-style "$active"   ';')
+  cmd+=(set-window-option "${t[@]}" window-status-format         " #I: #W " ';')
+  cmd+=(set-window-option "${t[@]}" window-status-current-format "[#I: #W]" ';')
+  cmd+=(set-window-option "${t[@]}" "@window-agent" "$name")
+  "${tx[@]}" "${cmd[@]}"
 }
 
 # Self-test: AGENTMUX_STYLE_SELFTEST=1 bash scripts/agent_window_style.sh
