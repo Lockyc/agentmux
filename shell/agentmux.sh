@@ -13,7 +13,7 @@ AGENTMUX_BIN="${AGENTMUX_BIN:-$HOME/.agentmux/bin/amux}"
 amux() { "$AGENTMUX_BIN" "$@"; }
 
 # Zsh completion: amux <tab> completes agent names and -<flag> shortcuts; the
-# session arg of --kill/--frame-kill/--probe completes live agentmux session names.
+# session arg of --kill/--frame-kill/--probe/attach completes live agentmux session names.
 if [ -n "${ZSH_VERSION:-}" ]; then
   _amux_zsh_complete() {
     if (( CURRENT == 2 )); then
@@ -23,12 +23,12 @@ if [ -n "${ZSH_VERSION:-}" ]; then
       _amux_comps=("${(@f)$("$AGENTMUX_BIN" --complete 2>/dev/null)}")
       compadd -- "${_amux_comps[@]}"
     elif (( CURRENT == 3 )); then
-      # Second arg of --kill/--frame-kill/--probe is a session name. A case (not a
+      # Second arg of --kill/--frame-kill/--probe/attach is a session name. A case (not a
       # zsh [[ == (a|b) ]] glob) keeps shellcheck — which parses this as bash — happy.
       # words is a zsh completion special array, set by the completion system.
       # shellcheck disable=SC2154
       case "${words[2]}" in
-        --kill|--frame-kill|--probe)
+        --kill|--frame-kill|--probe|attach)
           local -a _amux_sess
           # shellcheck disable=SC2296
           _amux_sess=("${(@f)$("$AGENTMUX_BIN" --complete-sessions 2>/dev/null)}")

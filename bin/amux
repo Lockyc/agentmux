@@ -373,15 +373,12 @@ _amux_default_session_name() {
   _amux_sanitize_session "$(basename "$PWD")"
 }
 
+# Attach the current project's agent session (on its $PWD shard). switch-client is
+# gone with the shared default socket — it can't cross sockets, and the direct-tmux
+# in-place switch it served is a workflow we no longer support (each project is its
+# own server; you attach, you don't switch within one).
 _amux_attach() {
-  local name="$1"
-  # Use switch-client if our TTY is already a tmux pane (check via list-panes,
-  # not $TMUX which is inherited into subprocesses and gives false positives).
-  if tmux list-panes -a -F '#{pane_tty}' 2>/dev/null | grep -qxF "$(tty 2>/dev/null)"; then
-    _amux_atmux switch-client -t "=$name"
-  else
-    _amux_atmux attach-session -t "=$name"
-  fi
+  _amux_atmux attach-session -t "=$1"
 }
 
 # Update an installed clone in place. Dev/symlink installs are not clones and
@@ -682,6 +679,18 @@ _amux_frame() {
 
 # List active frame wrappers (they live on their own socket, so a plain `tmux ls`
 # in the base terminal — the default socket — never shows them).
+# Attach to a running agent session by name from anywhere (no $PWD to derive from):
+# find the agent socket hosting it, attach there. Errors cleanly if not found/live.
+_amux_attach_by_name() {
+  local name sock
+  name=$(_amux_sanitize_session "$1")
+  sock=$(_amux_agent_socks | _amux_sock_hosting "$name")
+  if [ -z "$sock" ]; then
+    echo "amux: no live agent session '$name' (try: amux --sessions)" >&2; return 1
+  fi
+  env -u TMUX tmux -L "$sock" attach-session -t "=$name"
+}
+
 _amux_frames() {
   local s any=0
   for s in $(_amux_frame_socks); do
@@ -1133,6 +1142,12 @@ amux() {
         _amux_kill_all
         return $?
         ;;
+      attach)
+        shift
+        if [ $# -eq 0 ]; then echo "amux: usage: amux attach <name>" >&2; return 1; fi
+        _amux_attach_by_name "$1"
+        return $?
+        ;;
       --complete)
         # Hidden: emit agent names + -flags for shell completion backends.
         agentmux_list_agent_completions
@@ -1161,6 +1176,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
                  restorable (a plain `amux` launch would offer the restore picker); else exit 1.
   --kill         kill an agent session [session] + its frame/term (default: current dir)
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
+  attach <name>  attach to a running agent session by name (from any directory)
   --update       update to the latest agentmux (git pull)
   --colours      preview the colour palette (grid|pick subcommands)
   --frame        open a side terminal (left) beside amux (right), nested tmux
@@ -1438,6 +1454,24 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     [ -n "$_ms_save" ] && AGENTMUX_AGENT_SOCKET="$_ms_save"
   else
     echo "SKIP: multi-shard agent commands test (tmux not found)"
+  fi
+
+  # --- amux attach <name> resolves the hosting shard (socket lookup only — the
+  #     actual attach-session needs a TTY, so that part isn't exercised here).
+  #     Needs a real tmux; skip cleanly if absent. Short TMUX_TMPDIR per the
+  #     AF_UNIX 104-char socket-path limit, same as the multi-shard test above.
+  if command -v tmux >/dev/null 2>&1; then
+    _an_save="${AGENTMUX_AGENT_SOCKET:-}"; unset AGENTMUX_AGENT_SOCKET
+    _an_dir="/tmp/amuxtest-attach-$$"; export TMUX_TMPDIR="$_an_dir"; mkdir -p "$_an_dir"
+    tmux -L agentmux-agent-303 new-session -d -s projZ; tmux -L agentmux-agent-303 set -t projZ @autoagent 1
+    _assert "attach resolves shard" "agentmux-agent-303" "$(_amux_agent_socks | _amux_sock_hosting projZ)"
+    # missing name → nonzero + message
+    _an_out=$(_amux_attach_by_name __nope__ 2>&1); _an_rc=$?
+    _assert "attach missing exit" "1" "$_an_rc"
+    tmux -L agentmux-agent-303 kill-server 2>/dev/null; rm -rf "$_an_dir"; unset TMUX_TMPDIR
+    [ -n "$_an_save" ] && AGENTMUX_AGENT_SOCKET="$_an_save"
+  else
+    echo "SKIP: attach resolution test (tmux not found)"
   fi
 
   # --- _amux_atmux lands on the $PWD agent shard (production path, override unset).
