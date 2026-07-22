@@ -410,7 +410,9 @@ _amux_launch_window0() {
   _amux_atmux rename-window -t "=$session:0" "$agent"
   agentmux_set_window_style "$agent" "$session:0"
   _amux_atmux send-keys -t "=$session:0" "$cmd" Enter
-  "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "=$session:0" 2>/dev/null || true
+  # Explicit socket: this CLI process hasn't attached to the (possibly sharded)
+  # agent session yet, so it has no ambient $TMUX pointing at it — see _sl_ctx.
+  "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "=$session:0" "$(_amux_agent_sock)" 2>/dev/null || true
 }
 
 # Print a paste-ready `colour =` field for an agent (testable; no I/O loop).
@@ -806,7 +808,12 @@ _amux_restore_into() {
       _amux_atmux rename-window -t "$win" "$agent"
       agentmux_set_window_style "$agent" "$win"
     fi
-    "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "$win" 2>/dev/null || true
+    # Explicit socket (same reason as _amux_launch_window0): this CLI process
+    # has no ambient $TMUX pointing at the restored project's (possibly
+    # sharded) agent socket. _amux_agent_sock honours the local
+    # AGENTMUX_AGENT_SOCKET override set above, so this targets the SAME
+    # shard the new-session/new-window calls above just used.
+    "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "$win" "$(_amux_agent_sock)" 2>/dev/null || true
   done
   if [ "$created" = 1 ]; then
     _amux_atmux set-option -t "$name" "@autoagent" "1"
@@ -1069,6 +1076,23 @@ _amux_kill_all() {
   echo "killed $count agent session(s) + all frames/terminals"
 }
 
+# One-time notice: agents on the OLD shared default socket can't be relocated to a
+# per-project shard (tmux can't move a live session between servers), so tell the user
+# once to relaunch them. Production never creates on the default socket again, so legacy
+# sessions only ever decrease — a single persistent marker ("notify once, ever") suffices.
+_amux_legacy_notice() {
+  local state marker
+  state="${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}"
+  marker="$state/.legacy-socket-notified"
+  [ -f "$marker" ] && return 0
+  # @autoagent sessions on the real default socket (no -L)?
+  if env -u TMUX tmux list-sessions -F '#{?@autoagent,x,}' 2>/dev/null | grep -q x; then
+    local n; n=$(env -u TMUX tmux list-sessions -F '#{?@autoagent,x,}' 2>/dev/null | grep -c x)
+    echo "amux: $n agent(s) still on the old shared tmux socket — kill+relaunch them to move onto per-project sockets." >&2
+    mkdir -p "$state" 2>/dev/null && : > "$marker" 2>/dev/null
+  fi
+}
+
 # amux [(-<flag> | <agent_name>)] [session_name]
 #
 # Creates or attaches a tmux session managed by agentmux.
@@ -1191,6 +1215,12 @@ EOF
         ;;
     esac
   fi
+
+  # One-time notice for agents still stranded on the old shared default socket
+  # (see _amux_legacy_notice). Placed after every case arm's `return` above, so
+  # it's unreachable from --probe/--sessions/--complete*/etc — only a real
+  # launch (plain or [frame] default=true) falls through to here.
+  _amux_legacy_notice
 
   # [frame] default = true makes a bare amux open a frame, as if --frame were
   # passed. Skipped when --no-frame was given, or when already inside tmux and
@@ -1896,6 +1926,28 @@ STUB
     if [ -n "$_rsdsave" ]; then export AGENTMUX_STATE_DIR="$_rsdsave"; else unset AGENTMUX_STATE_DIR; fi
   else
     echo "SKIP: restore integration test (tmux not found)"
+  fi
+
+  # --- legacy notice: fires once for an @autoagent session on the REAL default
+  #     socket (no -L), then is suppressed by its persistent marker. Needs a real
+  #     tmux; skip cleanly if absent (same pattern as neighbouring cases). Short
+  #     TMUX_TMPDIR isolates this from the user's actual default socket.
+  if command -v tmux >/dev/null 2>&1; then
+    _ln_dir="/tmp/amuxtest-legacy-$$"; export TMUX_TMPDIR="$_ln_dir"; mkdir -p "$_ln_dir"
+    _ln_state="/tmp/amuxtest-legstate-$$"; rm -rf "$_ln_state"
+    _ln_save_state="${AGENTMUX_STATE_DIR:-}"; export AGENTMUX_STATE_DIR="$_ln_state"
+    env -u TMUX tmux new-session -d -s legacyagent; env -u TMUX tmux set -t legacyagent @autoagent 1
+    _ln1=$(_amux_legacy_notice 2>&1); _ln_marker="$_ln_state/.legacy-socket-notified"
+    [ -f "$_ln_marker" ] && _got=marked || _got=nomarker
+    _assert "legacy notice creates marker" "marked" "$_got"
+    case "$_ln1" in *"agent(s) still on the old shared tmux socket"*) _got=ok ;; *) _got="bad:$_ln1" ;; esac
+    _assert "legacy notice message" "ok" "$_got"
+    _ln2=$(_amux_legacy_notice 2>&1)
+    _assert "legacy notice suppressed after marker" "" "$_ln2"
+    env -u TMUX tmux kill-server 2>/dev/null; rm -rf "$_ln_dir" "$_ln_state"; unset TMUX_TMPDIR
+    if [ -n "$_ln_save_state" ]; then export AGENTMUX_STATE_DIR="$_ln_save_state"; else unset AGENTMUX_STATE_DIR; fi
+  else
+    echo "SKIP: legacy notice test (tmux not found)"
   fi
 
   rm -rf "$_selftest_cache"

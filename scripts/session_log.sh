@@ -4,7 +4,9 @@
 # Invoked as a subprocess (never sourced).
 #
 # Subcommands:
-#   open  <agent> [target]   append an open record (target defaults to current pane)
+#   open  <agent> [target] [socket]   append an open record (target defaults to current
+#                            pane; socket is only needed when invoked OUTSIDE the tmux
+#                            server the session lives on — see _sl_ctx)
 #   resume <label> <cmd> [fork_cmd]   append/refresh a generic resume hint (+ optional
 #                            fork hint) for the current window. fork_cmd is owned by the
 #                            agent adapter, never composed here — this core stays agnostic.
@@ -62,6 +64,19 @@ _sl_append() {
 # back to $TMUX_PANE (the pane THIS process runs in). A context-less
 # `display-message` resolves to the session's ACTIVE window, not our own — which
 # misattributes the resume hint to whatever window you happen to be viewing.
+#
+# [socket] names the tmux -L socket to query explicitly. Callers invoked FROM
+# INSIDE the tmux server (a hook's run-shell, or a process running in the pane
+# itself — launch_agent.sh, fork_session.sh, the window-unlinked snapshot hook,
+# the Claude Code adapter) inherit the correct $TMUX from that server and never
+# need it: bare `tmux` already resolves to the (possibly per-project sharded)
+# socket they're running under. A caller OUTSIDE the tmux server — bin/amux's
+# own CLI process, which calls this before it attaches to the session it just
+# created — has no such ambient $TMUX pointing at the right shard, so bare
+# `tmux -t <target>` falls back to the literal tmux "default" socket and finds
+# nothing there once sessions are sharded (the open event silently drops). Pass
+# the resolved agent socket explicitly in that case; -L overrides any inherited
+# $TMUX regardless (env -u TMUX is belt-and-suspenders, matching _amux_atmux).
 _sl_ctx() {
   # SESSION_LOG_CTX overrides the tmux query for tests (mirrors the
   # SESSION_LOG_LIVE_* / SESSION_LOG_RESUME_MAP hooks), bypassing tmux entirely.
@@ -71,18 +86,25 @@ _sl_ctx() {
   fi
   fmt="#{socket_path}${TAB}#{pid}${TAB}#{session_name}${TAB}#{window_id}${TAB}#{window_name}${TAB}#{pane_current_path}"
   _t="${1:-${TMUX_PANE:-}}"
-  if [ -n "$_t" ]; then
+  _sock="${2:-}"
+  if [ -n "$_sock" ]; then
+    if [ -n "$_t" ]; then
+      env -u TMUX tmux -L "$_sock" display-message -p -t "$_t" "$fmt" 2>/dev/null
+    else
+      env -u TMUX tmux -L "$_sock" display-message -p "$fmt" 2>/dev/null
+    fi
+  elif [ -n "$_t" ]; then
     tmux display-message -p -t "$_t" "$fmt" 2>/dev/null
   else
     tmux display-message -p "$fmt" 2>/dev/null
   fi
 }
 
-sl_open() {  # <agent> [target]
+sl_open() {  # <agent> [target] [socket]
   _sl_enabled || return 0
-  _agent="$1"; _target="${2:-}"
+  _agent="$1"; _target="${2:-}"; _sock="${3:-}"
   IFS="$TAB" read -r _socket _pid _session _wid _wname _cwd <<EOF
-$(_sl_ctx "$_target")
+$(_sl_ctx "$_target" "$_sock")
 EOF
   [ -n "$_pid" ] || return 0
   _line=$(jq -cn \
