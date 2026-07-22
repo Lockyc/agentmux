@@ -553,13 +553,13 @@ _amux_frame() {
     tmux -L "$sock" set -p -t "$left_pid" @amux_role term
     # Optional frame prefix override ([frame] prefix); default is in frame.conf.
     # Per-session (not -g), like @amux_project below: prefix is a session option,
-    # and the shared frame socket hosts several project frames — a global set
-    # would let the last launch clobber the others (more so now it's dir-aware).
+    # and a per-project frame socket can still host several frame sessions — a global
+    # set would let the last launch clobber the others (more so now it's dir-aware).
     fprefix=$(agentmux_frame_field prefix "$PWD")
     [ -n "$fprefix" ] && tmux -L "$sock" set -t "$fsess" prefix "$fprefix"
     # Project label for the status-left badge ([amux frame] <projectdir>/<session>).
-    # Per-session (not -g): the frame socket can host several frames, each in its own
-    # project, and a global option would let the last launch clobber the others.
+    # Per-session (not -g): the frame socket can host several frame sessions (for this
+    # project), and a global option would let the last launch clobber the others.
     tmux -L "$sock" set -t "$fsess" @amux_project "$(basename "$PWD")"
     # Full launch dir (not just the basename above) so the CWD-derived --probe/
     # --kill can distinguish this frame from another project's same-basename frame.
@@ -600,7 +600,7 @@ _amux_frame() {
   fi
   # Wire the pane-died reattach hook on the frame SERVER (global) — here, not in
   # frame.conf. `-f frame.conf` is read only when the server first starts, but the
-  # frame socket is shared and long-lived, so a server that predates this hook (or
+  # frame socket is long-lived (persists across launches), so a server that predates this hook (or
   # any later frame.conf change) would never pick it up. Re-setting it on every
   # `amux --frame` is idempotent and keeps every frame on the server current. Path
   # from $AGENTMUX_SCRIPTS, shquoted so a space in the install path survives the
@@ -623,19 +623,19 @@ _amux_frame() {
   # to the agent pane, or Claude's kitty-protocol keys desync and Escape/Ctrl-C intermittently
   # die in a framed agent. tmux drops Claude's enable request, so `always` (not `on`) is what
   # forwards them; extkeys carries them from the host terminal. frame.conf sets it for a fresh
-  # server; this keeps any pre-existing frame current (same shared-long-lived-server reason).
+  # server; this keeps any pre-existing frame current (same long-lived-server reason).
   tmux -L "$sock" set-option -s extended-keys always
   tmux -L "$sock" set-option -as terminal-features 'xterm*:extkeys,screen*:extkeys'
   # Synchronized output (DECSET 2026): the frame must bracket its redraws to the host in
   # mode 2026, or ghostty tears frames and an unfocused surface flashes its hollow cursor
   # mid-redraw ("cursor flashes around the screen" in a background window). tmux does NOT
   # derive `sync` from the terminfo Sync cap, so it must be named. frame.conf sets it for a
-  # fresh server; this keeps a pre-existing frame current (same shared-long-lived-server
+  # fresh server; this keeps a pre-existing frame current (same long-lived-server
   # reason as extkeys). The feature is computed at attach, so a live frame picks it up on
   # the next reattach, not instantly.
   tmux -L "$sock" set-option -as terminal-features 'xterm*:sync,screen*:sync,tmux*:sync'
   # Reset-split binding + its per-session data, asserted here (not just frame.conf)
-  # for the same shared-long-lived-server reason as the hook above: a frame server
+  # for the same long-lived-server reason as the hook above: a frame server
   # predating this feature has no @amux_left/@amux_left_pane and no `0` override.
   # Setting both on every launch makes a stale frame pick the reset up on the next
   # relaunch, without a full rebuild. @amux_left = configured percent; @amux_left_pane
