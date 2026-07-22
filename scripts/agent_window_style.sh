@@ -2,8 +2,17 @@
 # agent_window_style.sh — source this; do not execute directly.
 # Sets tmux window-status colours and @window-agent for a named agent.
 # Requires agentmux-config.sh to already be sourced.
-# Usage: agentmux_set_window_style <agent_name> [target]
+# Usage: agentmux_set_window_style <agent_name> [target] [socket]
 #   target: optional tmux -t value (e.g. "mysession:0"); omit for current window.
+#   socket: optional tmux -L socket. Callers running INSIDE the agent tmux server
+#           (the after-new-window hook → launch_agent.sh) inherit the correct
+#           $TMUX and omit it. A caller OUTSIDE that server — bin/amux styling
+#           window 0 (or a restored window) before it has attached — has no
+#           ambient $TMUX pointing at the (possibly sharded) agent socket, so a
+#           bare `tmux -t <target>` falls back to the literal "default" socket and
+#           silently styles nothing there. Pass the resolved agent socket to force
+#           the right one (-L overrides any inherited $TMUX; env -u TMUX is
+#           belt-and-suspenders, matching _amux_atmux / session_log.sh's _sl_ctx).
 
 # colour_derive lives here; sourced for the friendly `colour` field fallback.
 # Sourcing is a no-op CLI-wise: colours.sh only dispatches when executed directly.
@@ -11,9 +20,16 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/colours.sh"
 
 agentmux_set_window_style() {
-  local name="$1" target="${2:-}"
+  local name="$1" target="${2:-}" sock="${3:-}"
   # No-op outside tmux when no explicit target (e.g. wrapper called from a plain terminal).
   [ -z "${TMUX_PANE:-}" ] && [ -z "$target" ] && return 0
+
+  # A passed socket forces the target server (see the header): bin/amux styles
+  # window 0 / restored windows from a process with no ambient $TMUX pointing at
+  # the sharded agent socket, so a bare `tmux` would land on the default socket.
+  # Hook callers omit it and use the inherited $TMUX.
+  local -a tx=(tmux)
+  [ -n "$sock" ] && tx=(env -u TMUX tmux -L "$sock")
 
   local idx inactive active
   idx=$(agentmux_find_by_name "$name")
@@ -40,11 +56,11 @@ agentmux_set_window_style() {
   local -a t=()
   [ -n "$target" ] && t=(-t "$target")
 
-  [ -n "$inactive" ] && tmux set-window-option "${t[@]}" window-status-style         "$inactive"
-  [ -n "$active"   ] && tmux set-window-option "${t[@]}" window-status-current-style "$active"
-  tmux set-window-option "${t[@]}" window-status-format         " #I: #W "
-  tmux set-window-option "${t[@]}" window-status-current-format "[#I: #W]"
-  tmux set-window-option "${t[@]}" "@window-agent" "$name"
+  [ -n "$inactive" ] && "${tx[@]}" set-window-option "${t[@]}" window-status-style         "$inactive"
+  [ -n "$active"   ] && "${tx[@]}" set-window-option "${t[@]}" window-status-current-style "$active"
+  "${tx[@]}" set-window-option "${t[@]}" window-status-format         " #I: #W "
+  "${tx[@]}" set-window-option "${t[@]}" window-status-current-format "[#I: #W]"
+  "${tx[@]}" set-window-option "${t[@]}" "@window-agent" "$name"
 }
 
 # Self-test: AGENTMUX_STYLE_SELFTEST=1 bash scripts/agent_window_style.sh
