@@ -25,8 +25,16 @@ source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 # C-f Q binding reads it back (via the shell, `${AGENTMUX_TERM_SOCKET:-…}`) to kill
 # the paired terminal on the right socket even when it's been overridden here.
 AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
-AGENTMUX_FRAME_SOCKET="${AGENTMUX_FRAME_SOCKET:-agentmux-frame}"
-export AGENTMUX_TERM_SOCKET="${AGENTMUX_TERM_SOCKET:-agentmux-term}"
+# Frame/term sockets are UNSET by default in production, so the resolvers below shard
+# them per project (cksum of $PWD) — each project gets its own single-threaded tmux
+# server, draining in parallel instead of serializing every project's output (and the
+# foreground pane's keystrokes) onto one core. An explicitly-set value (selftest
+# isolation) is honoured VERBATIM with no suffix, exactly like AGENTMUX_AGENT_SOCKET.
+# AGENTMUX_TERM_SOCKET keeps its export attribute so frame.conf's C-f Q and
+# frame_reattach.sh — which read it back INSIDE the frame server — see the derived
+# value that _amux_frame exports at launch. AGENTMUX_FRAME_SOCKET needs no export
+# (read only in-process, via the resolvers).
+export AGENTMUX_TERM_SOCKET
 # Agent sessions live on tmux's DEFAULT socket (no -L). This override exists only
 # so selftests can isolate the session-management commands onto a throwaway socket
 # instead of the user's real tmux; empty = default socket, as in production.
@@ -50,6 +58,48 @@ _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 #     closes both sinks; session names are cosmetic so nothing is lost.
 # Dash is last in the set so tr reads it as a literal, not a range endpoint.
 _amux_sanitize_session() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_'; }
+
+# --- Per-project socket resolution -------------------------------------------------
+# See the AGENTMUX_TERM_SOCKET comment above for the override-vs-shard rule.
+_amux_pwd_hash() { printf '%s' "$PWD" | cksum | cut -d' ' -f1; }
+_amux_tmux_sockdir() { printf '%s/tmux-%s\n' "${TMUX_TMPDIR:-/tmp}" "$(id -u)"; }
+
+# The socket for THIS project ($PWD). Override wins verbatim; else shard by hash.
+_amux_frame_sock() {
+  if [ -n "${AGENTMUX_FRAME_SOCKET:-}" ]; then printf '%s\n' "$AGENTMUX_FRAME_SOCKET"
+  else printf 'agentmux-frame-%s\n' "$(_amux_pwd_hash)"; fi
+}
+_amux_term_sock() {
+  if [ -n "${AGENTMUX_TERM_SOCKET:-}" ]; then printf '%s\n' "$AGENTMUX_TERM_SOCKET"
+  else printf 'agentmux-term-%s\n' "$(_amux_pwd_hash)"; fi
+}
+
+# ALL live sockets, for name-targeted commands with no $PWD to derive from. Override
+# wins (single socket); else glob the tmux socket dir. The glob matches the legacy
+# bare 'agentmux-frame'/'agentmux-term' AND sharded '<name>-<hash>', so frames already
+# running from before the upgrade stay enumerated and killable. [ -S ] filters the
+# literal pattern out when the dir has no matches (nullglob-safe, no arrays).
+_amux_frame_socks() {
+  if [ -n "${AGENTMUX_FRAME_SOCKET:-}" ]; then printf '%s\n' "$AGENTMUX_FRAME_SOCKET"; return; fi
+  local d f; d=$(_amux_tmux_sockdir)
+  for f in "$d"/agentmux-frame*; do [ -S "$f" ] && printf '%s\n' "${f##*/}"; done
+}
+_amux_term_socks() {
+  if [ -n "${AGENTMUX_TERM_SOCKET:-}" ]; then printf '%s\n' "$AGENTMUX_TERM_SOCKET"; return; fi
+  local d f; d=$(_amux_tmux_sockdir)
+  for f in "$d"/agentmux-term*; do [ -S "$f" ] && printf '%s\n' "${f##*/}"; done
+}
+
+# Read a newline socket list on stdin; echo the first socket hosting session <sess>.
+# Socket names never contain spaces/globs, so the plain read loop is safe.
+_amux_sock_hosting() {
+  local sess="$1" s found=""
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    if tmux -L "$s" has-session -t "=$sess" 2>/dev/null; then found="$s"; break; fi
+  done
+  [ -n "$found" ] && printf '%s\n' "$found"
+}
 
 # tmux on the agent (default) socket, honouring AGENTMUX_AGENT_SOCKET for test
 # isolation. In production AGENTMUX_AGENT_SOCKET is empty → default socket, but we
@@ -1245,6 +1295,26 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "help advertises --frames" "present" "$_got"
   case "$help" in *"--frame-kill"*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --frame-kill" "present" "$_got"
+
+  # --- socket resolvers ---
+  _rf_save="${AGENTMUX_FRAME_SOCKET:-}"; _rt_save="${AGENTMUX_TERM_SOCKET:-}"
+  unset AGENTMUX_FRAME_SOCKET AGENTMUX_TERM_SOCKET
+  ( cd / && case "$(_amux_frame_sock)" in agentmux-frame-[0-9]*) exit 0 ;; *) exit 1 ;; esac ) \
+    && _got=ok || _got=bad
+  _assert "frame_sock shards when unset" "ok" "$_got"
+  ( cd / && case "$(_amux_term_sock)" in agentmux-term-[0-9]*) exit 0 ;; *) exit 1 ;; esac ) \
+    && _got=ok || _got=bad
+  _assert "term_sock shards when unset" "ok" "$_got"
+  _a=$(cd / && _amux_frame_sock); _b=$(cd /tmp && _amux_frame_sock)
+  [ "$_a" != "$_b" ] && _got=differ || _got=same
+  _assert "distinct \$PWD -> distinct socket" "differ" "$_got"
+  AGENTMUX_FRAME_SOCKET="verbatim-xyz"
+  _assert "frame_sock honours override verbatim" "verbatim-xyz" "$(_amux_frame_sock)"
+  _assert "frame_socks honours override verbatim" "verbatim-xyz" "$(_amux_frame_socks)"
+  unset AGENTMUX_FRAME_SOCKET
+  # restore whatever the surrounding selftest expects
+  [ -n "$_rf_save" ] && AGENTMUX_FRAME_SOCKET="$_rf_save"
+  [ -n "$_rt_save" ] && AGENTMUX_TERM_SOCKET="$_rt_save"
 
   # --frames / --frame-kill against an isolated empty socket (no real frames touched).
   AGENTMUX_FRAME_SOCKET="amux-selftest-$$"
