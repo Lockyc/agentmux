@@ -434,7 +434,7 @@ Override the endpoint or model with environment variables:
 ```bash
 export AGENTMUX_LLM_URL=http://localhost:1234/v1/chat/completions
 export AGENTMUX_LLM_MODEL=qwen2.5-14b-instruct
-export AGENTMUX_LLM_TIMEOUT=20   # seconds
+export AGENTMUX_LLM_TIMEOUT=45   # seconds
 ```
 
 **Non-Claude agents:** any agent can participate by pushing the three rendered rows into its pane's `@amux_row1/2/3` options — the same options `status-format` reads (the display is event-driven; there is no status file to poll). Render each row from your summary line with `summary_rows.sh --stdin <row>`, set the option on your own pane, and refresh:

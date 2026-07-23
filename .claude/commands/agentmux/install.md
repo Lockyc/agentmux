@@ -244,7 +244,7 @@ Options tailored to the provider (use the built-in Other escape hatch for unlist
 
 **9c. Write config**
 
-Read `~/.agentmux/amux.toml`. Update the `[llm]` section — replace `url` and `model` with the chosen values (keep `timeout = 20` unless a custom timeout was specified). Write the file back.
+Read `~/.agentmux/amux.toml`. Update the `[llm]` section — replace `url` and `model` with the chosen values (leave `timeout` at the example default unless a custom timeout was specified). Write the file back.
 
 If the `[llm]` section is absent (unlikely — `install.sh` creates it from the example), append it.
 
