@@ -1178,6 +1178,53 @@ _amux_legacy_notice() {
   fi
 }
 
+# Ensure this project's agent session exists and is fully configured, then leave it
+# for the caller to attach (in-process for a plain launch, or via the frame's
+# bare-attach right pane). The interactive restore-picker runs here first, so a
+# framed launch prompts in the plain terminal BEFORE the frame paints. This is the
+# ONE home for the create-session logic — both the plain path and _amux_frame call
+# it, so the plain path's selftests guard the frame path too.
+# Args: <agent> <session>. Uses $PWD for the socket shard, dir, and config.
+_amux_ensure_agent_session() {
+  local agent_name="$1" name="$2"
+
+  # Recovery picker: offer this project's dropped tabs (once per dead server per
+  # cwd). TTY-guarded (reads reply on fd 0, writes list/prompt on fd 2) so an
+  # automated launch never blocks on read. If the user restores tabs, the session
+  # now exists → the create branch below is skipped (window-0-replace falls out).
+  local _amux_auto_restored=0
+  if [ -t 0 ] && [ -t 2 ]; then
+    _amux_restore_pick auto "$name"
+  fi
+
+  # Exact-match check (see _amux_session_exists): without it, `name` would
+  # prefix-match a longer existing session and we'd attach to the wrong one.
+  if ! _amux_session_exists "$name"; then
+    _amux_atmux new-session -d -s "$name" -c "$PWD"
+    _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
+    _amux_launch_window0 "$name" "$agent_name"
+  else
+    # After an auto-restore, window 0 runs a RESTORED agent and _amux_restore_into
+    # already set @agent-mode to it; don't clobber it with the launch default.
+    [ "$_amux_auto_restored" = 1 ] || _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
+  fi
+
+  # Emit ALL session options in ONE chained tmux invocation (';'-separated) — each
+  # separate call is an exec + socket round-trip. ORDERING IS LOAD-BEARING:
+  # @autoagent and @l1reserved must be set BEFORE the caller attaches (update_colors.sh
+  # only paints @autoagent sessions; the reservation must be published pre-attach).
+  local _prefix _pin_slot _reserved
+  _prefix=$(_amux_prefix)
+  _pin_slot=$(_amux_bar_pin_slot "$PWD")
+  _reserved=$(_amux_bar_reserved)
+  local -a _opts=(set-option -t "$name" "@autoagent" "1"
+                  ';' set-option -t "$name" "@amux_dir" "$PWD")
+  [ -n "$_prefix" ]   && _opts+=(';' set-option -t "$name" prefix "$_prefix")
+  [ -n "$_pin_slot" ] && _opts+=(';' set-option -t "$name" @l1idx "$_pin_slot")
+  _opts+=(';' set-option -g @l1reserved "$_reserved")
+  _amux_atmux "${_opts[@]}"
+}
+
 # amux [(-<flag> | <agent_name>)] [session_name]
 #
 # Creates or attaches a tmux session managed by agentmux.
@@ -1336,67 +1383,8 @@ EOF
   # notice is instant, the network refresh is backgrounded — never blocks launch).
   [ -x "$AGENTMUX_SCRIPTS/version_check.sh" ] && "$AGENTMUX_SCRIPTS/version_check.sh" || true
 
-  local name="$session_arg"
-
-  # Recovery picker: on an interactive launch, offer this project's dropped tabs
-  # (once per dead server per cwd). TTY-guarded so an automated launch never blocks
-  # on read. If the user restores tabs, the session now exists → the block below
-  # skips the fresh window-0 agent (window-0-replace falls out naturally).
-  local _amux_auto_restored=0
-  # Guard the fds the picker actually uses: it reads the reply on stdin (fd 0) and
-  # writes the list + prompt to stderr (fd 2). Testing fd 2 (not fd 1) means
-  # `amux 2>/dev/null` correctly skips the picker instead of blocking on an
-  # invisible prompt, while a redirected stdout still shows it.
-  if [ -t 0 ] && [ -t 2 ]; then
-    _amux_restore_pick auto "$name"
-  fi
-
-  # Exact-match check (see _amux_session_exists): without it, `name` would
-  # prefix-match a longer existing session and we'd attach to the wrong one
-  # instead of creating the session you asked for. set-option below targets the
-  # bare name — safe because by this point the exact session exists (just created,
-  # or confirmed by the exact check) and tmux matches exact before prefix.
-  if ! _amux_session_exists "$name"; then
-    _amux_atmux new-session -d -s "$name" -c "$PWD"
-    _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
-    _amux_launch_window0 "$name" "$agent_name"
-  else
-    # After an auto-restore, window 0 runs a RESTORED agent and _amux_restore_into
-    # already set @agent-mode to it; don't clobber it with the launch default
-    # (relaunch.sh's prefix-x and launch_agent.sh's prefix-c both read @agent-mode).
-    [ "$_amux_auto_restored" = 1 ] || _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
-  fi
-
-  # Compute the optional session-option values, then emit ALL the session options in
-  # ONE chained tmux invocation (';'-separated) instead of up to five separate
-  # _amux_atmux calls — each is an exec + socket round-trip (~4x the wall time of one
-  # chained call; same win as agent_window_style.sh). These options are independent, so
-  # order among them is irrelevant; the only constraint below still holds.
-  #   @amux_dir  — the launch dir, so the CWD-derived --probe/--kill can tell this
-  #                session apart from another project sharing its basename (dir-guard
-  #                block). Set on every (re)launch so a legacy session picks it up.
-  #   prefix     — optional [amux] prefix, per-session so it never touches other
-  #                sessions' ~/.tmux.conf prefix. Empty = unset/collided → omit.
-  #   @l1idx     — optional pinned bar-colour slot ([amux.dirs."$PWD"].session_colour).
-  #   @l1reserved— publish every pinned slot globally so the hook keeps them out of the
-  #                auto-assign pool.
-  # ORDERING IS LOAD-BEARING: @autoagent and @l1reserved must both be set BEFORE
-  # _amux_attach. update_colors.sh only paints @autoagent sessions, so the
-  # session-created hook is a no-op while this session is un-flagged; the first real
-  # paint happens on attach, by which point the reservation is published. Emitting them
-  # in one pre-attach call preserves this; don't move any set after the attach.
-  local _prefix _pin_slot _reserved
-  _prefix=$(_amux_prefix)
-  _pin_slot=$(_amux_bar_pin_slot "$PWD")
-  _reserved=$(_amux_bar_reserved)
-  local -a _opts=(set-option -t "$name" "@autoagent" "1"
-                  ';' set-option -t "$name" "@amux_dir" "$PWD")
-  [ -n "$_prefix" ]   && _opts+=(';' set-option -t "$name" prefix "$_prefix")
-  [ -n "$_pin_slot" ] && _opts+=(';' set-option -t "$name" @l1idx "$_pin_slot")
-  _opts+=(';' set-option -g @l1reserved "$_reserved")
-  _amux_atmux "${_opts[@]}"
-
-  _amux_attach "$name"
+  _amux_ensure_agent_session "$agent_name" "$session_arg"
+  _amux_attach "$session_arg"
 }
 
 # Self-test: AMUX_SELFTEST=1 bash bin/amux
@@ -2094,6 +2082,36 @@ STUB
     AGENTMUX_AGENT_SOCKET="$_w0save"; AGENTMUX_CONFIG="$_w0cfgsave"; _amux_json_cache="$_w0cache"
   else
     echo "SKIP: window-0 style test (tmux not found)"
+  fi
+
+  # --- _amux_ensure_agent_session creates + configures a session, leaves it
+  #     detached (the caller attaches). This is the shared create path for BOTH the
+  #     plain launch and _amux_frame, so proving it here guards the frame path too.
+  #     Needs a real tmux; skip cleanly if absent. Rides the selftest-wide
+  #     TMUX_TMPDIR (the single isolation point — never a per-block one). Stdin from
+  #     /dev/null so the restore-picker's TTY guard skips it deterministically. A
+  #     benign `cmd = ":"` config (agent literally named "work") keeps window-0's
+  #     send-keys inert, same as the window-0 style test above. ---
+  if command -v tmux >/dev/null 2>&1; then
+    _es_save="$AGENTMUX_AGENT_SOCKET"; _es_cfgsave="$AGENTMUX_CONFIG"; _es_cache="$_amux_json_cache"
+    AGENTMUX_AGENT_SOCKET="amux-ensure-selftest-$$"
+    _es_cfg=$(mktemp); printf '[[agents]]\nname = "work"\nlabel = "w"\ncolour = "teal"\ncmd = ":"\n' > "$_es_cfg"
+    AGENTMUX_CONFIG="$_es_cfg"; _amux_json_cache=""
+    ( cd /tmp && _amux_ensure_agent_session work ensureproj </dev/null ) 2>/dev/null
+    _assert "ensure creates session" "1" \
+      "$(_amux_atmux has-session -t '=ensureproj' 2>/dev/null && echo 1 || echo 0)"
+    _assert "ensure sets @autoagent" "1" \
+      "$(_amux_atmux show-options -qv -t ensureproj @autoagent 2>/dev/null)"
+    _assert "ensure sets @agent-mode" "work" \
+      "$(_amux_atmux show-options -qv -t ensureproj @agent-mode 2>/dev/null)"
+    _assert "ensure sets @amux_dir" "/tmp" \
+      "$(_amux_atmux show-options -qv -t ensureproj @amux_dir 2>/dev/null)"
+    _assert "ensure names window 0" "work" \
+      "$(_amux_atmux display-message -t '=ensureproj:0' -p '#{window_name}' 2>/dev/null)"
+    _amux_atmux kill-server 2>/dev/null; rm -f "$_es_cfg"
+    AGENTMUX_AGENT_SOCKET="$_es_save"; AGENTMUX_CONFIG="$_es_cfgsave"; _amux_json_cache="$_es_cache"
+  else
+    echo "SKIP: ensure_agent_session test (tmux not found)"
   fi
 
   # --- legacy notice: fires once for an @autoagent session on the REAL default
