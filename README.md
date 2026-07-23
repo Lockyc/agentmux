@@ -145,6 +145,30 @@ All of these are pressed **after the prefix** (`C-b` by default).
 | `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched. agentmux already knows the session id and which wrapper to launch it with, so there is nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
 | `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
 
+### Customizing tmux (the overlay)
+
+agentmux runs each agent — and, under `--frame`, the wrapper and scratch terminal —
+on its **own** tmux server that does **not** read your `~/.tmux.conf`. That isolation
+is deliberate: a config that loads a plugin manager (TPM) would run its synchronous
+plugin load on every cold per-project launch and stall it for seconds. agentmux
+re-sets the sensible defaults itself (escape-time, focus-events, scrollback, mouse,
+clipboard), so nothing an agent pane needs is lost.
+
+To add **your own** tmux settings on top — vi copy-mode, custom bindings, a different
+status style — drop them in an optional overlay that every agentmux socket sources
+**last**, so your settings win:
+
+```bash
+cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.tmux.conf
+# edit ~/.agentmux/user.tmux.conf, then:
+amux --reload        # applies it to running agent servers
+```
+
+You only need this file if you want to customize — an absent overlay changes nothing.
+Prefer copying the specific bindings/options you want rather than `source`-ing a full
+`~/.tmux.conf` that loads plugins (that reintroduces the cold-start stall the isolation
+removes). See the example file's header for the full caveats.
+
 ### Directory-based agent selection
 
 Give an agent a `dirs` list and a bare `amux` (no flag, no agent name) auto-selects it based on the current directory — no flag or `prefix m` toggle needed:

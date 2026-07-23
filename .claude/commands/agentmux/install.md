@@ -158,6 +158,20 @@ source-file ~/.agentmux/tmux/agentmux.conf
 
 Report whether the line was already present or newly added.
 
+Then mention the optional tmux overlay: agentmux's own servers (agent, `--frame`
+wrapper, scratch terminal) run isolated and do **not** read `~/.tmux.conf`, so a
+user who wants their own tmux settings there (vi copy-mode, custom bindings,
+status style) copies the overlay example — it's sourced last, so their settings
+override agentmux's defaults:
+
+```
+cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.tmux.conf
+```
+
+Don't create it unless asked — an absent overlay is a silent no-op. Point at the
+file's header for the caveats (chiefly: don't `source` a full config that loads
+TPM, or you reintroduce the cold-start stall the isolation removes).
+
 ### 8. Wire Claude Code hooks (if selected)
 
 The six hooks to wire:

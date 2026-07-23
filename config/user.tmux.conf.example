@@ -1,0 +1,52 @@
+# user.tmux.conf — OPTIONAL agentmux tmux overlay.
+#
+# Copy to ~/.agentmux/user.tmux.conf and put any tmux settings you want applied to
+# agentmux's servers here. It is sourced LAST by the agent, frame, and term sockets
+# (via `source-file -q`), so your settings override agentmux's own defaults.
+# You do NOT need this file — an absent overlay is a silent no-op. Create it only
+# to customize.
+#
+# WHY THIS EXISTS
+#   agentmux runs each project's agent — and, under `amux --frame`, the frame
+#   wrapper and its scratch terminal — on its OWN tmux server with its OWN `-f`
+#   config. None of them read your ~/.tmux.conf. That isolation is deliberate: a
+#   cold per-project agent server that fell through to ~/.tmux.conf would run TPM's
+#   synchronous plugin load and stall every launch for seconds. agentmux instead
+#   re-sets the sensible defaults itself (escape-time, focus-events, history-limit,
+#   mouse, clipboard, …). This overlay is the escape hatch for everything past that
+#   fixed list — bring back the pieces of your own config you want, without the
+#   plugin-load cost.
+#
+# FOOTGUN — don't just re-source your whole config
+#   You *can* write `source-file ~/.tmux.conf` below, but if that file loads TPM or
+#   other plugins you reintroduce exactly the cold-start stall this design removed.
+#   Prefer copying the specific bindings/options you care about into this file.
+#
+# RELOAD & IDEMPOTENCY
+#   `amux --reload` re-sources the agent config — and therefore this file — into
+#   every live agent server. Prefer idempotent settings (`set -g`, `bind`) over
+#   anything that accumulates when sourced twice.
+#
+# SCOPE NOTE
+#   This one file is read by all three sockets. The frame is a purpose-built
+#   wrapper with a fixed two-pane layout, so be conservative with lines that rebind
+#   its keys or restyle its bar (they can disrupt --frame). The agent pane and the
+#   scratch terminal have no such constraint — customize those freely.
+#
+# ── Examples (uncomment / edit) ──────────────────────────────────────────────
+
+# vi keys in copy mode
+# setw -g mode-keys vi
+
+# a bigger scrollback than agentmux's default
+# set -g history-limit 100000
+
+# your own status-bar style (agentmux styles the bar per session; this overrides)
+# set -g status-style 'bg=colour234,fg=colour252'
+
+# a custom key binding
+# bind-key C-r source-file ~/.agentmux/user.tmux.conf \; display "overlay reloaded"
+
+# a custom clipboard pipe (must be here to reach --frame copies — the frame socket
+# grabs the drag-select first; see frame.conf)
+# bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"

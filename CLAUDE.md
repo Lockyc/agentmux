@@ -25,7 +25,14 @@ path). So a live-server diagnostic targets *that project's own* socket —
 `tmux -L agentmux-<role>-<cksum $PWD>` — not a bare role name. A **framed** agent runs two
 tmux deep (frame → agent); an un-framed one is a single layer. That nesting is what the
 escape/key footguns below turn on. Each socket loads only its own `-f` config
-(`agent.conf` → `agentmux.conf` / `frame.conf` / `term.conf`); **none sources `~/.tmux.conf`**.
+(`agent.conf` → `agentmux.conf` / `frame.conf` / `term.conf`); **none sources `~/.tmux.conf`**
+(deliberate — falling through to it runs TPM's synchronous plugin load on every cold
+per-project agent server; `agent.conf` re-sets the sensible defaults itself). All three
+sockets instead `source-file -q ~/.agentmux/user.tmux.conf` **last** — the optional user
+overlay (a user file at `~/.agentmux/`, not repo content; `config/user.tmux.conf.example`
+is the template). It's the escape hatch that isolation removed: user settings win over our
+defaults, absent = silent no-op, and `amux --reload` re-sources it into live agent servers
+(so it wants idempotent lines).
 
 ## Footguns
 
@@ -70,6 +77,7 @@ pointer list at the end rather than a second copy here.)
 | `tmux/term.conf` | `amux --frame` left scratch terminal config (own socket; persistent) |
 | `tmux/agent.conf` | Agent socket config, loaded via `-f` by `_amux_atmux` (sources `agentmux.conf`; no `~/.tmux.conf`/TPM). Keeps a cold per-project agent server fast |
 | `config/amux.toml.example` | Example agent config |
+| `config/user.tmux.conf.example` | Template for the optional user tmux overlay (`~/.agentmux/user.tmux.conf`) — arbitrary tmux settings the agent/frame/term sockets `source-file -q` last, so they override amux's defaults. The escape hatch for the deliberate `~/.tmux.conf` isolation |
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
 | `docs/ai-summary.md` | AI summary design rationale: invariants, ruled-out approaches, eval method — **start here when revisiting the summary feature** |
