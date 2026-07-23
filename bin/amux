@@ -40,6 +40,16 @@ export AGENTMUX_TERM_SOCKET
 # selftests can isolate the session-management commands onto a throwaway socket instead
 # of that derived shard; empty = the derived per-project shard, as in production.
 AGENTMUX_AGENT_SOCKET="${AGENTMUX_AGENT_SOCKET:-}"
+# Dir holding the optional per-role user overlays (user.{agent,frame,term}.tmux.conf).
+# The agent/frame/term tmux confs `source-file -q $AGENTMUX_USER_DIR/user.<role>.tmux.conf`
+# LAST, so tmux expands this from the environment it captured at server start — hence the
+# EXPORT (a plain var wouldn't reach the tmux process). Defaults to ~/.agentmux, the user
+# install root (where amux.toml lives too); an explicit value redirects the whole set, so
+# selftests read throwaway overlays instead of the user's real ~/.agentmux/user.*.tmux.conf
+# — exactly the AGENTMUX_*_SOCKET isolation idiom. tmux reads source-file vars from the
+# server's frozen environment, so `amux --reload` re-reads the SAME dir the server was born
+# with regardless of the reloading client's env.
+export AGENTMUX_USER_DIR="${AGENTMUX_USER_DIR:-$HOME/.agentmux}"
 # Absolute path to this launcher (for --frame's right-pane re-invocation), resolved
 # once here from the same BASH_SOURCE the dirs above use.
 AGENTMUX_BIN="${AGENTMUX_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/$(basename "${BASH_SOURCE[0]}")}"
@@ -1663,6 +1673,65 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     [ -n "$_at_save" ] && AGENTMUX_AGENT_SOCKET="$_at_save"
   else
     echo "SKIP: atmux \$PWD shard test (tmux not found)"
+  fi
+
+  # --- User overlays: each role's socket sources ONLY its own overlay, LAST (so it
+  #     overrides amux's defaults), and `amux --reload` re-applies the AGENT one live.
+  #     AGENTMUX_USER_DIR redirects the overlay dir (default ~/.agentmux) at a throwaway
+  #     copy, so this reads test files, never the user's real ~/.agentmux/user.*.tmux.conf.
+  #     All three role files exist in the dir on purpose: the cross-leak guard proves a
+  #     server picks up ONLY its own (the bug the per-role split fixed). @overlay_role's
+  #     value is that proof — it's set (sourced) AND carries the role's own name (no leak).
+  if command -v tmux >/dev/null 2>&1; then
+    _ovl="$_selftest_cache/overlays"; mkdir -p "$_ovl"
+    printf 'set -g @overlay_role agent\nset -g history-limit 13579\n' > "$_ovl/user.agent.tmux.conf"
+    printf 'set -g @overlay_role frame\n' > "$_ovl/user.frame.tmux.conf"
+    printf 'set -g @overlay_role term\n'  > "$_ovl/user.term.tmux.conf"
+    export AGENTMUX_USER_DIR="$_ovl"
+
+    # AGENT socket via the production launch path (_amux_atmux -f agent.conf).
+    _ov_save="${AGENTMUX_AGENT_SOCKET:-}"; AGENTMUX_AGENT_SOCKET="amux-selftest-ovla-$$"
+    _amux_atmux new-session -d -s ovlprobe 2>/dev/null
+    _assert "agent overlay sourced" "agent" \
+      "$(tmux -L "$AGENTMUX_AGENT_SOCKET" show -gv @overlay_role 2>/dev/null)"
+    # Sourced LAST → overrides agent.conf's own `history-limit 50000`.
+    _assert "agent overlay wins over amux default" "13579" \
+      "$(tmux -L "$AGENTMUX_AGENT_SOCKET" show -gv history-limit 2>/dev/null)"
+    # `amux --reload` re-sources it: bump the file, reload, see the new value. The server
+    # froze AGENTMUX_USER_DIR=$_ovl at start, so reload re-reads the same dir regardless
+    # of the client env (tmux expands source-file vars from the server's environment).
+    printf 'set -g @overlay_role agent-reloaded\n' > "$_ovl/user.agent.tmux.conf"
+    amux --reload >/dev/null 2>&1
+    _assert "agent overlay re-sourced by --reload" "agent-reloaded" \
+      "$(tmux -L "$AGENTMUX_AGENT_SOCKET" show -gv @overlay_role 2>/dev/null)"
+    tmux -L "$AGENTMUX_AGENT_SOCKET" kill-server 2>/dev/null
+    if [ -n "$_ov_save" ]; then AGENTMUX_AGENT_SOCKET="$_ov_save"; else unset AGENTMUX_AGENT_SOCKET; fi
+
+    # FRAME socket (raw -f frame.conf) sources ONLY user.frame.tmux.conf — no agent/term leak.
+    env -u TMUX tmux -L "amux-selftest-ovlf-$$" -f "$AGENTMUX_TMUX/frame.conf" new-session -d 2>/dev/null
+    _assert "frame overlay sourced, no cross-leak" "frame" \
+      "$(tmux -L "amux-selftest-ovlf-$$" show -gv @overlay_role 2>/dev/null)"
+    tmux -L "amux-selftest-ovlf-$$" kill-server 2>/dev/null
+
+    # TERM socket (raw -f term.conf) sources ONLY user.term.tmux.conf.
+    env -u TMUX tmux -L "amux-selftest-ovlt-$$" -f "$AGENTMUX_TMUX/term.conf" new-session -d 2>/dev/null
+    _assert "term overlay sourced, no cross-leak" "term" \
+      "$(tmux -L "amux-selftest-ovlt-$$" show -gv @overlay_role 2>/dev/null)"
+    tmux -L "amux-selftest-ovlt-$$" kill-server 2>/dev/null
+
+    # Absent overlay = silent no-op: a dir with no role file leaves amux's defaults intact.
+    _ovle="$_selftest_cache/overlays-empty"; mkdir -p "$_ovle"; AGENTMUX_USER_DIR="$_ovle"
+    _ov_save2="${AGENTMUX_AGENT_SOCKET:-}"; AGENTMUX_AGENT_SOCKET="amux-selftest-ovle-$$"
+    _amux_atmux new-session -d -s ovleprobe 2>/dev/null
+    _assert "absent overlay is a no-op (marker unset)" "" \
+      "$(tmux -L "$AGENTMUX_AGENT_SOCKET" show -gv @overlay_role 2>/dev/null)"
+    _assert "absent overlay keeps amux default (history 50000)" "50000" \
+      "$(tmux -L "$AGENTMUX_AGENT_SOCKET" show -gv history-limit 2>/dev/null)"
+    tmux -L "$AGENTMUX_AGENT_SOCKET" kill-server 2>/dev/null
+    if [ -n "$_ov_save2" ]; then AGENTMUX_AGENT_SOCKET="$_ov_save2"; else unset AGENTMUX_AGENT_SOCKET; fi
+    unset AGENTMUX_USER_DIR
+  else
+    echo "SKIP: user overlay tests (tmux not found)"
   fi
 
   # --frames / --frame-kill against an isolated empty socket (no real frames touched).

@@ -29,8 +29,12 @@ escape/key footguns below turn on. Each socket loads only its own `-f` config
 (deliberate — falling through to it runs TPM's synchronous plugin load on every cold
 per-project agent server; `agent.conf` re-sets the sensible defaults itself). Instead
 each socket `source-file -q`'s its **own PER-ROLE** overlay **last** —
-`user.{agent,frame,term}.tmux.conf` at `~/.agentmux/` (user files, not repo content;
-`config/user.tmux.conf.example` is the template). Per-role is load-bearing, **not** three
+`$AGENTMUX_USER_DIR/user.{agent,frame,term}.tmux.conf` (`AGENTMUX_USER_DIR` is exported by
+`bin/amux`, default `~/.agentmux`; user files, not repo content; `config/user.tmux.conf.example`
+is the template). The dir is a var, not a literal `~`, on purpose — an explicit
+`AGENTMUX_USER_DIR` redirects the whole set so the selftest reads throwaway overlays, the same
+isolation idiom as `AGENTMUX_*_SOCKET`; don't "simplify" the conf lines back to `~`, that
+silently unhooks the overlay tests. Per-role is load-bearing, **not** three
 copies of one file: the frame runs a different prefix (`C-f`) and unbinds the window keys
 for its fixed layout, so a *single shared* overlay would apply a user `bind-key` to all
 three servers and break the frame — the reason the initial one-file design was wrong.
