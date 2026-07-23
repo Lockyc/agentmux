@@ -15,7 +15,7 @@ Shell scripts only — split between bash, POSIX sh, and (for the fish integrati
 
 When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
 
-## Sockets — the server/sharding model everything below assumes
+## Sockets — the server/sharding model
 
 All amux tmux servers are **sharded per project**: `agentmux-{frame,term,agent}-<cksum $PWD>`,
 one server per project per role — never one shared server, never tmux's real `default`
