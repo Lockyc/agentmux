@@ -336,8 +336,22 @@ sl_dropped() {
 
   # Per (socket,pid): decide dead vs live, and capture the recorded live-set (or '*'
   # for a dead server with no sidecar → all windows count). Live servers emit nothing.
+  #
+  # SCOPE THE LIVENESS SWEEP TO THE QUERIED cwd. A scoped query (--pending/--new/bare
+  # cwd) can only ever emit rows for servers that opened a window in that cwd — the awk
+  # below drops every other-cwd row (cwd!=scope). So only those servers' liveness needs
+  # checking, and _sl_server_live spawns a tmux per server: a ledger holding N dead
+  # servers across many projects otherwise pays O(N) tmux probes on EVERY per-dir
+  # presence poll — the slow path warden hits every few seconds for each session-less
+  # tab with prior history (one project's --pending was ~5s at ~90 stale servers). Filter
+  # on the DECODED cwd (fold col 6), so it stays correct for cwds the grep fast-path above
+  # can't screen (quotes / control chars). --global and the empty scope keep the full set.
   state=$(mktemp) || { rm -f "$rows"; return 1; }
-  cut -f1,2 "$rows" | sort -u | while IFS="$TAB" read -r socket pid; do
+  case "$_scope" in
+    --global | "") _servers=$(cut -f1,2 "$rows" | sort -u) ;;
+    *) _servers=$(awk -F"$TAB" -v c="$_scope" '$6==c{print $1 "\t" $2}' "$rows" | sort -u) ;;
+  esac
+  printf '%s\n' "$_servers" | while IFS="$TAB" read -r socket pid; do
     [ -n "$pid" ] || continue
     smax=$(awk -F"$TAB" -v s="$socket" -v p="$pid" '$1==s&&$2==p{if($9+0>m)m=$9}END{print m+0}' "$rows")
     if _sl_server_live "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
@@ -606,8 +620,12 @@ _assert() {  # <desc> <expected> <actual>
   else fail=$((fail+1)); echo "FAIL: $1 — expected '$2' got '$3'"; fi
 }
 
-# Stub tmux: canned display-message context, no real server needed.
+# Stub tmux: canned display-message context, no real server needed. A `-S <socket>` call
+# (every _sl_server_live liveness probe / snapshot) returns no pid → the server reads DEAD,
+# and when _SL_TEST_PROBED is set the socket is tallied there — the seam the scoping test
+# uses to see WHICH servers a query actually probes (inline-set like the SESSION_LOG_* hooks).
 tmux() {
+  [ -n "${_SL_TEST_PROBED:-}" ] && [ "$1" = "-S" ] && printf '%s\n' "$2" >> "$_SL_TEST_PROBED"
   case "$1 $2" in
     "display-message -p")
       # honour an optional -t TARGET (ignored — fixed context) by shifting it off
@@ -718,6 +736,35 @@ cat >> "$ledger" <<JSON
 JSON
 outq=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending '/w/qu"ote')
 _assert "pending: quote-containing cwd not false-dropped (gate falls through)" "1" "$(printf '%s\n' "$outq" | grep -c 'dropq')"
+
+# ===== SCOPE THE LIVENESS SWEEP: a scoped query must only tmux-probe servers that ran in
+#       that cwd, never every server in the ledger. This is the perf fix for warden's ~5s
+#       per-dir presence probe: _sl_server_live spawns a tmux per server, and the old sweep
+#       probed ALL of them (a stale-heavy ledger → O(all-servers) per poll). Isolated ledger
+#       + a tallying tmux stub (which socket each liveness probe hit) prove which servers ran.
+_scope_dir=$(mktemp -d) || exit 1
+cat > "$_scope_dir/sessions.jsonl" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/here","server_pid":111,"session":"h","window_id":"@1","window_name":"claude","cwd":"/w/here","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/here","server_pid":111,"window_id":"@1","label":"drophere","resume_cmd":"claude --resume drophere"}
+{"ts":200,"event":"open","socket_path":"/s/elsewhere","server_pid":222,"session":"e","window_id":"@1","window_name":"claude","cwd":"/w/elsewhere","agent":"work"}
+{"ts":201,"event":"resume","socket_path":"/s/elsewhere","server_pid":222,"window_id":"@1","label":"dropelse","resume_cmd":"claude --resume dropelse"}
+JSON
+_scope_probed="$_scope_dir/probed"; : > "$_scope_probed"
+# No SESSION_LOG_LIVE_PIDS here — we WANT _sl_server_live to run (via the stub, which reads
+# every server dead) so _SL_TEST_PROBED records which sockets the sweep actually probed.
+scope_out=$(_SL_TEST_PROBED="$_scope_probed" AGENTMUX_STATE_DIR="$_scope_dir" \
+  SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/here")
+_assert "scope: still finds this-cwd drop"       "1" "$(printf '%s\n' "$scope_out" | grep -c 'drophere')"
+_assert "scope: omits other-cwd drop"            "0" "$(printf '%s\n' "$scope_out" | grep -c 'dropelse')"
+_assert "scope: probed the this-cwd server"      "1" "$(grep -c '/s/here' "$_scope_probed")"
+_assert "scope: did NOT probe the other server"  "0" "$(grep -c '/s/elsewhere' "$_scope_probed")"
+: > "$_scope_probed"
+# Wrapped in $() so the prefix assignments stay scoped to the subshell (a bare prefix on a
+# function call persists in POSIX sh); the tally write lands in the outer $_scope_probed file.
+_ignore=$(_SL_TEST_PROBED="$_scope_probed" AGENTMUX_STATE_DIR="$_scope_dir" \
+  SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
+_assert "scope(--global): still probes every server" "2" "$(sort -u "$_scope_probed" | grep -c .)"
+rm -rf "$_scope_dir"; unset _ignore
 
 # THE REGRESSION GUARD: --pending must not write the notified marker. If it did, warden's
 # 5s probe would burn the gate on its first pass and the ghost would render once, never again.
