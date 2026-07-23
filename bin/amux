@@ -507,22 +507,22 @@ _amux_colours() {
 }
 
 # amux --frame [(-<flag> | <agent>)] [session]
-# Build the right-pane command: a single amux attach on THIS project's agent socket
-# (TMUX cleared so it attach-sessions there rather than switch-client'ing the frame
-# socket). Deliberately a plain one-shot, NOT a re-exec loop: a loop would
-# recreate (resurrect) the agent session moments after you kill it, and tmux runs
-# this through the user's login shell — maybe fish — which couldn't parse an sh
-# loop anyway. The agent pane instead runs with remain-on-exit (set below), and
-# the frame's pane-died hook (frame_reattach.sh) re-attaches it ONLY while the
-# agent session is still alive: an accidental prefix-d detach heals in place,
-# while a real kill leaves the pane dead so the live-pane staleness check above
-# rebuilds the frame on the next launch (no auto-resurrection).
-# `--no-frame` is explicit: with [frame] default = true a bare amux opens a frame,
-# and this pane runs with TMUX unset, so without it the agent pane would itself
-# spawn another frame in an endless loop.
-_amux_frame_right_cmd() { # <self> <agent> <session>
-  printf 'env -u TMUX %s --no-frame %s %s' \
-    "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")"
+# Build the right-pane command: a bare tmux attach on THIS project's agent socket.
+# The parent (_amux_frame) already created + fully configured the agent session
+# before splitting this pane, so the pane needs no second amux launch — it just
+# attaches. TMUX is cleared so it attach-sessions on the agent socket rather than
+# switch-client'ing the frame socket. No `-f agent.conf`: the agent server is
+# already running (the parent's new-session started it with agent.conf), and -f is
+# read only at server start. Deliberately NOT a re-exec loop: the pane runs with
+# remain-on-exit (set below), and the frame's pane-died hook (frame_reattach.sh)
+# re-attaches it ONLY while the agent session is still alive — an accidental
+# prefix-d detach heals in place, a real kill leaves the pane dead so the next
+# launch's live-pane staleness check rebuilds the frame (no auto-resurrection).
+# This is the same command frame_reattach.sh itself runs, so initial-attach and
+# reattach are identical.
+_amux_frame_right_cmd() { # <agent-socket> <session>
+  printf 'env -u TMUX tmux -L %s attach-session -t %s' \
+    "$(_amux_shquote "$1")" "$(_amux_shquote "=$2")"
 }
 
 # Build the left-pane command: a dedicated, persistent scratch-terminal tmux on
@@ -586,14 +586,24 @@ _amux_frame() {
 
   if ! tmux -L "$sock" has-session -t "=$fsess" 2>/dev/null; then
     local left right right_cmd left_cmd fprefix cols lines _sz focus status_pos
+    # Create + fully configure this project's agent session in the PARENT, so the
+    # right pane is a bare attach rather than a second amux cold-start. Runs only
+    # here (inside the rebuild branch), so a healthy idempotent re-launch — frame up,
+    # agent pane live — never re-prompts. version_check + legacy_notice both self-gate
+    # (daily timestamp / persistent marker), so calling them here is safe even when
+    # the frame-default path already called _amux_legacy_notice once.
+    _amux_legacy_notice
+    [ -x "$AGENTMUX_SCRIPTS/version_check.sh" ] && "$AGENTMUX_SCRIPTS/version_check.sh" || true
+    _amux_ensure_agent_session "$agent" "$session"
     # Start focus (agent|terminal) and status bar position (bottom|top), [frame] config.
     focus=$(_amux_frame_focus)
     status_pos=$(_amux_frame_status_position)
     left=$(_amux_frame_width)
     right=$((100 - left))
     left_cmd=$(_amux_frame_left_cmd "$AGENTMUX_TERM_SOCKET" "$term_conf" "${session}-term")
-    # $AGENTMUX_BIN: absolute path to this launcher, for the right-pane invocation.
-    right_cmd=$(_amux_frame_right_cmd "$AGENTMUX_BIN" "$agent" "$session")
+    # Right pane = a bare attach to the agent session the parent created below,
+    # on this project's agent shard (cache-warmed).
+    right_cmd=$(_amux_frame_right_cmd "$(_amux_agent_sock)" "$session")
     # Create the frame at the real terminal size (--frame runs in a plain
     # terminal). tmux distributes a *resize* equally across panes, so a frame born
     # at tmux's detached 80-col default would skew the ratio when it later attaches
@@ -1499,10 +1509,13 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "frame allow_nested lifts guard" "ok" "$_got"
   rm -f "$_anw"
 
-  # _amux_frame_right_cmd: a single plain amux attach (no loop → no resurrection,
-  # and parseable by any login shell incl. fish).
-  _rc=$(_amux_frame_right_cmd /opt/amux work proj)
-  _assert "frame right_cmd shape" "env -u TMUX '/opt/amux' --no-frame 'work' 'proj'" "$_rc"
+  # _amux_frame_right_cmd: a bare tmux attach on the agent socket (the parent already
+  # created + configured the session, so no second amux launch and no -f needed).
+  # No `amux`/`--no-frame` token — guards against regressing to a second full launch.
+  _rc=$(_amux_frame_right_cmd agentmux-agent-123 proj)
+  _assert "frame right_cmd shape" "env -u TMUX tmux -L 'agentmux-agent-123' attach-session -t '=proj'" "$_rc"
+  case "$_rc" in *"--no-frame"*|*"$AGENTMUX_BIN"*) _got=regressed ;; *) _got=ok ;; esac
+  _assert "frame right_cmd has no second amux launch" "ok" "$_got"
 
   # _amux_frame_left_cmd: plain attach to the dedicated term socket (trailing
   # `-c <PWD>` varies, so assert the stable prefix).
