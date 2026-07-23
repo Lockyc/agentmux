@@ -15,6 +15,9 @@
 #                                        restorable dropped tabs (dead server, open-at-death)
 #   prune                    trim the ledger (dead, old server instances)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
+#   discard  <socket> <pid>  mark a server's windows deliberately closed (empty
+#                            sidecar) — the amux --kill path, so a torn-down shard
+#                            isn't recovered as a crash
 #
 # We reconcile against the set of windows that were open. For a LIVE server that
 # set is queried directly (tmux list-windows). A DEAD server can't be queried, so
@@ -180,6 +183,20 @@ _sl_snapshot() {  # <socket> <pid>
 # Read a dead server's recorded live-set (empty if the file is absent).
 _sl_snapshot_windows() { cat "$(_sl_live_file "$1" "$2")" 2>/dev/null; }  # <socket> <pid>
 
+# Mark a server's windows as DELIBERATELY closed by writing an EMPTY live-set
+# sidecar. Used by `amux --kill`: killing a per-project shard's only session tears
+# down the whole tmux server, so the window-unlinked snapshot hook never runs and
+# the sidecar keeps its last (populated) set — a dead server + populated sidecar
+# reads as a crash. An empty sidecar makes sl_dropped intersect every row against
+# the empty set → nothing offered. This must WRITE an empty file, never delete it:
+# an ABSENT sidecar means "dead server predating this feature → offer ALL windows",
+# the opposite of what a deliberate kill wants.
+_sl_discard() {  # <socket> <pid>
+  _lf=$(_sl_live_file "$1" "$2"); _dir=${_lf%/*}
+  mkdir -p "$_dir" 2>/dev/null || return 0
+  : > "$_lf" 2>/dev/null || true
+}
+
 # Public snapshot subcommand: re-record a live server's window set. Invoked by the
 # `window-unlinked` tmux hook on CLOSE (re-queries the whole set, so the closed
 # window is naturally absent) — event-driven, no loop, no background process.
@@ -187,6 +204,14 @@ _sl_snapshot_windows() { cat "$(_sl_live_file "$1" "$2")" 2>/dev/null; }  # <soc
 sl_snapshot() {  # <socket> <pid>
   _sl_enabled || return 0
   _sl_snapshot "$1" "$2"
+}
+
+# Public discard subcommand: mark a server's windows as deliberately closed (empty
+# live-set sidecar). Invoked by bin/amux right before it kills an agent session, so
+# the torn-down shard isn't mistaken for a crash. See _sl_discard.
+sl_discard() {  # <socket> <pid>
+  _sl_enabled || return 0
+  _sl_discard "$1" "$2"
 }
 
 # Epoch of the last boot, to tell a reboot from a same-boot kill (a server whose
@@ -562,6 +587,7 @@ if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
     forkcmd)   sl_forkcmd   "$@" ;;
     prune)     sl_prune     "$@" ;;
     snapshot)  sl_snapshot  "$@" ;;
+    discard)   sl_discard   "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
   esac
   exit 0
@@ -1017,6 +1043,37 @@ _assert "prune keeps live sidecar"        "1" "$([ -f "$_lf_live" ] && echo 1 ||
 rm -rf "$AGENTMUX_STATE_DIR/live"
 SESSION_LOG_LIVE_WINDOWS="@3 @7" sl_snapshot "/s/a" 5150
 _assert "snapshot subcommand writes sidecar" "@3 @7" "$(tr '\n' ' ' < "$(_sl_live_file "/s/a" 5150)" | sed 's/ *$//')"
+
+# --- discard subcommand marks a server's windows as DELIBERATELY closed (the
+#     amux --kill path — killing a per-project shard's only session tears down the
+#     whole server before window-unlinked can snapshot, so an empty sidecar is
+#     written explicitly instead). It writes an EMPTY sidecar (file present, no
+#     window ids): at read time sl_dropped intersects each row against the empty
+#     set → nothing offered. Distinct from an ABSENT sidecar (pre-feature dead
+#     server → offer ALL windows), which is why discard writes rather than deletes.
+rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+printf '@1\n@2\n' > "$(_sl_live_file "/s/d" 6060)"   # populated: two windows open
+sl_discard "/s/d" 6060
+_assert "discard writes an empty sidecar (file present)" "1" \
+  "$([ -f "$(_sl_live_file "/s/d" 6060)" ] && echo 1 || echo 0)"
+_assert "discard sidecar has no window ids" "0" \
+  "$(grep -c . "$(_sl_live_file "/s/d" 6060)")"
+
+# End-to-end: a dead server whose sidecar was discarded offers NOTHING for restore
+# (the deliberate-kill case), whereas the same dead server with its windows still
+# in the sidecar WOULD be offered (the crash case) — this is the exact regression
+# the amux --kill fix relies on.
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+cat > "$ledger" <<JSON
+{"ts":500,"event":"open","socket_path":"/s/d","server_pid":6060,"session":"proj","window_id":"@1","window_name":"claude","cwd":"/w/killed","agent":"work"}
+{"ts":501,"event":"resume","socket_path":"/s/d","server_pid":6060,"window_id":"@1","label":"kk1","resume_cmd":"claude --resume kk1"}
+JSON
+printf '@1\n' > "$(_sl_live_file "/s/d" 6060)"        # crash case: @1 was open at death
+crash=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
+_assert "crash case: dead server WITH open window is offered" "1" "$(printf '%s\n' "$crash" | grep -c 'kk1')"
+sl_discard "/s/d" 6060                                # deliberate kill → empty the sidecar
+kild=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
+_assert "kill case: discarded server offers nothing" "0" "$(printf '%s\n' "$kild" | grep -c 'kk1')"
 
 # ============ Task 5 regression: sl_open's [socket] param must reach the REAL
 #     tmux server, not silently fall back to the default socket (this is the

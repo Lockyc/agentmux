@@ -1080,6 +1080,19 @@ _amux_kill() {
   if [ "$by_dir" -eq 0 ]; then _asock=$(_amux_agent_socks | _amux_sock_hosting "$base"); fi
   if { [ "$by_dir" -eq 0 ] && [ -n "$_asock" ]; } \
      || { [ "$by_dir" -eq 1 ] && _amux_agent_session_is_mine "$base"; }; then
+    # Mark this agent shard's windows deliberately closed BEFORE tearing it down.
+    # The agent session is the only one on its per-project server, so kill-session
+    # kills the whole server — the window-unlinked snapshot hook (which is what
+    # empties the live-set sidecar on a graceful close) never runs. Without this the
+    # sidecar stays populated + the server goes dead, and crash recovery offers the
+    # deliberately-killed tab as if it had crashed. Query socket_path + pid on the
+    # resolved agent socket, then write an empty sidecar via session_log discard.
+    local _kl _kinfo _ksp _kpid TAB; TAB=$(printf '\t')
+    if [ "$by_dir" -eq 0 ]; then _kl="$_asock"; else _kl=$(_amux_agent_sock); fi
+    _kinfo=$(env -u TMUX tmux -L "$_kl" display-message -p "#{socket_path}${TAB}#{pid}" 2>/dev/null)
+    _ksp=${_kinfo%%"$TAB"*}; _kpid=${_kinfo##*"$TAB"}
+    [ -n "$_ksp" ] && [ -n "$_kpid" ] \
+      && "$AGENTMUX_SCRIPTS/session_log.sh" discard "$_ksp" "$_kpid" 2>/dev/null || true
     if [ "$by_dir" -eq 0 ]; then tmux -L "$_asock" kill-session -t "=$base" 2>/dev/null
     else _amux_atmux kill-session -t "=$base" 2>/dev/null; fi
     parts="agent '$base'"
@@ -1126,8 +1139,16 @@ _amux_kill_all() {
     [yY]|[yY][eE][sS]) ;;
     *) echo "aborted" >&2; return 1 ;;
   esac
-  local _as
-  for _as in $(_amux_agent_socks); do tmux -L "$_as" kill-server 2>/dev/null; done
+  # Discard each agent server's live-set sidecar before kill-server, so these
+  # deliberate teardowns aren't recovered as crashes (same reasoning as _amux_kill).
+  local _as _kinfo _ksp _kpid TAB; TAB=$(printf '\t')
+  for _as in $(_amux_agent_socks); do
+    _kinfo=$(env -u TMUX tmux -L "$_as" display-message -p "#{socket_path}${TAB}#{pid}" 2>/dev/null)
+    _ksp=${_kinfo%%"$TAB"*}; _kpid=${_kinfo##*"$TAB"}
+    [ -n "$_ksp" ] && [ -n "$_kpid" ] \
+      && "$AGENTMUX_SCRIPTS/session_log.sh" discard "$_ksp" "$_kpid" 2>/dev/null || true
+    tmux -L "$_as" kill-server 2>/dev/null
+  done
   for _s in $fsocks; do tmux -L "$_s" kill-server 2>/dev/null; done
   for _s in $(_amux_term_socks); do tmux -L "$_s" kill-server 2>/dev/null; done
   echo "killed $count agent session(s) + all frames/terminals"
