@@ -127,6 +127,21 @@ selftest re-entering itself — are gone now: `summary_rows.sh` checks `--stdin`
 *before* its selftest block, so a `--stdin` child renders and exits, never
 recursing.)
 
+**Invariant — a selftest that spawns a real tmux server must ride the
+selftest-wide `TMUX_TMPDIR`, never set its own.** `tmux kill-server` stops the
+server *process* but leaves the socket *file* on disk (macOS never unlinks it),
+and selftest socket names embed `$$`, so a server created on the user's shared
+`/tmp/tmux-<uid>/` dir strands a fresh orphan file every run — accumulating
+unbounded (this leaked ~hundreds of files over time until fixed). `bin/amux`'s
+selftest sets one throwaway `TMUX_TMPDIR` at the top with an `EXIT` trap that
+`rm -rf`s it, so every server it spawns is confined there and reaped on any exit
+path; individual blocks must not override it. A regression assert ("no tmux
+sockets stranded in the shared dir") fails loudly if a new block leaks. Keep each
+block's `kill-server` (it ends the process; the trap only reaps the files).
+`session_log.sh`'s selftest isolates the same way (its own `/tmp/slsktest-$$` +
+`rm -rf`). When adding a tmux-spawning selftest, inherit the ambient
+`TMUX_TMPDIR`; don't reintroduce a per-block one.
+
 Several scripts also have built-in selftests — run the relevant one directly for
 a targeted check while changing a script:
 

@@ -1407,6 +1407,19 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # Isolate the disk cache so synthetic configs don't collide with real or
   # each other (same-second mtime → same cache key on fast machines).
   _selftest_cache=$(mktemp -d); export XDG_CACHE_HOME="$_selftest_cache"
+  # Confine EVERY tmux server this selftest spawns to one throwaway TMUX_TMPDIR,
+  # nuked wholesale on exit. tmux's kill-server stops the server PROCESS but never
+  # unlinks the socket FILE (macOS leaves it on disk); since our socket names embed
+  # $$, each run would otherwise strand fresh orphan files in the user's shared
+  # /tmp/tmux-<uid>/ dir, accumulating unbounded across runs. A dedicated short
+  # TMUX_TMPDIR (short to stay under the AF_UNIX 104-char socket-path limit)
+  # isolates them here, and the EXIT trap removes the dir on ANY exit path — pass,
+  # fail, or early exit. Every block still calls kill-server: that ends the server
+  # process promptly; the trap only reaps the files it leaves behind. This is the
+  # single isolation point — individual blocks must NOT set their own TMUX_TMPDIR.
+  _st_tmpdir="/tmp/amuxtest-$$"; mkdir -p "$_st_tmpdir"
+  export TMUX_TMPDIR="$_st_tmpdir"
+  trap 'rm -rf "$_st_tmpdir" "$_selftest_cache"' EXIT
   pass=0; fail=0
   _assert() {
     local desc="$1" expected="$2" actual="$3"
@@ -1576,18 +1589,16 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --- name-targeted agent commands span shards: _amux_agent_session_names and
   #     _amux_sock_hosting must see sessions on EVERY agentmux-agent-<n> socket,
   #     not just the caller's own $PWD shard. Needs a real tmux; skip cleanly if
-  #     absent. Short TMUX_TMPDIR to stay under the AF_UNIX 104-char socket-path
-  #     limit (bin/amux is bash-3.2 clean; no associative arrays here either).
+  #     absent. Servers land in the selftest-wide throwaway TMUX_TMPDIR (bin/amux
+  #     is bash-3.2 clean; no associative arrays here either).
   if command -v tmux >/dev/null 2>&1; then
     _ms_save="${AGENTMUX_AGENT_SOCKET:-}"; unset AGENTMUX_AGENT_SOCKET
-    _ms_dir="/tmp/amuxtest-agents-$$"; export TMUX_TMPDIR="$_ms_dir"; mkdir -p "$_ms_dir"
     tmux -L agentmux-agent-101 new-session -d -s projX; tmux -L agentmux-agent-101 set -t projX @autoagent 1
     tmux -L agentmux-agent-202 new-session -d -s projY; tmux -L agentmux-agent-202 set -t projY @autoagent 1
     _names=$(_amux_agent_session_names | sort | tr '\n' ' ')
     _assert "session_names spans shards" "projX projY " "$_names"
     _assert "sock_hosting finds projY" "agentmux-agent-202" "$(_amux_agent_socks | _amux_sock_hosting projY)"
     tmux -L agentmux-agent-101 kill-server 2>/dev/null; tmux -L agentmux-agent-202 kill-server 2>/dev/null
-    rm -rf "$_ms_dir"; unset TMUX_TMPDIR
     [ -n "$_ms_save" ] && AGENTMUX_AGENT_SOCKET="$_ms_save"
   else
     echo "SKIP: multi-shard agent commands test (tmux not found)"
@@ -1595,17 +1606,16 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
 
   # --- amux attach <name> resolves the hosting shard (socket lookup only — the
   #     actual attach-session needs a TTY, so that part isn't exercised here).
-  #     Needs a real tmux; skip cleanly if absent. Short TMUX_TMPDIR per the
-  #     AF_UNIX 104-char socket-path limit, same as the multi-shard test above.
+  #     Needs a real tmux; skip cleanly if absent. Servers land in the
+  #     selftest-wide throwaway TMUX_TMPDIR.
   if command -v tmux >/dev/null 2>&1; then
     _an_save="${AGENTMUX_AGENT_SOCKET:-}"; unset AGENTMUX_AGENT_SOCKET
-    _an_dir="/tmp/amuxtest-attach-$$"; export TMUX_TMPDIR="$_an_dir"; mkdir -p "$_an_dir"
     tmux -L agentmux-agent-303 new-session -d -s projZ; tmux -L agentmux-agent-303 set -t projZ @autoagent 1
     _assert "attach resolves shard" "agentmux-agent-303" "$(_amux_agent_socks | _amux_sock_hosting projZ)"
     # missing name → nonzero + message
     _an_out=$(_amux_attach_by_name __nope__ 2>&1); _an_rc=$?
     _assert "attach missing exit" "1" "$_an_rc"
-    tmux -L agentmux-agent-303 kill-server 2>/dev/null; rm -rf "$_an_dir"; unset TMUX_TMPDIR
+    tmux -L agentmux-agent-303 kill-server 2>/dev/null
     [ -n "$_an_save" ] && AGENTMUX_AGENT_SOCKET="$_an_save"
   else
     echo "SKIP: attach resolution test (tmux not found)"
@@ -1615,10 +1625,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   #     Needs a real tmux; skip cleanly if absent (same pattern as neighbouring cases).
   if command -v tmux >/dev/null 2>&1; then
     _at_save="${AGENTMUX_AGENT_SOCKET:-}"; unset AGENTMUX_AGENT_SOCKET
-    _at_tmpdir="/tmp/amuxtest-atmux-$$"; export TMUX_TMPDIR="$_at_tmpdir"; mkdir -p "$_at_tmpdir"
     ( cd /tmp && _amux_atmux new-session -d -s atmuxprobe 2>/dev/null )
     _at_expect="agentmux-agent-$(cd /tmp && _amux_pwd_hash)"
-    if [ -S "$_at_tmpdir/tmux-$(id -u)/$_at_expect" ]; then _got=onshard; else _got=missing; fi
+    if [ -S "$TMUX_TMPDIR/tmux-$(id -u)/$_at_expect" ]; then _got=onshard; else _got=missing; fi
     _assert "atmux creates on \$PWD agent shard" "onshard" "$_got"
     # The startup-regression fix: a cold agent server must be born from agent.conf
     # (-f), NOT fall through to ~/.tmux.conf + TPM. Proof it applied: agent.conf's
@@ -1628,7 +1637,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
       "$(tmux -L "$_at_expect" show -sv escape-time 2>/dev/null)"
     _assert "atmux server did not run TPM" "0" \
       "$(tmux -L "$_at_expect" list-keys 2>/dev/null | grep -c install_plugins)"
-    tmux -L "$_at_expect" kill-server 2>/dev/null; rm -rf "$_at_tmpdir"; unset TMUX_TMPDIR
+    tmux -L "$_at_expect" kill-server 2>/dev/null
     [ -n "$_at_save" ] && AGENTMUX_AGENT_SOCKET="$_at_save"
   else
     echo "SKIP: atmux \$PWD shard test (tmux not found)"
@@ -2089,10 +2098,10 @@ STUB
 
   # --- legacy notice: fires once for an @autoagent session on the REAL default
   #     socket (no -L), then is suppressed by its persistent marker. Needs a real
-  #     tmux; skip cleanly if absent (same pattern as neighbouring cases). Short
-  #     TMUX_TMPDIR isolates this from the user's actual default socket.
+  #     tmux; skip cleanly if absent (same pattern as neighbouring cases). The
+  #     selftest-wide TMUX_TMPDIR keeps this "default" socket (no -L) off the
+  #     user's actual default socket.
   if command -v tmux >/dev/null 2>&1; then
-    _ln_dir="/tmp/amuxtest-legacy-$$"; export TMUX_TMPDIR="$_ln_dir"; mkdir -p "$_ln_dir"
     _ln_state="/tmp/amuxtest-legstate-$$"; rm -rf "$_ln_state"
     _ln_save_state="${AGENTMUX_STATE_DIR:-}"; export AGENTMUX_STATE_DIR="$_ln_state"
     env -u TMUX tmux new-session -d -s legacyagent; env -u TMUX tmux set -t legacyagent @autoagent 1
@@ -2103,13 +2112,23 @@ STUB
     _assert "legacy notice message" "ok" "$_got"
     _ln2=$(_amux_legacy_notice 2>&1)
     _assert "legacy notice suppressed after marker" "" "$_ln2"
-    env -u TMUX tmux kill-server 2>/dev/null; rm -rf "$_ln_dir" "$_ln_state"; unset TMUX_TMPDIR
+    env -u TMUX tmux kill-server 2>/dev/null; rm -rf "$_ln_state"
     if [ -n "$_ln_save_state" ]; then export AGENTMUX_STATE_DIR="$_ln_save_state"; else unset AGENTMUX_STATE_DIR; fi
   else
     echo "SKIP: legacy notice test (tmux not found)"
   fi
 
-  rm -rf "$_selftest_cache"
+  # Regression (the socket-leak fix): every tmux server we spawned went to the
+  # per-run throwaway TMUX_TMPDIR, so the user's REAL shared tmux dir must carry
+  # NONE of this run's sockets. A non-empty match means a block created a server
+  # on the default dir (isolation missing or foiled) — the leak that filled
+  # /tmp/tmux-<uid>/ unbounded across runs (see CLAUDE.md). Scoped to THIS run's
+  # $$, plus the fixed 99999999 sentinel, so pre-existing files never false-fail.
+  _real_sockdir="/tmp/tmux-$(id -u)"
+  _leaked=$(ls -d "$_real_sockdir/"*"-$$" "$_real_sockdir/agentmux-frame-99999999" 2>/dev/null | tr '\n' ' ')
+  _assert "no tmux sockets stranded in the shared dir" "" "$_leaked"
+
+  # $_selftest_cache + $_st_tmpdir are reaped by the EXIT trap set at the top.
   echo "---"; echo "Passed: $pass  Failed: $fail"
   [ "$fail" -eq 0 ]
   exit $?
