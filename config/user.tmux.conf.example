@@ -35,9 +35,13 @@
 # (`set -g`, `bind`) over anything that accumulates on repeat sourcing. The frame/term
 # overlays are picked up when you relaunch the frame.
 #
-# SHARE SETTINGS ACROSS ROLES: if you want the same safe options everywhere, keep them
-# in one file of your own and source it from each role overlay, e.g. add this line to
-# each of the three:  source-file -q ~/.agentmux/user.common.tmux.conf
+# SHARE SETTINGS ACROSS ROLES: if you want the same settings everywhere, keep them in
+# one file of your own and source it from each role overlay, e.g. add this line to each
+# of the three:  source-file -q ~/.agentmux/user.common.tmux.conf
+# Put only role-AGNOSTIC settings there (options like mode-keys/history-limit, styles) —
+# NOT `bind-key`s. A shared file sourced into the frame re-creates the very cross-role
+# binding leak the per-role split fixed: a binding meant for the agent lands on the
+# frame's C-f layout and breaks it. Bindings belong in the specific role file.
 #
 # ── Examples (uncomment / edit; most belong in user.agent.tmux.conf) ──────────────
 
