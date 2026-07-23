@@ -145,7 +145,7 @@ All of these are pressed **after the prefix** (`C-b` by default).
 | `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched. agentmux already knows the session id and which wrapper to launch it with, so there is nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
 | `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
 
-### Customizing tmux (the overlay)
+### Customizing tmux (per-role overlays)
 
 agentmux runs each agent — and, under `--frame`, the wrapper and scratch terminal —
 on its **own** tmux server that does **not** read your `~/.tmux.conf`. That isolation
@@ -155,19 +155,32 @@ re-sets the sensible defaults itself (escape-time, focus-events, scrollback, mou
 clipboard), so nothing an agent pane needs is lost.
 
 To add **your own** tmux settings on top — vi copy-mode, custom bindings, a different
-status style — drop them in an optional overlay that every agentmux socket sources
-**last**, so your settings win:
+status style — drop them in an optional **per-role** overlay, each sourced **last** by
+its socket so your settings win. There are three, one per surface, and they are **not
+shared**:
+
+| Overlay | Applies to |
+|---|---|
+| `~/.agentmux/user.agent.tmux.conf` | the agent pane (what most people want) |
+| `~/.agentmux/user.frame.tmux.conf` | the `--frame` wrapper |
+| `~/.agentmux/user.term.tmux.conf` | the `--frame` scratch terminal |
+
+They're separate on purpose: the frame runs a **different prefix** (`C-f`) and unbinds
+the window keys to hold its fixed layout, so one shared overlay would apply your
+`bind-key` to all three and break the frame. Per-role files keep every binding scoped
+to the surface you meant.
 
 ```bash
-cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.tmux.conf
-# edit ~/.agentmux/user.tmux.conf, then:
-amux --reload        # applies it to running agent servers
+cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.agent.tmux.conf
+# edit it, then:
+amux --reload        # applies the agent overlay to running agent servers
 ```
 
-You only need this file if you want to customize — an absent overlay changes nothing.
-Prefer copying the specific bindings/options you want rather than `source`-ing a full
-`~/.tmux.conf` that loads plugins (that reintroduces the cold-start stall the isolation
-removes). See the example file's header for the full caveats.
+You only need a file if you want to customize that role — an absent overlay changes
+nothing. Prefer copying the specific bindings/options you want rather than `source`-ing
+a full `~/.tmux.conf` that loads plugins (that reintroduces the cold-start stall the
+isolation removes). See the example file's header for the full caveats, including how
+to share common settings across roles.
 
 ### Directory-based agent selection
 

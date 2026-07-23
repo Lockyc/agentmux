@@ -158,17 +158,26 @@ source-file ~/.agentmux/tmux/agentmux.conf
 
 Report whether the line was already present or newly added.
 
-Then mention the optional tmux overlay: agentmux's own servers (agent, `--frame`
-wrapper, scratch terminal) run isolated and do **not** read `~/.tmux.conf`, so a
-user who wants their own tmux settings there (vi copy-mode, custom bindings,
-status style) copies the overlay example — it's sourced last, so their settings
-override agentmux's defaults:
+Then mention the optional tmux overlays: agentmux's own servers (agent, `--frame`
+wrapper, scratch terminal) run isolated and do **not** read `~/.tmux.conf`. A user
+who wants their own tmux settings there (vi copy-mode, custom bindings, status
+style) uses **per-role** overlays, each sourced last so their settings override
+agentmux's defaults:
+
+- `~/.agentmux/user.agent.tmux.conf` — the agent pane (what most people want)
+- `~/.agentmux/user.frame.tmux.conf` — the `--frame` wrapper
+- `~/.agentmux/user.term.tmux.conf` — the `--frame` scratch terminal
+
+They're **separate files on purpose**: the frame uses a different prefix (`C-f`)
+and unbinds keys for its fixed layout, so a single shared overlay would apply a
+binding to all three and break the frame. Copy the template to whichever role(s)
+they want:
 
 ```
-cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.tmux.conf
+cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.agent.tmux.conf
 ```
 
-Don't create it unless asked — an absent overlay is a silent no-op. Point at the
+Don't create any unless asked — an absent overlay is a silent no-op. Point at the
 file's header for the caveats (chiefly: don't `source` a full config that loads
 TPM, or you reintroduce the cold-start stall the isolation removes).
 

@@ -1,39 +1,45 @@
-# user.tmux.conf — OPTIONAL agentmux tmux overlay.
+# agentmux tmux overlays — OPTIONAL, PER-ROLE.
 #
-# Copy to ~/.agentmux/user.tmux.conf and put any tmux settings you want applied to
-# agentmux's servers here. It is sourced LAST by the agent, frame, and term sockets
-# (via `source-file -q`), so your settings override agentmux's own defaults.
-# You do NOT need this file — an absent overlay is a silent no-op. Create it only
-# to customize.
+# agentmux runs each surface on its OWN tmux server with its OWN `-f` config, none of
+# which read your ~/.tmux.conf. Each server sources a matching overlay LAST (via
+# `source-file -q`), so your settings override agentmux's defaults. There are THREE,
+# one per role — they are NOT shared:
 #
-# WHY THIS EXISTS
-#   agentmux runs each project's agent — and, under `amux --frame`, the frame
-#   wrapper and its scratch terminal — on its OWN tmux server with its OWN `-f`
-#   config. None of them read your ~/.tmux.conf. That isolation is deliberate: a
-#   cold per-project agent server that fell through to ~/.tmux.conf would run TPM's
-#   synchronous plugin load and stall every launch for seconds. agentmux instead
-#   re-sets the sensible defaults itself (escape-time, focus-events, history-limit,
-#   mouse, clipboard, …). This overlay is the escape hatch for everything past that
-#   fixed list — bring back the pieces of your own config you want, without the
-#   plugin-load cost.
+#   ~/.agentmux/user.agent.tmux.conf   the agent pane (where you spend ~all your time)
+#   ~/.agentmux/user.frame.tmux.conf   the `amux --frame` outer wrapper
+#   ~/.agentmux/user.term.tmux.conf    the `--frame` left scratch terminal
 #
-# FOOTGUN — don't just re-source your whole config
-#   You *can* write `source-file ~/.tmux.conf` below, but if that file loads TPM or
-#   other plugins you reintroduce exactly the cold-start stall this design removed.
-#   Prefer copying the specific bindings/options you care about into this file.
+# WHY PER-ROLE (not one shared file): the three servers use DIFFERENT prefixes and
+# bindings — the frame's prefix is C-f and it unbinds the window-management keys to
+# hold its fixed two-pane layout. A single shared overlay would apply your `bind-key`
+# to all three, so a binding meant for the agent would land on the frame and break it.
+# Per-role files keep every binding scoped to the surface you meant.
 #
-# RELOAD & IDEMPOTENCY
-#   `amux --reload` re-sources the agent config — and therefore this file — into
-#   every live agent server. Prefer idempotent settings (`set -g`, `bind`) over
-#   anything that accumulates when sourced twice.
+# Copy this file to whichever role(s) you want to customize, e.g.:
+#   cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.agent.tmux.conf
+# Most people only need the AGENT overlay. An absent overlay is a silent no-op — you
+# don't need any of these files unless you want to customize.
 #
-# SCOPE NOTE
-#   This one file is read by all three sockets. The frame is a purpose-built
-#   wrapper with a fixed two-pane layout, so be conservative with lines that rebind
-#   its keys or restyle its bar (they can disrupt --frame). The agent pane and the
-#   scratch terminal have no such constraint — customize those freely.
+# WHY THE ISOLATION EXISTS: a cold per-project agent server that fell through to
+# ~/.tmux.conf would run TPM's synchronous plugin load and stall every launch for
+# seconds. agentmux re-sets the sensible defaults itself (escape-time, focus-events,
+# history-limit, mouse, clipboard). These overlays are the escape hatch past that
+# fixed list.
 #
-# ── Examples (uncomment / edit) ──────────────────────────────────────────────
+# FOOTGUN — don't just re-source your whole config: `source-file ~/.tmux.conf` here
+# reintroduces the cold-start stall if that file loads TPM/plugins. Copy the specific
+# bindings/options you want instead.
+#
+# RELOAD: `amux --reload` re-sources the agent config — and therefore
+# user.agent.tmux.conf — into every live agent server. Prefer idempotent settings
+# (`set -g`, `bind`) over anything that accumulates on repeat sourcing. The frame/term
+# overlays are picked up when you relaunch the frame.
+#
+# SHARE SETTINGS ACROSS ROLES: if you want the same safe options everywhere, keep them
+# in one file of your own and source it from each role overlay, e.g. add this line to
+# each of the three:  source-file -q ~/.agentmux/user.common.tmux.conf
+#
+# ── Examples (uncomment / edit; most belong in user.agent.tmux.conf) ──────────────
 
 # vi keys in copy mode
 # setw -g mode-keys vi
@@ -44,9 +50,9 @@
 # your own status-bar style (agentmux styles the bar per session; this overrides)
 # set -g status-style 'bg=colour234,fg=colour252'
 
-# a custom key binding
-# bind-key C-r source-file ~/.agentmux/user.tmux.conf \; display "overlay reloaded"
+# a custom key binding — scoped to whichever role file you put it in
+# bind-key C-r display "hello from my overlay"
 
-# a custom clipboard pipe (must be here to reach --frame copies — the frame socket
-# grabs the drag-select first; see frame.conf)
+# FRAME-ONLY: a custom clipboard pipe (must live in user.frame.tmux.conf to reach
+# --frame copies — the frame socket grabs the drag-select first; see frame.conf)
 # bind -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
