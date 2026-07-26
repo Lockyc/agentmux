@@ -143,7 +143,24 @@ _sl_server_live() {  # <socket> <pid>
 # Window ids currently open on the live server at <socket>. Used to intersect a
 # live server's ledger rows against reality (a window closed since its open was
 # logged is gone from this list), replacing the unreliable close hook.
-_sl_live_windows() {  # <socket>
+#
+# EMPTY IS A REAL ANSWER, and tmux cannot give it: on the server whose LAST window
+# just closed, `list-windows -a` exits 1 with "no current target" rather than
+# printing nothing. Treating that as a failed query is what made a graceful
+# teardown indistinguishable from a crash — the caller kept the previous
+# (populated) sidecar, so sl_dropped re-offered the very tab you had just closed.
+# Closing the last window is the ORDINARY way to finish with a project, so this
+# fired constantly, not in some corner. Disambiguate on server liveness, which is
+# the only thing that separates the two states (verified against a real server:
+# windowless-but-alive answers `display-message -p '#{pid}'` with its pid and
+# `list-sessions` with rc=0 + no output; a dead one fails both):
+#   reachable + unqueryable → zero windows → succeed with an empty set;
+#   unreachable             → a set we genuinely cannot observe → fail, and the
+#                             caller keeps what it already recorded.
+# That asymmetry is deliberate: a wrongly-empty sidecar silently destroys the
+# crash-recovery data this whole feature exists for, so only POSITIVE evidence of
+# a live windowless server may empty it.
+_sl_live_windows() {  # <socket> [pid]
   if [ -n "${SESSION_LOG_LIVE_WINDOWS+x}" ]; then
     # Unquoted on purpose: emit one window id per line, mirroring tmux's output
     # (so tests exercise the real newline-separated shape).
@@ -151,7 +168,11 @@ _sl_live_windows() {  # <socket>
     printf '%s\n' $SESSION_LOG_LIVE_WINDOWS
     return 0
   fi
-  tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null
+  tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null && return 0
+  # _sl_server_live (not a bare socket probe) so a pid that no longer matches —
+  # a DIFFERENT server now owning this socket — reads as unreachable and leaves
+  # our dead server's recorded set alone.
+  _sl_server_live "$1" "$2"
 }
 
 # Path to a server's live-set sidecar, keyed by (socket, pid) — NOT pid alone.
@@ -168,12 +189,15 @@ _sl_live_file() { printf '%s/live/%s-%s.windows' "$(_sl_state_dir)" "$(_sl_sock_
 
 # Overwrite <pid>'s sidecar with the server's current window set. Reuses
 # _sl_live_windows so the SESSION_LOG_LIVE_WINDOWS test hook drives it too. Atomic
-# (temp + mv) so a reader never sees a half-written set; fails soft.
+# (temp + mv) so a reader never sees a half-written set; fails soft. An EMPTY set
+# is written as such (see _sl_live_windows): that is the last-window close, and
+# the resulting empty sidecar means "nothing was open at death" — the same state
+# _sl_discard writes for a deliberate `amux --kill`.
 _sl_snapshot() {  # <socket> <pid>
   _lf=$(_sl_live_file "$1" "$2"); _dir=${_lf%/*}
   mkdir -p "$_dir" 2>/dev/null || return 0
   _tmp="$_dir/.$2.$$.tmp"
-  if _sl_live_windows "$1" > "$_tmp" 2>/dev/null; then
+  if _sl_live_windows "$1" "$2" > "$_tmp" 2>/dev/null; then
     mv "$_tmp" "$_lf" 2>/dev/null || rm -f "$_tmp"
   else
     rm -f "$_tmp"
@@ -1122,6 +1146,39 @@ sl_discard "/s/d" 6060                                # deliberate kill → empt
 kild=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
 _assert "kill case: discarded server offers nothing" "0" "$(printf '%s\n' "$kild" | grep -c 'kk1')"
 
+# ============ last-window close: an EMPTY window set must reach the sidecar ============
+# tmux cannot report an empty window set: on the server whose LAST window just
+# closed, `list-windows -a` FAILS ("no current target") instead of printing
+# nothing. _sl_snapshot's failure branch keeps the previous (populated) sidecar,
+# so the graceful teardown was indistinguishable from a crash and sl_dropped
+# re-offered the tab you had just closed. The discriminator is server liveness:
+# reachable + unqueryable = zero windows (write empty); unreachable = a set we
+# genuinely cannot observe (keep what we have).
+# These tests need the REAL _sl_live_windows path, so drop the SESSION_LOG_LIVE_WINDOWS
+# hook first. It is still set: a `VAR=v cmd` prefix persists after the call when `cmd`
+# is a SHELL FUNCTION (POSIX), so the last such assignment above is still in scope.
+unset SESSION_LOG_LIVE_WINDOWS
+# ...and stub tmux so list-windows FAILS the way a real windowless server does
+# (the capture stub in effect here answers every call successfully). Left in place:
+# the real-tmux block below drops all stubs with `unset -f tmux`.
+tmux() { case " $* " in *" list-windows "*) return 1 ;; esac; return 0; }
+
+# alive but windowless → EMPTY sidecar (the last-window close).
+rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+printf '@1\n' > "$(_sl_live_file "/s/lw" 7070)"
+SESSION_LOG_LIVE_PIDS="7070" _sl_snapshot "/s/lw" 7070
+_assert "last-window close: sidecar still present" "1" \
+  "$([ -f "$(_sl_live_file "/s/lw" 7070)" ] && echo 1 || echo 0)"
+_assert "last-window close: sidecar emptied (no window ids)" "0" \
+  "$(grep -c . "$(_sl_live_file "/s/lw" 7070)")"
+
+# unreachable server → KEEP the recorded set (a crash we cannot observe; emptying
+# here would silently destroy the recovery data this whole feature exists for).
+printf '@1\n@2\n' > "$(_sl_live_file "/s/lw" 8080)"
+SESSION_LOG_LIVE_PIDS="" _sl_snapshot "/s/lw" 8080
+_assert "unreachable server: sidecar left intact" "@1 @2" \
+  "$(tr '\n' ' ' < "$(_sl_live_file "/s/lw" 8080)" | sed 's/ *$//')"
+
 # ============ Task 5 regression: sl_open's [socket] param must reach the REAL
 #     tmux server, not silently fall back to the default socket (this is the
 #     one test in the file that drives an actual tmux server instead of the
@@ -1156,6 +1213,65 @@ if command -v tmux >/dev/null 2>&1; then
   _assert "sharded socket open: records correct window" "$_sk_wid" \
     "$(jq -r '.window_id' "$ledger" 2>/dev/null)"
   tmux -L "$_sk_sock" kill-server 2>/dev/null
+
+  # --- END-TO-END last-window close (the false-crash regression). Drives a real
+  #     server with the SAME `window-unlinked` hook agentmux.conf installs, so it
+  #     exercises the whole chain: close a window → hook → snapshot subcommand →
+  #     sidecar. Closing a NON-last window must leave the survivors; closing the
+  #     LAST one tears the server down, and the sidecar must end up EMPTY (=
+  #     "nothing was open at death") rather than keeping the window just closed.
+  #     Stubs can't cover this: the bug IS real tmux's inability to report an
+  #     empty window set, which no stub would reproduce on its own. ---
+  #     The hook's child inherits the tmux SERVER's environment, which is this
+  #     shell's — so every SESSION_LOG_* test hook must be cleared first or the
+  #     child answers from canned values instead of the real server. They ARE
+  #     still set: a `VAR=v cmd` prefix persists when `cmd` is a shell function
+  #     (POSIX), and a leaked SESSION_LOG_LIVE_PIDS="" in particular makes the
+  #     child read every server as dead — silently defeating this test.
+  unset SESSION_LOG_LIVE_PIDS SESSION_LOG_LIVE_WINDOWS SESSION_LOG_BOOT_EPOCH
+  unset SESSION_LOG_RESUME_MAP SESSION_LOG_CTX
+  _lw_sock="agentmux-agent-778"
+  _lw_script=$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")
+  if [ -f "$_lw_script" ]; then
+    tmux -L "$_lw_sock" new-session -d -s lwtest -c /tmp 2>/dev/null
+    # SESSION_LOG_SELFTEST= so the hook's child runs the DISPATCHER, not this selftest.
+    tmux -L "$_lw_sock" set-hook -g window-unlinked \
+      "run-shell \"SESSION_LOG_SELFTEST= sh '$_lw_script' snapshot #{socket_path} #{pid}\"" 2>/dev/null
+    tmux -L "$_lw_sock" new-window -t lwtest -c /tmp 2>/dev/null
+    _lw_rs=$(tmux -L "$_lw_sock" display-message -p '#{socket_path}' 2>/dev/null)
+    _lw_pid=$(tmux -L "$_lw_sock" display-message -p '#{pid}' 2>/dev/null)
+    _lw_file=$(_sl_live_file "$_lw_rs" "$_lw_pid")
+    rm -rf "$AGENTMUX_STATE_DIR/live"
+    _sl_snapshot "$_lw_rs" "$_lw_pid"          # seed: both windows open
+    _assert "e2e: seeded sidecar has both windows" "2" "$(grep -c . "$_lw_file" 2>/dev/null)"
+
+    # Condition-based waits (no fixed sleeps): the hook's run-shell is async.
+    # `grep -c .` EXITS 1 on a zero count, so it must not gate the comparison —
+    # a `|| echo x` fallback would corrupt the very count (0) we wait for.
+    _lw_count() { grep -c . "$_lw_file" 2>/dev/null; :; }
+    _lw_wait() {  # <expected-line-count>
+      _i=0
+      while [ "$_i" -lt 60 ]; do
+        [ "$(_lw_count)" = "$1" ] && return 0
+        _i=$((_i+1)); sleep 0.05
+      done
+      return 1
+    }
+    tmux -L "$_lw_sock" kill-window -t lwtest:1 2>/dev/null   # non-last close
+    _lw_wait 1
+    _assert "e2e: non-last close leaves the survivor" "1" "$(grep -c . "$_lw_file" 2>/dev/null)"
+
+    tmux -L "$_lw_sock" kill-window -t lwtest:0 2>/dev/null   # LAST close → server dies
+    _lw_wait 0
+    _assert "e2e: last-window close leaves the sidecar present" "1" \
+      "$([ -f "$_lw_file" ] && echo 1 || echo 0)"
+    _assert "e2e: last-window close EMPTIES the sidecar (no false crash)" "0" \
+      "$(grep -c . "$_lw_file" 2>/dev/null)"
+    tmux -L "$_lw_sock" kill-server 2>/dev/null
+  else
+    echo "SKIP: last-window-close end-to-end test (cannot resolve \$0)"
+  fi
+
   rm -rf "$_sk_dir"; unset TMUX_TMPDIR
 else
   echo "SKIP: sharded-socket open recording test (tmux not found)"
