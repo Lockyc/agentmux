@@ -66,6 +66,7 @@ pointer list at the end rather than a second copy here.)
 - **mtime: GNU `stat -c %Y` before BSD `stat -f %m`, never flip** despite macOS (a shadowing GNU/uutils `stat` reads `-f` as `--file-system` and leaks a non-numeric value) — commented at the `stat` calls in `tmux-status.sh`.
 - **OSC 777 notify wraps once *per nested tmux layer*, and `allow-passthrough on` + `extended-keys always` + the `sync` feature must be set on *every* socket the escape/keys/redraw transit** — `tmux-status.sh` (`_tmux_nest_depth`) and `tmux/{agentmux,frame,term}.conf`, each with full rationale. Under `--frame` the agent is two layers deep, so `bin/amux` re-asserts the socket-level features on the long-lived frame server (which never re-reads its `-f` file). Escape/Ctrl-C dying in a framed agent is `extended-keys off`, not the terminal.
 - **Per-pane state files key on `<cksum $TMUX socket>-<pane#>`** — pane numbers are unique only per server, so the socket hash disambiguates the two servers a framed agent spans — `tmux-status.sh`.
+- **`respawn-pane` with no shell-command re-runs the pane's ORIGINAL start command** — so `prefix x` on a RESTORED or FORKED tab (whose start command is the agent's `--resume <id>` line, the very thing that suppresses `launch_agent.sh`'s auto-launch) brought back the session you were closing. `relaunch.sh` owns the respawn and always names a fresh shell explicitly; **don't re-add a bare `respawn-pane -k` to the `bind-key x` in `agentmux.conf`**. An ordinary tab respawns correctly either way, which is what makes the bare form look proven.
 - **An empty window set is a real answer that tmux cannot give**: on the server whose LAST window just closed, `list-windows -a` exits 1 ("no current target") instead of printing nothing, so treating a failed query as "no data" turns an ordinary close into a false crash. Disambiguate on server liveness, and only ever empty a sidecar on positive evidence — `_sl_live_windows` in `session_log.sh`.
 
 ## Layout
@@ -197,6 +198,7 @@ AGENTMUX_CONFIG_SELFTEST=1   bash scripts/agentmux-config.sh
 AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 SESSION_LOG_SELFTEST=1       sh scripts/session_log.sh
 FORK_SESSION_SELFTEST=1      bash scripts/fork_session.sh
+RELAUNCH_SELFTEST=1          bash scripts/relaunch.sh
 AMUX_SELFTEST=1              bash bin/amux
 CLEAR_ICON_SELFTEST=1        sh scripts/clear_icon.sh
 VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
