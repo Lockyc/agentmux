@@ -421,13 +421,25 @@ sl_dropped() {
   # on the DECODED cwd (fold col 6), so it stays correct for cwds the grep fast-path above
   # can't screen (quotes / control chars). --global and the empty scope keep the full set.
   state=$(mktemp) || { rm -f "$rows"; return 1; }
+  # Emit the server set WITH each server's max ts, in ONE pass. The max ts used to be
+  # re-derived by a fresh awk per server inside the loop below — and a process spawn is the
+  # whole cost of this query, not the data: at 13 servers for one cwd that was 13 spawns of
+  # ~30ms against a ledger that parses in 36ms total. It is also self-amplifying, since the
+  # spawns load the machine that makes every later spawn slower. Max ts is computed over ALL
+  # of a server's rows (m[]) while the scoped set is chosen by cwd (s[]), which is exactly
+  # what the per-server awk did — scoping must not truncate a server's history.
   case "$_scope" in
-    --global | "") _servers=$(cut -f1,2 "$rows" | sort -u) ;;
-    *) _servers=$(awk -F"$TAB" -v c="$_scope" '$6==c{print $1 "\t" $2}' "$rows" | sort -u) ;;
+    --global | "")
+      _servers=$(awk -F"$TAB" -v OFS="$TAB" '
+        {k=$1 OFS $2; if($9+0>m[k]) m[k]=$9+0}
+        END{for(k in m) print k, m[k]}' "$rows" | sort -u) ;;
+    *)
+      _servers=$(awk -F"$TAB" -v OFS="$TAB" -v c="$_scope" '
+        {k=$1 OFS $2; if($9+0>m[k]) m[k]=$9+0; if($6==c) s[k]=1}
+        END{for(k in s) print k, m[k]}' "$rows" | sort -u) ;;
   esac
-  printf '%s\n' "$_servers" | while IFS="$TAB" read -r socket pid; do
+  printf '%s\n' "$_servers" | while IFS="$TAB" read -r socket pid smax; do
     [ -n "$pid" ] || continue
-    smax=$(awk -F"$TAB" -v s="$socket" -v p="$pid" '$1==s&&$2==p{if($9+0>m)m=$9}END{print m+0}' "$rows")
     if _sl_server_live "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
       continue
     fi
@@ -440,8 +452,13 @@ sl_dropped() {
         mkdir -p "$(_sl_state_dir)" 2>/dev/null && printf '%s\n' "$_gk" >> "$_notmark" 2>/dev/null || true
       fi
     fi
-    if [ -f "$(_sl_live_file "$socket" "$pid")" ]; then
-      _sw=$(_sl_snapshot_windows "$socket" "$pid" | tr '\n' ' ')
+    # Resolve the sidecar path ONCE. _sl_live_file hashes the socket via `cksum | cut`
+    # (two spawns), and this used to call it twice per server — once to test, once inside
+    # _sl_snapshot_windows. Spawns are the entire cost of this query, so the second call
+    # was pure waste.
+    _lf=$(_sl_live_file "$socket" "$pid")
+    if [ -f "$_lf" ]; then
+      _sw=$(tr '\n' ' ' < "$_lf")
       printf 'S\t%s\t%s\t%s\n' "$socket" "$pid" "$_sw"
     else
       printf 'S\t%s\t%s\t*\n' "$socket" "$pid"
