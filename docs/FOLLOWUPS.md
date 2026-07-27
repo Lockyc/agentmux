@@ -89,3 +89,67 @@ the agent-session sibling of the frame/term cross-fire, not a separate bug.
 
 **Trigger to revisit (agent case):** as above, plus any report of `amux --kill <name>` or
 `amux attach <name>` landing on the wrong same-basename project's agent session.
+
+## `sh test.sh` writes into the REAL session state dir
+
+**Status:** deferred — pre-existing, harmless per run, but it means the suite is not
+hermetic and it slowly inflates the state the presence poll has to scan.
+
+**Where:** `bin/amux`'s selftest — the `amux-win0style-selftest-$$` and
+`amux-ensure-selftest-$$` blocks. They launch real agent windows on real tmux servers, and
+unlike the neighbouring blocks they never point `AGENTMUX_STATE_DIR` at a throwaway dir.
+
+**What:** `scripts/session_log.sh`'s own selftest is scoped and cleaned up (a `mktemp -d`
+`AGENTMUX_STATE_DIR`, **exported** so the real tmux servers it starts inherit it, removed by
+its EXIT trap), and two of the amux blocks do the same (`_rstate`, `_ln_state`). The two
+named above do not, so every `sl_open` they trigger lands in the user's real state dir.
+Measured over one `sh test.sh`: `~/.local/state/agentmux/sessions.jsonl` +2 lines and
+`live/` +4 entries, all naming `/private/tmp/amuxtest-<pid>/…` sockets.
+
+**Why it matters:** the suite mutates production state, so a test run is not repeatable
+against a clean baseline and cannot be run on a machine you care about without side
+effects. The residue is also the input to `sl_dropped`'s per-server liveness sweep, so it
+is not inert — every stale server left behind is one more `_sl_server_live` probe on the
+slow path.
+
+**Fix when we act on it:** export one `mktemp -d` `AGENTMUX_STATE_DIR` from `test.sh` for
+the whole run and delete it at the end, so every selftest *and* every process any of them
+spawns resolves to a throwaway dir by default rather than each block remembering to scope
+itself. Then assert it: capture `wc -l` of the real ledger before and after a full run and
+fail if it moved.
+
+**Trigger to revisit:** the real state dir grows visibly from test runs, or someone needs a
+repeatable-from-clean test baseline.
+
+## Most sidecars on disk are still the legacy single-field shape
+
+**Status:** deferred — the `--pending` fast path is correct today (it defers rather than
+guesses), but its speedup is not yet realised in practice.
+
+**Where:** `<state>/live/*.windows`, produced by `_sl_snapshot`; consumed by
+`_sl_pending_fast` in `scripts/session_log.sh`.
+
+**What:** sidecars written before the enrichment change carry a bare window id per line;
+the current shape is 4 tab-separated fields (window id, cwd, agent, resumable). The fast
+path treats *any* line with fewer than 4 fields as "this server's cwds are unknown" and
+returns 2 (cannot answer) for the WHOLE query — one legacy sidecar anywhere in `live/`
+sends every poll to the ledger. Measured on a working machine: 143 of 222 sidecars were
+legacy, so the fast path never actually answered a single poll.
+
+**Why it matters:** the fast path exists because the ledger fold is warden's hot loop —
+one `--pending` poll per session-less tab every few seconds. Measured against a real state
+dir: ~145ms per poll through the ledger versus ~30-45ms answered from sidecars. Until the
+legacy shape drains, every poll pays the ledger price and the work is invisible.
+
+**Fix when we act on it, either:** (a) let it drain naturally — a legacy sidecar is
+rewritten in the enriched shape by the next `_sl_snapshot` for that server, and `sl_prune`
+deletes the ones whose pid has left the ledger, so the population turns over within the
+retention window; or (b) a one-shot enrichment migration that rewrites/deletes the legacy
+files up front. (b) is only worth it if the drain is measured to be slow — a legacy file
+belongs to a server that is usually already dead, and a dead server is never re-snapshotted,
+so those specific files only leave via `sl_prune`.
+
+**Trigger to revisit:** count them —
+`awk -F'\t' 'FNR==1 && NF<4 {n++} END{print n+0}' ~/.local/state/agentmux/live/*.windows`.
+If that is still a large fraction after a couple of retention windows, the natural drain
+is not happening and (b) is the answer.

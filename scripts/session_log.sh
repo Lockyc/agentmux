@@ -55,7 +55,11 @@ TAB=$(printf '\t')
 _sl_state_dir() {
   printf '%s' "${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}"
 }
-_sl_ledger() { printf '%s/sessions.jsonl' "$(_sl_state_dir)"; }
+# The ledger's filename, carried as a variable so the presence-poll fast path can
+# build the path from an already-resolved state dir without a second subshell (its
+# whole budget is forks). This is the ONE encoding of the name — never restate it.
+_SL_LEDGER_NAME=sessions.jsonl
+_sl_ledger() { printf '%s/%s' "$(_sl_state_dir)" "$_SL_LEDGER_NAME"; }
 # Confirmed-dead (socket,pid) memo — one "socket|pid" per line.
 #
 # Server death is MONOTONIC: a (socket,pid) that failed a liveness probe can never
@@ -425,15 +429,31 @@ _sl_resume_map() {
 # Exit 0 = yes, 1 = no, 2 = CANNOT ANSWER (fall through to the ledger path).
 #
 # 2 IS DELIBERATELY NOT 1. Missing sidecar dir, no sidecars at all, a legacy
-# single-field sidecar, a .windows with no readable .sock companion — every one of
-# those is absence of information, not evidence of no drop. Answering "no" on any
-# of them would silently stop ghosting recoverable sessions, which is the exact
-# data loss this subsystem exists to prevent, and it would do so invisibly:
-# nothing is logged, nothing fails, the dot simply never lights. An EMPTY sidecar
-# is the one shape that IS a real answer — it records "nothing was open when this
-# server died" (a clean teardown), so it contributes no drop and never reads as 2.
+# single-field sidecar, a .windows with no readable .sock companion, a server the
+# LEDGER names for this cwd that has no sidecar at all — every one of those is
+# absence of information, not evidence of no drop. Answering "no" on any of them
+# would silently stop ghosting recoverable sessions, which is the exact data loss
+# this subsystem exists to prevent, and it would do so invisibly: nothing is
+# logged, nothing fails, the dot simply never lights. An EMPTY sidecar is the one
+# shape that IS a real answer — it records "nothing was open when this server
+# died" (a clean teardown), so it contributes no drop and never reads as 2.
+#
+# THE SIDECAR-LESS SERVER IS THE CASE THAT MAKES THE LEDGER AN INPUT HERE. The
+# ledger path treats a dead server with no sidecar as "every one of its windows was
+# open at death" (sl_dropped's '*' branch) and offers them. Sidecars alone cannot
+# see such a server at all, so scanning only live/ answers "no" on precisely the
+# state recovery exists for: a crash at launch, where sl_open appends the ledger row
+# and the follow-up _sl_snapshot's liveness query then fails because the server has
+# already gone. So the ledger joins the same single awk pass — as a plain text scan,
+# never a jq fold — purely to ask whether every server it names FOR THIS CWD has a
+# sidecar. Any that doesn't makes the query unanswerable here.
 _sl_pending_fast() {  # <cwd>
   _pf_cwd=$1
+  # jq stores a control character in a cwd \u-escaped, and the ledger scan below
+  # matches the ledger's RAW bytes — so for such a cwd the sidecar-less-server check
+  # could not run soundly, and an unsound check here means a wrong 1. Defer instead.
+  # (Mirrors sl_dropped's own screening of its raw-grep ledger fast path.)
+  case "$_pf_cwd" in *[[:cntrl:]]*) return 2 ;; esac
   _pf_sd=$(_sl_state_dir)
   [ -d "$_pf_sd/live" ] || return 2
   # Hand the whole glob to awk as-is. Do NOT pre-filter it in the shell: a loop that
@@ -443,18 +463,86 @@ _sl_pending_fast() {  # <cwd>
   # which is exactly the answer an empty sidecar should contribute: that server was
   # torn down cleanly, so it offers no drop (and if every sidecar is empty, awk finds
   # no candidate and the whole query is a plain "no", never a 2).
+  #
+  # TWO input groups, ONE awk (the fork budget is the whole point): every .windows
+  # sidecar, then the ledger LAST. The .sock companions are deliberately NOT globbed
+  # in even though the ledger join needs them — that doubles the files awk reads
+  # (measured +4.6ms per query at 216 sidecars, against +1.6ms for the whole ledger)
+  # and all but a handful of those reads are wasted, so awk opens by name the few it
+  # actually needs (see the END block).
   set -- "$_pf_sd"/live/*.windows
   [ -e "$1" ] || return 2                  # unmatched glob: no sidecars = no information
-  # ONE pass over every sidecar. Emits the files holding a candidate row — an agent
+  # Built from the already-resolved state dir: `$(_sl_ledger)` would be two more
+  # forks (it resolves the dir again in its own subshell) on the one path whose
+  # entire cost is forks.
+  _pf_ledger="$_pf_sd/$_SL_LEDGER_NAME"
+  [ -s "$_pf_ledger" ] && set -- "$@" "$_pf_ledger"
+  # ONE pass over every input. Emits the files holding a candidate row — an agent
   # window (never `shell`) in this cwd that recorded a resume hint, the same three
   # conditions the ledger path applies to its own rows. A line with fewer than 4
   # tab-separated fields is the legacy pre-enrichment shape, so that server's cwds
-  # are unknown and the query is unanswerable: bail with a distinctive status. Any
-  # other non-zero (a genuine awk failure) lands in the same place, which is the
-  # safe direction — 2 defers to the ledger, it never invents an answer.
-  _pf_cands=$(awk -F"$TAB" -v c="$_pf_cwd" '
-      NF<4 { exit 3 }
-      $2==c && $3!="shell" && $4!="" { if (!(seen[FILENAME]++)) print FILENAME }
+  # are unknown and the query is unanswerable: bail with a distinctive status (3);
+  # a ledger server with no sidecar bails the same way (4). Any other non-zero (a
+  # genuine awk failure) lands in the same place, which is the safe direction — 2
+  # defers to the ledger, it never invents an answer.
+  #
+  # The cwd arrives through ENVIRON, NOT `-v`: `-v` runs its value through escape
+  # processing, so a cwd containing a backslash would be compared mangled and the
+  # query would false-negative. ENVIRON is the byte-exact channel.
+  _pf_cands=$(SL_PF_CWD="$_pf_cwd" awk -F"$TAB" '
+      BEGIN {
+        c = ENVIRON["SL_PF_CWD"]
+        # The ledger stores cwd JSON-encoded, so match on the ENCODED needle. Built
+        # by a character loop rather than gsub(): backslash handling in a gsub()
+        # replacement string is implementation-specific, and the one character that
+        # must survive intact here is the backslash.
+        j = ""
+        for (i = 1; i <= length(c); i++) {
+          ch = substr(c, i, 1)
+          if (ch == "\\" || ch == "\"") j = j "\\" ch; else j = j ch
+        }
+        need = "\"cwd\":\"" j "\""
+        # Index the sidecar FILENAMES by pid, straight off ARGV — no file is read to
+        # build this, and unlike a FILENAME-driven index it still sees the EMPTY
+        # sidecars (awk yields no records for those, but an empty sidecar is a real
+        # answer, so a ledger server holding one must not read as missing).
+        for (i = 1; i < ARGC; i++) {
+          f = ARGV[i]
+          if (f !~ /\.windows$/) continue
+          p = f; sub(/\.windows$/, "", p); sub(/.*-/, "", p)
+          byp[p] = byp[p] "\n" f
+        }
+      }
+      FNR == 1 { mode = (FILENAME ~ /\.windows$/) ? 1 : 3 }
+      mode == 1 {
+        if (NF < 4) exit 3
+        if ($2 == c && $3 != "shell" && $4 != "") { if (!(seen[FILENAME]++)) print FILENAME }
+        next
+      }
+      index($0, need) && match($0, /"socket_path":"[^"]*"/) {
+        sp = substr($0, RSTART + 15, RLENGTH - 16)
+        if (match($0, /"server_pid":[0-9]+/)) {
+          k = sp SUBSEP substr($0, RSTART + 13, RLENGTH - 13)
+          wsock[k] = sp; wpid[k] = substr($0, RSTART + 13, RLENGTH - 13)
+        }
+      }
+      # Does every server the ledger names for this cwd actually HAVE a sidecar? The
+      # filename only hashes the socket, so the .sock companion is the only join back
+      # to the ledger socket_path — read it here, for the pid-matching sidecars alone.
+      END {
+        for (k in wsock) {
+          ok = 0
+          n = split(byp[wpid[k]], ff, "\n")
+          for (i = 1; i <= n; i++) {
+            if (ff[i] == "") continue
+            s = ""
+            if ((getline s < (ff[i] ".sock")) > 0 && s == wsock[k]) ok = 1
+            close(ff[i] ".sock")
+            if (ok) break
+          }
+          if (!ok) exit 4
+        }
+      }
     ' "$@") || return 2
   [ -n "$_pf_cands" ] || return 1
   # From here on the work is per-CANDIDATE, and candidates are rare — this is the
@@ -508,7 +596,6 @@ _sl_pending_fast() {  # <cwd>
 # plain `amux` launch here would offer a restore, and a marking read would burn the gate.
 sl_dropped() {
   _sl_enabled || return 0
-  _sl_load_dead   # one read; turns the per-server liveness sweep fork-free for known-dead servers
   # PRESENCE-POLL FAST PATH. --pending's only consumer (bin/amux's _amux_probe) tests
   # its output for EMPTINESS, never reads the rows, so a single synthetic line answers
   # it — that narrowing is what lets the sidecars replace the ledger fold here. Exit 2
@@ -523,6 +610,12 @@ sl_dropped() {
       *) ;;                      # 2 = cannot answer; fall through to the ledger path
     esac
   fi
+  # One read; turns the per-server liveness sweep below fork-free for known-dead
+  # servers. Deliberately BELOW the fast-path block: nothing between here and the top
+  # of the function reads $_SL_DEAD (_sl_pending_fast loads its own, only once it has
+  # candidates), so hoisting it would spend 2 forks on every poll that the sidecars
+  # answer outright — the common case, and the case this whole path exists for.
+  _sl_load_dead
   # _gate_new: apply the once-per-(server,cwd) offer filter. _mark_new: also record the
   # offer. --new does both (the launch picker consumes it once). --pending gates WITHOUT
   # marking: warden's presence probe polls this every few seconds, so a marking read would
@@ -1853,6 +1946,111 @@ _assert "t4b: ledger path agrees (no drop)" "0" "$(printf '%s' "$_t4b_slowmiss" 
 _assert "t4b: ledger fallback still swaps the resume program" "1" \
   "$(printf '%s\n' "$_t4b_slow" | grep -c 'claude-work --resume drophere')"
 rm -rf "$_t4b_dir"
+
+# ============ Task 4c: the LIVE-server gate. `dropped` means one thing — a
+#     restorable drop exists only on a DEAD server — and in the fast path the
+#     whole of that semantic is the single `_sl_server_live … && continue`. Every
+#     other fixture in this file points at an unreachable socket, so all of them
+#     pass whether that call runs or not (verified: mutating it to `:` left all
+#     153 assertions green). Then a project whose agent is RUNNING shows a
+#     permanent restorable ghost dot.
+#
+#     So this fixture is a REAL, LIVE tmux server: the sidecar's .sock companion
+#     holds its actual #{socket_path} and the filename its actual #{pid}, which is
+#     what makes _sl_server_live read it LIVE. Stubbing any of that would prove
+#     nothing — hence the real binary (this block sits below `unset -f tmux`, and
+#     uses `command tmux` for its own calls regardless) and the isolated
+#     TMUX_TMPDIR + `-f /dev/null` hermetic server, killed before the block ends.
+#
+#     Non-vacuous in BOTH directions: mutate the gate away and "live server yields
+#     no drop" fails; and the SAME fixture, once the server is killed, must start
+#     reporting the drop — which is what proves the 1 came from liveness and not
+#     from some unrelated defect in the fixture. ============
+unset SESSION_LOG_LIVE_PIDS SESSION_LOG_LIVE_WINDOWS 2>/dev/null
+if command -v tmux >/dev/null 2>&1; then
+  _t4c_dir=$(mktemp -d) || exit 1
+  # Short literal dir (not the mktemp one): a macOS temp path can exceed the
+  # 104-char AF_UNIX socket-path limit, same as the t3/sharded-socket blocks.
+  _t4c_tm="/tmp/slt4c-$$"; mkdir -p "$_t4c_tm" "$_t4c_dir/live"
+  _t4c_sock="agentmux-t4c-$$"
+  TMUX_TMPDIR="$_t4c_tm" command tmux -L "$_t4c_sock" -f /dev/null new-session -d -s t4c -c /tmp 2>/dev/null
+  _t4c_real=$(TMUX_TMPDIR="$_t4c_tm" command tmux -L "$_t4c_sock" display-message -p '#{socket_path}' 2>/dev/null)
+  _t4c_pid=$(TMUX_TMPDIR="$_t4c_tm" command tmux -L "$_t4c_sock" display-message -p '#{pid}' 2>/dev/null)
+  _t4c_wid=$(TMUX_TMPDIR="$_t4c_tm" command tmux -L "$_t4c_sock" display-message -p -t t4c '#{window_id}' 2>/dev/null)
+  if [ -n "$_t4c_real" ] && [ -n "$_t4c_pid" ]; then
+    _t4c_f="$_t4c_dir/live/$(printf '%s' "$_t4c_real" | cksum | cut -d' ' -f1)-$_t4c_pid.windows"
+    printf '%s\t/w/live\twork\t1\n' "$_t4c_wid" > "$_t4c_f"
+    printf '%s\n' "$_t4c_real" > "$_t4c_f.sock"
+    # A ledger naming the same server, so the ledger path has the same row to judge
+    # and the two can be compared. Real timestamps: the ledger path also gates on
+    # maxts >= boot epoch, and SESSION_LOG_BOOT_EPOCH=1 keeps that side out of the way.
+    _t4c_now=$(date +%s)
+    cat > "$_t4c_dir/sessions.jsonl" <<JSON
+{"ts":$_t4c_now,"event":"open","socket_path":"$_t4c_real","server_pid":$_t4c_pid,"session":"t4c","window_id":"$_t4c_wid","window_name":"claude","cwd":"/w/live","agent":"work"}
+{"ts":$_t4c_now,"event":"resume","socket_path":"$_t4c_real","server_pid":$_t4c_pid,"window_id":"$_t4c_wid","label":"droplive","resume_cmd":"claude --resume droplive"}
+JSON
+    _t4c_fast() {  # <cwd> → prints the exit code (see _t4_fast on the $() wrapper)
+      _ignore=$(AGENTMUX_STATE_DIR="$_t4c_dir" _sl_pending_fast "$1"); printf '%s' "$?"
+    }
+    _assert "t4c: LIVE server yields no restorable drop" "1" "$(_t4c_fast /w/live)"
+    _t4c_p=$(AGENTMUX_STATE_DIR="$_t4c_dir" SESSION_LOG_BOOT_EPOCH=1 \
+      SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending /w/live)
+    _assert "t4c: --pending emits nothing for a live server" "0" "$(printf '%s' "$_t4c_p" | grep -c .)"
+    _t4c_s=$(AMUX_PENDING_NO_FAST=1 AGENTMUX_STATE_DIR="$_t4c_dir" SESSION_LOG_BOOT_EPOCH=1 \
+      SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending /w/live)
+    _assert "t4c: ledger path agrees (live server, no drop)" "0" "$(printf '%s' "$_t4c_s" | grep -c .)"
+
+    # Kill it and re-ask. Same sidecar, same ledger, same cwd — only liveness changed.
+    TMUX_TMPDIR="$_t4c_tm" command tmux -L "$_t4c_sock" kill-server 2>/dev/null
+    _t4c_i=0
+    while [ "$_t4c_i" -lt 60 ] && command tmux -S "$_t4c_real" display-message -p '#{pid}' >/dev/null 2>&1; do
+      _t4c_i=$((_t4c_i + 1)); sleep 0.05
+    done
+    _assert "t4c: the same fixture DOES ghost once that server is dead" "0" "$(_t4c_fast /w/live)"
+  else
+    echo "SKIP: t4c (could not start a test tmux server)"
+  fi
+  TMUX_TMPDIR="$_t4c_tm" command tmux -L "$_t4c_sock" kill-server 2>/dev/null
+  rm -rf "$_t4c_dir" "$_t4c_tm"
+else
+  echo "SKIP: t4c live-server gate (tmux not found)"
+fi
+
+# ============ Task 4d: a DEAD server the ledger names but that has NO sidecar is
+#     the one state the sidecar scan used to answer WRONG rather than defer. The
+#     ledger path reads it as "all its windows were open at death" (sl_dropped's
+#     '*' branch) and offers the drops; live/ cannot see such a server at all, so
+#     a scan of live/ alone concluded "no drop". It triggers exactly on a crash at
+#     launch — sl_open appends the ledger row, then _sl_snapshot's liveness query
+#     fails because the server has already gone — i.e. the scenario recovery is
+#     for. Fixture is that state precisely: a normal enriched sidecar for an
+#     unrelated server (so the scan is not short-circuited by "no sidecars" or by
+#     a legacy shape) plus a ledger naming a second, sidecar-less one. Non-vacuous:
+#     without the ledger join in _sl_pending_fast this asserts 1, not 2. ============
+_t4d_dir=$(mktemp -d) || exit 1
+mkdir -p "$_t4d_dir/live"
+_t4d_f="$_t4d_dir/live/$(printf '%s' /s/other | cksum | cut -d' ' -f1)-999993.windows"
+printf '@1\t/w/other\twork\t1\n' > "$_t4d_f"; printf '/s/other\n' > "$_t4d_f.sock"
+cat > "$_t4d_dir/sessions.jsonl" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/crash","server_pid":999992,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/crash","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/crash","server_pid":999992,"window_id":"@1","label":"dropcrash","resume_cmd":"claude --resume dropcrash"}
+JSON
+_t4d_fast() {  # <cwd> → prints the exit code
+  _ignore=$(AGENTMUX_STATE_DIR="$_t4d_dir" _sl_pending_fast "$1"); printf '%s' "$?"
+}
+_assert "t4d: ledger server with no sidecar defers to the ledger" "2" "$(_t4d_fast /w/crash)"
+# ...and the deferral is worth making: the ledger path really does find that drop,
+# so the old 1 was a silently-lost ghost, not a harmless one.
+_t4d_out=$(AGENTMUX_STATE_DIR="$_t4d_dir" SESSION_LOG_BOOT_EPOCH=1 \
+  SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending /w/crash)
+_assert "t4d: the deferred-to ledger path DOES report that drop" "1" \
+  "$(printf '%s\n' "$_t4d_out" | grep -c .)"
+# The join is scoped to the QUERIED cwd — a sidecar-less server in some other
+# project must not turn every poll on the machine into a ledger fold.
+_assert "t4d: an unaffected cwd still answers from the sidecars" "0" "$(_t4d_fast /w/other)"
+# A server the ledger names WITH a sidecar is not a deferral, only a missing one is.
+_assert "t4d: no deferral for a cwd the ledger never names" "1" "$(_t4d_fast /w/absent)"
+rm -rf "$_t4d_dir"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
