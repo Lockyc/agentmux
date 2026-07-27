@@ -210,7 +210,11 @@ _sl_live_windows() {  # <socket> [pid]
     printf '%s\n' $SESSION_LOG_LIVE_WINDOWS
     return 0
   fi
-  tmux -S "$1" list-windows -a -F '#{window_id}' 2>/dev/null && return 0
+  # One call returns every fact the presence probe needs. Verified on tmux 3.7b:
+  # #{@option} is supported in list-windows -F. Keep the `&& return 0` — an empty
+  # result from a live windowless server is a REAL answer (see the comment above).
+  tmux -S "$1" list-windows -a \
+    -F "#{window_id}${TAB}#{@amux_cwd}${TAB}#{@amux_agent}${TAB}#{@amux_resumable}" 2>/dev/null && return 0
   # _sl_server_live (not a bare socket probe) so a pid that no longer matches —
   # a DIFFERENT server now owning this socket — reads as unreachable and leaves
   # our dead server's recorded set alone.
@@ -256,6 +260,10 @@ _sl_snapshot() {  # <socket> <pid>
   _sl_clear_dead "$1" "$2"
   _lf=$(_sl_live_file "$1" "$2"); _dir=${_lf%/*}
   mkdir -p "$_dir" 2>/dev/null || return 0
+  # The sidecar name only hashes the socket; the presence poll needs the path back to run
+  # the real (tmux-based) liveness test. Separate file so .windows keeps its "empty means
+  # nothing was open at death" meaning.
+  printf '%s\n' "$1" > "$_dir/${_lf##*/}.sock" 2>/dev/null || true
   _tmp="$_dir/.$2.$$.tmp"
   if _sl_live_windows "$1" "$2" > "$_tmp" 2>/dev/null; then
     mv "$_tmp" "$_lf" 2>/dev/null || rm -f "$_tmp"
@@ -1496,6 +1504,43 @@ if command -v tmux >/dev/null 2>&1; then
 else
   echo "SKIP: sharded-socket open recording test (tmux not found)"
 fi
+
+# ============ Task 3: the sidecar carries cwd/agent/resumable, plus the socket
+#     companion file. Placed AFTER `unset -f tmux` above, so every bare `tmux`
+#     call below — both this block's own and the one INSIDE _sl_live_windows —
+#     hits the real binary, not the canned stub. That's what makes this
+#     non-vacuous: reverting the -F format string in _sl_live_windows back to
+#     '#{window_id}' makes the real tmux server emit a bare id with no tabs,
+#     so "sidecar has 4 fields" drops to 1 and fails. Defensive unsets: a
+#     prefix assignment persists past a shell-function call in this repo's sh
+#     (see the comments on SESSION_LOG_CTX above), so clear the hooks this
+#     block must NOT be driven by. Short literal /tmp dir (not `mktemp -d`),
+#     matching the sharded-socket block above: a macOS mktemp path can exceed
+#     the 104-char AF_UNIX socket-path limit. ============
+unset SESSION_LOG_LIVE_WINDOWS SESSION_LOG_LIVE_PIDS SESSION_LOG_CTX 2>/dev/null
+_t3_dir="/tmp/slt3-$$"; mkdir -p "$_t3_dir"
+_t3_sock="agentmux-t3-$$"
+if command -v tmux >/dev/null 2>&1; then
+  TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" -f /dev/null new-session -d -s t3 -c /tmp 2>/dev/null
+  _t3_wid=$(TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" display-message -p -t t3 '#{window_id}' 2>/dev/null)
+  TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" set-option -w -t "$_t3_wid" @amux_cwd   /w/three 2>/dev/null
+  TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" set-option -w -t "$_t3_wid" @amux_agent work     2>/dev/null
+  TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" set-option -w -t "$_t3_wid" @amux_resumable 1    2>/dev/null
+  _t3_real=$(TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" display-message -p '#{socket_path}' 2>/dev/null)
+  _t3_pid=$(TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" display-message -p '#{pid}' 2>/dev/null)
+  _ignore=$(_sl_snapshot "$_t3_real" "$_t3_pid")
+  _t3_line=$(cat "$(_sl_live_file "$_t3_real" "$_t3_pid")" 2>/dev/null)
+  _assert "t3: sidecar has 4 fields" "4" "$(printf '%s' "$_t3_line" | awk -F"$TAB" '{print NF}')"
+  _assert "t3: sidecar carries cwd"  "/w/three" "$(printf '%s' "$_t3_line" | cut -f2)"
+  _assert "t3: sidecar carries agent" "work"    "$(printf '%s' "$_t3_line" | cut -f3)"
+  _assert "t3: sidecar carries resumable" "1"   "$(printf '%s' "$_t3_line" | cut -f4)"
+  _assert "t3: writes the socket companion" "$_t3_real" \
+    "$(cat "$(_sl_live_file "$_t3_real" "$_t3_pid").sock" 2>/dev/null)"
+  TMUX_TMPDIR="$_t3_dir" command tmux -L "$_t3_sock" kill-server 2>/dev/null
+else
+  echo "SKIP: t3 (tmux not found)"
+fi
+rm -rf "$_t3_dir"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
