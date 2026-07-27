@@ -500,14 +500,20 @@ _sl_resume_map() {
 # when it could affect THIS cwd — and "could" is decided from information we
 # actually hold, never from the assumption that absence means irrelevance:
 #   - a LEGACY line hides its own cwd, so the sidecar cannot say whom it concerns.
-#     The LEDGER can: it records cwd per (socket_path, server_pid, window_id). A
-#     legacy window the ledger places in another cwd is irrelevant here (the
-#     ledger path drops it on the same `cwd != scope` test, so ignoring it cannot
-#     disagree). One the ledger places in THIS cwd, or one the ledger does not
-#     name at all on a server whose ledger rows DO mention this cwd, stays
-#     unresolvable. The `.sock` companion is what joins sidecar → ledger socket
-#     path; without it the join degrades to the pid alone, which can only rule the
-#     sidecar out (no ledger row for this cwd carries that pid), never in.
+#     Two independent tests can still retire it, and it only bails when BOTH fail.
+#     PLACEMENT: the ledger records cwd per (socket_path, server_pid, window_id), so
+#     a legacy window the ledger places in another cwd is irrelevant here (the ledger
+#     path drops it on the same `cwd != scope` test, so ignoring it cannot disagree).
+#     One the ledger places in THIS cwd stays unresolvable. INERTNESS: a sidecar line
+#     only ever GATES a ledger row — it is the was-open-at-death set the fold
+#     intersects with — and never contributes one, so a window the ledger holds NO
+#     row for can be emitted by neither path and its cwd cannot change the answer,
+#     placed or not. Only a window the ledger holds a row for while naming no cwd for
+#     it (`resume` rows alone) is genuinely unknown, and that bails on a server whose
+#     ledger rows DO mention this cwd. The `.sock` companion is what joins sidecar →
+#     ledger socket path; without it the join degrades to the pid alone, which can
+#     only rule the sidecar out (no ledger row for this cwd carries that pid, or none
+#     names its windows at all), never in.
 #   - a .sock-LESS sidecar blocks the liveness probe, so it bails only where the
 #     probe would have run: a candidate row in this cwd (the per-candidate loop
 #     below), or the sidecar of a ledger server named for this cwd (the END join).
@@ -617,19 +623,35 @@ _sl_pending_fast() {  # <cwd>
         next
       }
       {
-        # Ledger rows are indexed for two questions: which servers this cwd was open
+        # Ledger rows are indexed for three questions: which servers this cwd was open
         # on (`wsock`, for the sidecar-less-server check), and — only when a legacy
-        # sidecar exists to resolve — which cwd each window of that server pid was
-        # opened in (`lrel`/`lknown`). Both questions are about the cwd of a window, and
-        # only an `open` row carries one, so the two cheap `index` tests screen out
-        # every `resume` row (683 of 1629 on a real ledger) before the regex — and a
-        # fully-enriched state dir, where `nlegf` is 0, pays exactly what it paid
-        # before this scoping existed.
+        # sidecar exists to resolve — whether the ledger holds ANY row for a given
+        # window of that server pid (`lany`, the inertness test the END block leans on)
+        # and which cwd it was opened in (`lrel`/`lknown`). A fully-enriched state dir,
+        # where `nlegf` is 0, still pays only the one `index` test per row: everything
+        # below the first screen is legacy-resolution work.
+        #
+        # `resume` rows (683 of 1629 on a real ledger) carry no cwd, so they answer
+        # neither cwd question — but they ARE ledger rows, so they must reach `lany`.
+        # Screening them out on `"cwd":"` (which this pass used to do) would report a
+        # window with only `resume` rows as having no ledger row at all, i.e. as inert
+        # when it is not. The cheap screen is therefore `nlegf`, not the cwd key.
         hit = index($0, need)
-        if (!hit && (nlegf == 0 || !index($0, "\"cwd\":\""))) next
+        if (!hit && nlegf == 0) next
         if (!match($0, /"server_pid":[0-9]+/)) next
         pid = substr($0, RSTART + 13, RLENGTH - 13)
         if (!hit && !(pid in legpid)) next
+        # Keyed on (server_pid, window_id), NOT on the socket path, and recorded
+        # BEFORE the socket_path match can `next` out: `lany` is the evidence a bail
+        # is dropped on, so anything that makes it INCOMPLETE turns a live window into
+        # a false "inert" — a wrong 1. Pid+window_id is the coarser key (two servers
+        # sharing a pid and a window id collide), and coarser is the safe direction
+        # here: it can only ever preserve a bail, never invent an answer.
+        wid = ""
+        if ((pid in legpid) && match($0, /"window_id":"[^"]*"/)) {
+          wid = substr($0, RSTART + 13, RLENGTH - 14)
+          lany[pid SUBSEP wid] = 1
+        }
         if (!match($0, /"socket_path":"[^"]*"/)) next
         sp = substr($0, RSTART + 15, RLENGTH - 16)
         if (hit) { k = sp SUBSEP pid; wsock[k] = sp; wpid[k] = pid }
@@ -638,9 +660,8 @@ _sl_pending_fast() {  # <cwd>
         # whose every row lacks it (a bare `resume`) stays unknown. `lrel` wins over
         # `lknown` on purpose: a window id reopened in a second cwd is ambiguous, and
         # the safe reading of ambiguity is "could be this cwd".
-        if ((pid in legpid) && index($0, "\"cwd\":\"") &&
-            match($0, /"window_id":"[^"]*"/)) {
-          w = sp SUBSEP pid SUBSEP substr($0, RSTART + 13, RLENGTH - 14)
+        if (wid != "" && index($0, "\"cwd\":\"")) {
+          w = sp SUBSEP pid SUBSEP wid
           if (hit) lrel[w] = 1; else lknown[w] = 1
         }
       }
@@ -676,8 +697,17 @@ _sl_pending_fast() {  # <cwd>
             # No socket path: the ledger join degrades to the pid, which can only rule
             # the sidecar OUT. No ledger row for this cwd carries this pid → no window
             # of this server is in this cwd, so its unreadable lines hide nothing.
-            # Otherwise it might BE that server, and we cannot tell: bail.
-            if (p in cwdpid) exit 3
+            # Otherwise it might BE that server — and then each unreadable LINE is
+            # checked for inertness in its own right (see the END-of-loop note below):
+            # a window the ledger holds no row for cannot be emitted by the ledger path
+            # whichever server this sidecar turns out to be, so it hides nothing either.
+            if (p in cwdpid) {
+              n = split(legw[f], ww, "\n")
+              for (m = 1; m <= n; m++) {
+                if (ww[m] == "") continue
+                if ((p SUBSEP ww[m]) in lany) exit 3
+              }
+            }
             continue
           }
           n = split(legw[f], ww, "\n")
@@ -686,12 +716,18 @@ _sl_pending_fast() {  # <cwd>
             w = s SUBSEP p SUBSEP ww[m]
             if (w in lrel) exit 3          # ledger puts this window in THIS cwd
             if (w in lknown) continue      # ...in another one: irrelevant here
-            # The ledger names no cwd for this window. It can then never be offered by
-            # the ledger path either (its fold needs an `open` row), but that argument
-            # rests on a raw text scan of the ledger rather than the fold itself, so it
-            # is only leaned on where it costs nothing: for a server the ledger never
-            # ties to this cwd. On a server it DOES, the unknown stays unknown.
-            if ((s SUBSEP p) in cwdsock) exit 3
+            # The ledger names no cwd for this window, so the join cannot place it.
+            # INERTNESS is the second question, and it is the one that resolves this:
+            # a sidecar line can only ever GATE a ledger row (it is the was-open-at-death
+            # set the fold intersects with), never contribute one — so a window the
+            # ledger holds NO row for is a set member nothing can be emitted for, and
+            # whether it is in this cwd cannot change the answer. It is dropped, not
+            # bailed on. A window the ledger DOES hold a row for while naming no cwd
+            # (only `resume` rows survived pruning) stays unknown, and bails as before
+            # if its server is one the ledger ties to this cwd. This is the condition
+            # that used to defer half the cwds on a real state dir: the residual legacy
+            # lines are hand-created windows amux never logged at all.
+            if (((s SUBSEP p) in cwdsock) && ((p SUBSEP ww[m]) in lany)) exit 3
           }
         }
       }
@@ -2608,9 +2644,12 @@ _t6_base <<JSON
 JSON
 _t6_put /s/other 999883 "@9"
 _assert "t6: a legacy window seen in this cwd at all defers" "2" "$(_t6_fast /w/six)"
-# A legacy window the ledger does not name AT ALL. On a server with no /w/six row
-# it hides nothing the ledger path could have offered; on one the ledger DOES tie
-# to /w/six it stays unknown, and unknown is 2.
+# A legacy window the ledger holds NO ROW FOR is INERT, on any server. A sidecar
+# line only GATES ledger rows (it is the was-open-at-death set the fold intersects
+# with) and never contributes one, so a window with no row is a set member nothing
+# can be emitted for — its unknown cwd cannot change the answer even on a server
+# the ledger DOES tie to /w/six. Both halves must answer 0; the pair is here
+# because a bail keyed on the server rather than the window fails the second.
 _t6_base </dev/null
 _t6_put /s/leg 999888 "@9"
 _assert "t6: unnamed legacy window on an unrelated server does not suppress" "0" "$(_t6_fast /w/six)"
@@ -2618,7 +2657,19 @@ _t6_base <<JSON
 {"ts":102,"event":"open","socket_path":"/s/leg","server_pid":999888,"session":"l","window_id":"@8","window_name":"sh","cwd":"/w/six","agent":"shell"}
 JSON
 _t6_put /s/leg 999888 "@8${TAB}/w/six${TAB}shell${TAB}\n@9"
-_assert "t6: unnamed legacy window on a THIS-cwd server defers" "2" "$(_t6_fast /w/six)"
+_assert "t6: unnamed legacy window on a THIS-cwd server is inert" "0" "$(_t6_fast /w/six)"
+# ...and its pair, which is what keeps the inertness test honest: the SAME fixture
+# plus one `resume` row for @9. The ledger now holds a row for that window while
+# naming no cwd for it (only an `open` row carries one), so it is genuinely unknown
+# on a server tied to /w/six — the shape that must still defer. Drop the `in lany`
+# guard and the assertion above passes vacuously; screen `resume` rows out of the
+# index and this one collapses to 1's neighbour, 0.
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/leg","server_pid":999888,"session":"l","window_id":"@8","window_name":"sh","cwd":"/w/six","agent":"shell"}
+{"ts":103,"event":"resume","socket_path":"/s/leg","server_pid":999888,"window_id":"@9","label":"legnine","resume_cmd":"claude --resume legnine"}
+JSON
+_t6_put /s/leg 999888 "@8${TAB}/w/six${TAB}shell${TAB}\n@9"
+_assert "t6: legacy window with a cwd-less ledger row on a THIS-cwd server defers" "2" "$(_t6_fast /w/six)"
 
 # --- shape 2: a .windows with no .sock companion. The companion is the only join
 # back to the socket path, so without it neither the liveness probe nor the
@@ -2641,14 +2692,27 @@ _assert "t6: .sock-less legacy sidecar on an unrelated pid does not suppress" "0
 # Its pair needs TWO sidecars sharing that pid — one properly joined (so the
 # sidecar-less-server check passes and cannot be what produces the 2) and the
 # .sock-less legacy one beside it. That is the only shape in which the pid-only
-# fallback is the deciding test rather than a second guard.
+# fallback is the deciding test rather than a second guard. Inertness applies here
+# too, and on the coarser key the missing socket forces: a @9 the ledger holds no
+# row for under this PID is inert whichever server the sidecar turns out to be.
 _t6_base <<JSON
 {"ts":102,"event":"open","socket_path":"/s/legok","server_pid":999886,"session":"l","window_id":"@8","window_name":"sh","cwd":"/w/six","agent":"shell"}
 JSON
 _t6_put /s/legok 999886 "@8${TAB}/w/six${TAB}shell${TAB}"
 _t6_put /s/legns 999886 "@9"
 rm -f "$(_t6_f /s/legns 999886).sock"
-_assert "t6: .sock-less legacy sidecar on a THIS-cwd pid defers" "2" "$(_t6_fast /w/six)"
+_assert "t6: .sock-less legacy sidecar, window with no ledger row, is inert" "0" "$(_t6_fast /w/six)"
+# Same fixture, one `resume` row added for @9 under that pid: now the ledger holds
+# a row for the window but places it nowhere, and the pid-only join cannot rule the
+# sidecar out — so this half must still defer.
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/legok","server_pid":999886,"session":"l","window_id":"@8","window_name":"sh","cwd":"/w/six","agent":"shell"}
+{"ts":103,"event":"resume","socket_path":"/s/legns","server_pid":999886,"window_id":"@9","label":"nsnine","resume_cmd":"claude --resume nsnine"}
+JSON
+_t6_put /s/legok 999886 "@8${TAB}/w/six${TAB}shell${TAB}"
+_t6_put /s/legns 999886 "@9"
+rm -f "$(_t6_f /s/legns 999886).sock"
+_assert "t6: .sock-less legacy sidecar, window WITH a ledger row, defers" "2" "$(_t6_fast /w/six)"
 
 # --- shape 3: a ledger server with NO sidecar. The ledger path reads it as "every
 # window was open at death" and offers them, so it is unanswerable here — but the

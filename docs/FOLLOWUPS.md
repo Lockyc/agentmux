@@ -90,12 +90,12 @@ the agent-session sibling of the frame/term cross-fire, not a separate bug.
 **Trigger to revisit (agent case):** as above, plus any report of `amux --kill <name>` or
 `amux attach <name>` landing on the wrong same-basename project's agent session.
 
-## `--pending` still defers to the ledger for the cwds of sidecar-less servers
+## `--pending` still defers for a legacy window the ledger places in this cwd
 
-**Status:** deferred — roughly half the cwds on a real state dir now answer from the
-sidecars; the rest defer on a condition that is *not* a migration target and needs its own
-design. This is a speed ceiling, never a correctness one: a deferral is the ledger path
-answering, which is always right.
+**Status:** deferred — 44 of the 47 cwds on a real state dir now answer from the sidecars;
+the 3 that do not all hit one condition, and narrowing it further needs evidence this pass
+does not currently collect. This is a speed ceiling, never a correctness one: a deferral is
+the ledger path answering, which is always right.
 
 **Where:** `<state>/live/*.windows` + their `.sock` companions, produced by `_sl_snapshot`;
 consumed by `_sl_pending_fast` in `scripts/session_log.sh`.
@@ -106,16 +106,24 @@ another project must never suppress the answer here — see the presence-dot foo
 CLAUDE.md, and the `t6:` selftest block that pins each shape as a pair):
 
 1. **Legacy line shape** (`exit 3`). The current shape is 4 tab-separated fields (window
-   id, cwd, agent, resumable); sidecars written before the enrichment change carry a bare
-   window id per line, so that window's cwd is unknown. The **ledger** places it, by
-   `(socket_path, server_pid, window_id)`, and the `.sock` companion is the join back to
-   the socket path. It defers only where the join cannot rule the window out: the ledger
-   puts it in *this* cwd, or the ledger does not name it at all **and** names its server
-   for this cwd.
+   id, cwd, agent, resumable); a line whose cwd is unknown — a bare pre-migration window
+   id, or an unstamped 4-field line — hides which project it concerns. Two tests can retire
+   it, and it defers only when both fail. **Placement:** the ledger records cwd per
+   `(socket_path, server_pid, window_id)` (the `.sock` companion is the join back to the
+   socket path), so a window the ledger puts in another cwd is irrelevant here — but one it
+   puts in *this* cwd stays unresolvable, and that is the only condition still deferring on
+   the real dir. **Inertness:** a sidecar line only ever *gates* ledger rows (it is the
+   was-open-at-death set the fold intersects with) and never contributes one, so a window
+   the ledger holds **no row at all** for can be emitted by neither path — its unknown cwd
+   cannot change the answer, and it is dropped rather than bailed on, even on a server the
+   ledger does tie to this cwd. Only a window with a `resume` row and no `open` row is
+   genuinely unknown-but-live.
 2. **Missing `.sock` companion** (`exit 4` / `return 2`). The filename only *hashes* the
    socket, so the companion is the only way back to the socket path — without it neither
    the liveness probe nor that ledger join can run. It defers where the probe would have
    run: a candidate row in this cwd, or the sidecar of a ledger server named for this cwd.
+   The legacy join then degrades to the pid alone, which still carries the inertness test
+   on the coarser `(server_pid, window_id)` key.
 3. **A ledger server with no sidecar at all** (`exit 4`). The ledger names a (socket, pid)
    for the queried cwd that `live/` cannot see — a crash at launch, where `sl_open` writes
    the row and the follow-up `_sl_snapshot` liveness query then fails. The ledger path
@@ -123,7 +131,7 @@ CLAUDE.md, and the `t6:` selftest block that pins each shape as a pair):
    is **not** a migration target: writing a sidecar for such a server would invent
    membership and silently convert the deferral into "no drop".
 
-**Measured on a real 232-sidecar / ~1600-line state dir**, over all 47 distinct ledger
+**Measured on a real 516-sidecar / ~1650-line state dir**, over all 47 distinct ledger
 cwds, fast path against the ledger path (`AMUX_PENDING_NO_FAST=1`) — **zero disagreements**
 in every row:
 
@@ -131,61 +139,17 @@ in every row:
 |---|---|---|
 | bail on sight (before the scoping) | 0 | 47 |
 | scoped to the queried cwd | 23 | 24 |
-| scoped, and the legacy residue also deleted | 23 | 24 |
+| scoped, plus the inertness test | 44 | 3 |
 
-Read the last two rows together: the 11 residual legacy lines now cost **nothing** — the
-same 23 cwds answer with or without them, because every one of those windows sits on some
-other project's server. What caps the win at 23 is condition 3 alone.
+**Timing** (`dropped --pending <cwd>`, same dir): a cwd that newly answers went
+**153ms → 57ms**; the ledger path it used to fall through to costs 113ms on its own.
 
-**Timing** (`dropped --pending <cwd>`, same dir): a cwd that answers went **103ms → 37ms**.
-A cwd that defers went **~160ms → ~175ms** — a real, accepted regression: scoping means
-reading every sidecar and the ledger *before* concluding "cannot answer", where the old
-code aborted at the first legacy line it saw. It buys the 37ms case, and it is the case
-that grows as residue drains.
-
-**What is left, and why it does not drain.** The 24 deferring cwds all trace to one
-long-lived shared tmux server whose sidecar carries hand-created windows the ledger has no
-`open` row for. `migrate` deliberately refuses to enrich those (a guessed row would be a
-wrong answer), and the server is already dead so it is never re-snapshotted — the only exit
-is `sl_prune`, which self-gates on `AGENTMUX_LOG_MAX_LINES` (default 2000) and does not run
-while the ledger sits at ~1600 lines.
-
-**Do NOT just delete the residual sidecars.** It is the tempting one-line unblock and it is
-wrong: an **absent** sidecar means "dead server predating this feature → offer ALL its
-windows" (`sl_dropped`'s `*` branch), so deleting one converts a server that currently
-offers nothing into one that offers every window it ever had. That is precisely the ghost
-resurrection the sidecars exist to prevent. (It is also now pointless — the table above
-shows it changes no answer.)
-
-**Fix when we act on it:** the remaining lever is condition 3, and it is not a sidecar
-question — the fast path would have to reproduce what the ledger path does with a
-sidecar-less server (treat every window it ever opened as open at death) from a raw scan
-rather than the `jq` fold. That is a real design, not a narrowing, and it is only worth it
-if the sidecar-less population stops being dominated by one legacy server. A cheaper
-half-measure first: have `sl_prune` run on age as well as line count, so dead-server
-residue leaves on its own.
-
-**Trigger to revisit:** the answer/defer split, measured directly rather than inferred from
-on-disk counts (both remaining conditions are per-cwd, so no file-level counter can see
-them) —
-
-```sh
-sh - <<'SH'
-awk '/^# ---- dispatch ----$/{exit} {print}' scripts/session_log.sh > /tmp/sl.$$
-AGENTMUX_SESSION_LOG=1 . /tmp/sl.$$; rm -f /tmp/sl.$$
-SD=$HOME/.local/state/agentmux; export AGENTMUX_STATE_DIR="$SD"
-jq -r 'select(.cwd)|.cwd' "$SD/sessions.jsonl" | sort -u | while IFS= read -r c; do
-  _i=$(_sl_pending_fast "$c"); rc=$?
-  s=$(AMUX_PENDING_NO_FAST=1 sl_dropped --pending "$c" | grep -c .)
-  printf '%s\t%s\t%s\n' "$rc" "$s" "$c"
-done | awk -F'\t' '
-  {n++; if ($1==2) d++; else a++
-   if (($1==0 && $2!=1) || ($1==1 && $2!=0)) { bad++; print "DISAGREE: " $0 }}
-  END { printf "answered=%d deferred=%d of %d; disagreements=%d\n", a+0, d+0, n, bad+0 }'
-SH
-```
-
-`disagreements=0` is the invariant — anything else is a correctness bug, not a speed one,
-and outranks every number beside it. A falling `answered` count means new unenrichable
-residue is accumulating; run `session_log.sh migrate` (idempotent) before concluding
-anything from it.
+**What is left, and what would unlock it.** All 3 remaining cwds bail on condition 1's
+placement half — one long-lived shared tmux server whose sidecar carries cwd-unknown lines
+that the ledger *does* place in the queried cwd. Placement cannot rule those out and
+inertness does not apply (the rows exist), so the next narrowing has to ask whether the
+ledger row is **emittable** — `agent != "shell"` and a non-empty `resume_cmd`, the two
+tests the ledger path applies to its own rows. Both facts live on rows this single pass
+already reads, but `resume_cmd` sits on a `resume` row while `agent` sits on the `open`
+row, so it means joining two rows per window inside the scan. Revisit when that residual
+cost is worth 3 cwds — or sooner if a real project's dot is measurably slow.
