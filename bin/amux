@@ -2175,14 +2175,19 @@ STUB
   if command -v tmux >/dev/null 2>&1; then
     _w0save="$AGENTMUX_AGENT_SOCKET"; AGENTMUX_AGENT_SOCKET="amux-win0style-selftest-$$"
     _w0cfgsave="$AGENTMUX_CONFIG"; _w0cache="$_amux_json_cache"
+    # Scope the STATE DIR too, not just the socket: new-session/_amux_launch_window0
+    # reach sl_open, which appends to the ledger and writes a live/ sidecar. Without
+    # this the selftest mutates the USER's real state dir on every run.
+    _w0sdsave="${AGENTMUX_STATE_DIR:-}"; _w0state=$(mktemp -d); export AGENTMUX_STATE_DIR="$_w0state"
     _w0cfg=$(mktemp); printf '[[agents]]\nname = "solo"\nlabel = "s"\ncolour = "green"\ncmd = ":"\n' > "$_w0cfg"
     AGENTMUX_CONFIG="$_w0cfg"; _amux_json_cache=""
     _amux_atmux new-session -d -s w0proj -c /tmp
     _amux_launch_window0 w0proj solo
     _assert "window0: @window-agent set on the agent shard" "solo" \
       "$(_amux_atmux show-options -wqv -t "=w0proj:0" @window-agent 2>/dev/null)"
-    _amux_atmux kill-server 2>/dev/null; rm -f "$_w0cfg"
+    _amux_atmux kill-server 2>/dev/null; rm -f "$_w0cfg"; rm -rf "$_w0state"
     AGENTMUX_AGENT_SOCKET="$_w0save"; AGENTMUX_CONFIG="$_w0cfgsave"; _amux_json_cache="$_w0cache"
+    if [ -n "$_w0sdsave" ]; then export AGENTMUX_STATE_DIR="$_w0sdsave"; else unset AGENTMUX_STATE_DIR; fi
   else
     echo "SKIP: window-0 style test (tmux not found)"
   fi
@@ -2198,6 +2203,9 @@ STUB
   if command -v tmux >/dev/null 2>&1; then
     _es_save="$AGENTMUX_AGENT_SOCKET"; _es_cfgsave="$AGENTMUX_CONFIG"; _es_cache="$_amux_json_cache"
     AGENTMUX_AGENT_SOCKET="amux-ensure-selftest-$$"
+    # Same reason as the window-0 block above: _amux_ensure_agent_session opens a
+    # real session, so sl_open would write to the user's real ledger + live/ sidecars.
+    _es_sdsave="${AGENTMUX_STATE_DIR:-}"; _es_state=$(mktemp -d); export AGENTMUX_STATE_DIR="$_es_state"
     _es_cfg=$(mktemp); printf '[[agents]]\nname = "work"\nlabel = "w"\ncolour = "teal"\ncmd = ":"\n' > "$_es_cfg"
     AGENTMUX_CONFIG="$_es_cfg"; _amux_json_cache=""
     ( cd /tmp && _amux_ensure_agent_session work ensureproj </dev/null ) 2>/dev/null
@@ -2211,8 +2219,9 @@ STUB
       "$(_amux_atmux show-options -qv -t ensureproj @amux_dir 2>/dev/null)"
     _assert "ensure names window 0" "work" \
       "$(_amux_atmux display-message -t '=ensureproj:0' -p '#{window_name}' 2>/dev/null)"
-    _amux_atmux kill-server 2>/dev/null; rm -f "$_es_cfg"
+    _amux_atmux kill-server 2>/dev/null; rm -f "$_es_cfg"; rm -rf "$_es_state"
     AGENTMUX_AGENT_SOCKET="$_es_save"; AGENTMUX_CONFIG="$_es_cfgsave"; _amux_json_cache="$_es_cache"
+    if [ -n "$_es_sdsave" ]; then export AGENTMUX_STATE_DIR="$_es_sdsave"; else unset AGENTMUX_STATE_DIR; fi
   else
     echo "SKIP: ensure_agent_session test (tmux not found)"
   fi

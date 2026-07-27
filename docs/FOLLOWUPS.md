@@ -90,37 +90,6 @@ the agent-session sibling of the frame/term cross-fire, not a separate bug.
 **Trigger to revisit (agent case):** as above, plus any report of `amux --kill <name>` or
 `amux attach <name>` landing on the wrong same-basename project's agent session.
 
-## `sh test.sh` writes into the REAL session state dir
-
-**Status:** deferred — pre-existing, harmless per run, but it means the suite is not
-hermetic and it slowly inflates the state the presence poll has to scan.
-
-**Where:** `bin/amux`'s selftest — the `amux-win0style-selftest-$$` and
-`amux-ensure-selftest-$$` blocks. They launch real agent windows on real tmux servers, and
-unlike the neighbouring blocks they never point `AGENTMUX_STATE_DIR` at a throwaway dir.
-
-**What:** `scripts/session_log.sh`'s own selftest is scoped and cleaned up (a `mktemp -d`
-`AGENTMUX_STATE_DIR`, **exported** so the real tmux servers it starts inherit it, removed by
-its EXIT trap), and two of the amux blocks do the same (`_rstate`, `_ln_state`). The two
-named above do not, so every `sl_open` they trigger lands in the user's real state dir.
-Measured over one `sh test.sh`: `~/.local/state/agentmux/sessions.jsonl` +2 lines and
-`live/` +4 entries, all naming `/private/tmp/amuxtest-<pid>/…` sockets.
-
-**Why it matters:** the suite mutates production state, so a test run is not repeatable
-against a clean baseline and cannot be run on a machine you care about without side
-effects. The residue is also the input to `sl_dropped`'s per-server liveness sweep, so it
-is not inert — every stale server left behind is one more `_sl_server_live` probe on the
-slow path.
-
-**Fix when we act on it:** export one `mktemp -d` `AGENTMUX_STATE_DIR` from `test.sh` for
-the whole run and delete it at the end, so every selftest *and* every process any of them
-spawns resolves to a throwaway dir by default rather than each block remembering to scope
-itself. Then assert it: capture `wc -l` of the real ledger before and after a full run and
-fail if it moved.
-
-**Trigger to revisit:** the real state dir grows visibly from test runs, or someone needs a
-repeatable-from-clean test baseline.
-
 ## `--pending` still defers to the ledger for the cwds of sidecar-less servers
 
 **Status:** deferred — roughly half the cwds on a real state dir now answer from the

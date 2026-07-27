@@ -191,6 +191,17 @@ the shared-dir hazard is the thing to avoid, not per-block dirs as such. When
 adding a tmux-spawning selftest, follow the file you're in, and make sure the
 dir you use is removed on every path out.
 
+**Companion invariant — a selftest block that opens a real session must also
+scope `AGENTMUX_STATE_DIR` to a throwaway dir, `export`ed and reaped.** Isolating
+the tmux socket is not enough: opening a session reaches `sl_open`, which appends
+to the ledger and writes a `live/` sidecar, so an unscoped block mutates the
+*user's* real state — invisibly (nothing fails), and not inertly, since that
+residue is the input to `sl_dropped`'s per-server liveness sweep. Save the previous
+value, `export` the `mktemp -d`, and restore-or-`unset` it on the way out; `export`
+matters because the tmux server the block spawns must inherit it. Acceptance check
+for any such block: `wc -l` the real ledger and count `live/` entries before and
+after a full `sh test.sh` — both must be unchanged.
+
 Several scripts also have built-in selftests — run the relevant one directly for
 a targeted check while changing a script:
 
