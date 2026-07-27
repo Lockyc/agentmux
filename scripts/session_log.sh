@@ -27,7 +27,12 @@
 # facts sl_dropped needs to render a restore row without re-querying tmux); a
 # bare single-field line (just window_id, no tabs) is the legacy pre-migration
 # shape and is still accepted everywhere the sidecar is read (`cut -f1` on such a
-# line returns the whole line unchanged). A companion file at the same path plus
+# line returns the whole line unchanged). UNENFORCED, deliberately: `cwd` is user
+# data (a launch dir), and neither a tab nor a newline in it is escaped — a tab
+# shifts every later field, a newline splits the record into two lines. Nothing
+# breaks today (`cut -f1` on the split remainder just yields a token matching no
+# real window id, so it's silently ignored), but no consumer should assume `cwd`
+# is opaque within the line. A companion file at the same path plus
 # `.sock` holds the socket path alone — kept separate so `.windows` keeps its
 # "empty means nothing was open at death" meaning, while the presence poll still
 # has the path it needs to run the real (tmux-based) liveness check. It is
@@ -241,12 +246,6 @@ _sl_live_windows() {  # <socket> [pid]
 _sl_sock_hash() { printf '%s' "$1" | cksum | cut -d' ' -f1; }  # <socket>
 _sl_live_file() { printf '%s/live/%s-%s.windows' "$(_sl_state_dir)" "$(_sl_sock_hash "$1")" "$2"; }  # <socket> <pid>
 
-# Overwrite <pid>'s sidecar with the server's current window set. Reuses
-# _sl_live_windows so the SESSION_LOG_LIVE_WINDOWS test hook drives it too. Atomic
-# (temp + mv) so a reader never sees a half-written set; fails soft. An EMPTY set
-# is written as such (see _sl_live_windows): that is the last-window close, and
-# the resulting empty sidecar means "nothing was open at death" — the same state
-# _sl_discard writes for a deliberate `amux --kill`.
 # Drop a (socket,pid) from the confirmed-dead memo. The ONLY way a memoised pair can
 # answer a liveness probe again is tmux reusing that pid on that socket — and such a
 # server always records a snapshot (open, or the window-unlinked hook) before anything
@@ -264,28 +263,41 @@ _sl_clear_dead() {  # <socket> <pid>
   mv "$_dt" "$_df" 2>/dev/null || rm -f "$_dt"
 }
 
+# Overwrite (socket,pid)'s sidecar with the server's current window set — the
+# identity is always the PAIR, never pid alone (see _sl_live_file). Reuses
+# _sl_live_windows so the SESSION_LOG_LIVE_WINDOWS test hook drives it too. The
+# `.windows` write is atomic (temp + mv) so a reader never sees a half-written
+# set; fails soft. An EMPTY set is written as such (see _sl_live_windows): that
+# is the last-window close, and the resulting empty sidecar means "nothing was
+# open at death" — the same state _sl_discard writes for a deliberate `amux
+# --kill`.
+#
+# The `.sock` companion (the socket path alone, kept separate so `.windows`
+# keeps its "empty means nothing was open at death" meaning while the presence
+# poll still has the path it needs to run the real tmux-based liveness check)
+# is written the SAME way — temp + mv — and only AFTER `.windows` has actually
+# landed: writing it any earlier would let a snapshot whose liveness query
+# fails (server genuinely gone, not merely windowless) leave a `.sock` with no
+# `.windows` sibling on disk, and sl_prune only ever iterates live/*.windows —
+# an orphan like that can never be swept and would survive forever. The guard
+# is `-s` (non-empty), not `-f`: content is deterministic per filename (it's
+# just $1), so a real write never needs repeating, but an `-f` guard would
+# treat a 0-byte file (a writer killed mid-write — SIGKILL, power loss,
+# ENOSPC) as already-done and leave the presence poll reading an empty socket
+# path forever. `-s` self-heals that on the very next snapshot instead.
 _sl_snapshot() {  # <socket> <pid>
   _sl_clear_dead "$1" "$2"
   _lf=$(_sl_live_file "$1" "$2"); _dir=${_lf%/*}
   mkdir -p "$_dir" 2>/dev/null || return 0
-  # The sidecar name only hashes the socket; the presence poll needs the path back to run
-  # the real (tmux-based) liveness test. Separate file so .windows keeps its "empty means
-  # nothing was open at death" meaning. Content is deterministic per filename (it's just
-  # $1), so the write only needs to happen once — guarding it (rather than truncating in
-  # place on every snapshot) removes both the tear window a concurrent reader could
-  # observe and the redundant churn of rewriting an unchanging value every snapshot.
-  _sockf="$_dir/${_lf##*/}.sock"
-  [ -f "$_sockf" ] || printf '%s\n' "$1" > "$_sockf" 2>/dev/null || true
   _tmp="$_dir/.$2.$$.tmp"
   if _sl_live_windows "$1" "$2" > "$_tmp" 2>/dev/null; then
     mv "$_tmp" "$_lf" 2>/dev/null || rm -f "$_tmp"
+    _sockf="$_dir/${_lf##*/}.sock"
+    [ -s "$_sockf" ] || { printf '%s\n' "$1" > "$_sockf.$$.tmp" && mv "$_sockf.$$.tmp" "$_sockf"; } 2>/dev/null || true
   else
     rm -f "$_tmp"
   fi
 }
-
-# Read a dead server's recorded live-set (empty if the file is absent).
-_sl_snapshot_windows() { cat "$(_sl_live_file "$1" "$2")" 2>/dev/null; }  # <socket> <pid>
 
 # Mark a server's windows as DELIBERATELY closed by writing an EMPTY live-set
 # sidecar. Used by `amux --kill`: killing a per-project shard's only session tears
@@ -484,9 +496,8 @@ sl_dropped() {
       fi
     fi
     # Resolve the sidecar path ONCE. _sl_live_file hashes the socket via `cksum | cut`
-    # (two spawns), and this used to call it twice per server — once to test, once inside
-    # _sl_snapshot_windows. Spawns are the entire cost of this query, so the second call
-    # was pure waste.
+    # (two spawns), and spawns are the entire cost of this query, so a second call to
+    # re-derive the same path per server would be pure waste.
     _lf=$(_sl_live_file "$socket" "$pid")
     if [ -f "$_lf" ]; then
       # Each line may carry 4 tab-separated fields (window_id, cwd, agent,
@@ -1450,6 +1461,24 @@ printf '@1\n@2\n' > "$(_sl_live_file "/s/lw" 8080)"
 SESSION_LOG_LIVE_PIDS="" _sl_snapshot "/s/lw" 8080
 _assert "unreachable server: sidecar left intact" "@1 @2" \
   "$(tr '\n' ' ' < "$(_sl_live_file "/s/lw" 8080)" | sed 's/ *$//')"
+
+# ============ Finding 1: unreachable server during snapshot leaves NO orphan
+#     .sock. _sl_snapshot writes the .sock companion BEFORE the liveness
+#     query; when the query fails (server genuinely gone, not merely
+#     windowless), no .windows sidecar lands — but the .sock is already on
+#     disk. sl_prune only ever iterates live/*.windows, so a .sock with no
+#     .windows sibling can never match and survives forever. Fresh
+#     (socket,pid) pair, no prior sidecar of either kind, so this is
+#     non-vacuous: a revert that puts the .sock write back before the
+#     liveness query (undoing the success-branch move) leaves the .sock on
+#     disk and this fails. ============
+rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+_lf_orphan=$(_sl_live_file "/s/gone" 9090)
+SESSION_LOG_LIVE_PIDS="" _sl_snapshot "/s/gone" 9090
+_assert "Finding 1: failed snapshot writes no .windows" "0" \
+  "$([ -f "$_lf_orphan" ] && echo 1 || echo 0)"
+_assert "Finding 1: failed snapshot leaves no orphan .sock" "0" \
+  "$([ -f "$_lf_orphan.sock" ] && echo 1 || echo 0)"
 
 # ============ Task 5 regression: sl_open's [socket] param must reach the REAL
 #     tmux server, not silently fall back to the default socket (this is the
