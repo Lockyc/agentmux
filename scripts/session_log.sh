@@ -22,7 +22,8 @@
 #                            that path (_sl_pending_fast: 0 = drop, 1 = none,
 #                            2 = cannot answer → fall back to the ledger fold);
 #                            the subcommand itself always exits 0
-#   prune                    trim the ledger (dead, old server instances)
+#   prune                    trim the ledger to what a query can still reach (every
+#                            live server, plus the newest dead one per cwd)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
 #   discard  <socket> <pid>  mark a server's windows deliberately closed (empty
 #                            sidecar) — the amux --kill path, so a torn-down shard
@@ -83,7 +84,7 @@ _sl_ledger() { printf '%s/%s' "$(_sl_state_dir)" "$_SL_LEDGER_NAME"; }
 # same socket — and that path logs a fresh `open`, which drops the memo entry (see
 # sl_open). Without this, every presence poll re-probed every dead server recorded for
 # the cwd: warden polls `dropped --pending` per session-less tab, each _sl_server_live
-# forks a tmux, and the dead-server count only ever grows (the ledger keeps 14 days).
+# forks a tmux, and the dead-server count only ever grows between prunes.
 # That is O(dead servers) forks per poll, forever, for an answer that cannot change.
 _sl_dead_file() { printf '%s/dead' "$(_sl_state_dir)"; }
 
@@ -469,8 +470,9 @@ _sl_resume_map() {
 # <state>/live/<sockethash>-<pid>.windows, so answering it is a directory scan.
 #
 # THE SPAWN BUDGET IS THE WHOLE POINT, AND IT IS PER-QUERY, NOT PER-SIDECAR. A
-# state dir accumulates one sidecar per tmux server over the ledger's retention
-# window — hundreds — so anything run once per FILE loses the race by itself: a
+# state dir accumulates one sidecar per tmux server between prunes — hundreds on a
+# dir that has not been pruned since the cap moved — so anything run once per FILE
+# loses the race by itself: a
 # per-file `awk` over 214 sidecars measured 1458ms against 34ms for one `awk` given
 # all 214 as arguments, i.e. an order of magnitude WORSE than the ledger fold it
 # was meant to replace. So the classify-every-sidecar pass is exactly one awk over
@@ -799,9 +801,10 @@ _sl_pending_fast() {  # <cwd>
 # a dead server with no sidecar counts all its windows). One TSV row per tab:
 # agent<TAB>cwd<TAB>resume_cmd<TAB>maxts, newest first. The resume program is swapped in
 # from [[agents]] `resume` (work→claude-work) so the command targets the right profile.
-# LAST-CRASH SCOPING: the ledger accumulates every dead server over its retention window;
-# a reboot-heavy machine would otherwise dump a 2-week backlog. So we keep only the rows
-# of the most-recently-active dead server (the crash you're recovering from), and DEDUP by
+# LAST-CRASH SCOPING: the ledger accumulates every dead server between prunes; a
+# reboot-heavy machine would otherwise dump a whole backlog at once. So we keep only the
+# rows of the most-recently-active dead server (the crash you're recovering from) — the
+# reachability sl_prune's keep set is built from — and DEDUP by
 # resume session id (the same session resumed across several server lifetimes, or in two
 # windows of one server, surfaces once). `<cwd>` filters to that dir; `--global` = no
 # filter; `--new <cwd>` additionally emits ONLY servers not yet offered for that cwd and
@@ -1078,40 +1081,217 @@ EOF
   _sl_snapshot "$_socket" "$_pid"
 }
 
+# Trim the ledger to what a QUERY CAN STILL REACH.
+#
+# THE KEEP SET IS THE QUERY'S OWN REACHABILITY, NOT A CALENDAR. `sl_dropped`
+# collapses to ONE dead server per answer — its final stage takes `NR==1` off a
+# ts-desc stream and drops every row of every other server (see its LAST CRASH
+# ONLY comment). So for each cwd, exactly one dead server is ever emitted, and
+# every older dead server that cwd ever had is unreachable dead weight the fold
+# still parses on every ledger-path poll. A time-based cutoff cannot see that: on
+# a real dir it left 246 servers across 47 cwds, ~200 of which no query could
+# name. What survives here instead:
+#   - every LIVE server, in full (it is still accumulating rows, and `forkcmd`
+#     reads exactly one of them);
+#   - per cwd, the dead server holding the newest EMITTABLE row for it — the one
+#     `dropped <cwd>` / `--global` would answer with;
+#   - per cwd, the same for the servers the `notified` marker has NOT yet burned,
+#     which is the answer `--new`/`--pending` gate to.
+# A server serving several cwds wins some and loses others; the keep set is the
+# UNION, so it survives whole (rows are only ever dropped a whole server at a
+# time — the fold keys on the server, and a half-kept server would rewrite the
+# very sets a query intersects).
+#
+# EMITTABLE MEANS THE ROW WOULD SURVIVE sl_dropped's OWN FILTERS: an agent row
+# (`agent != "shell"`) with a resume hint, whose window is in the server's
+# live-set sidecar (or whose server has no sidecar at all — the pre-sidecar
+# "offer everything" case). Applying anything LOOSER is not the safe direction it
+# looks like: the keep set is an ARGMAX, so a server wrongly counted emittable
+# does not merely over-retain, it SHADOWS the real winner and prunes it. Hence
+# the deliberate asymmetry below — when a sidecar cannot be resolved, that server
+# is kept unconditionally AND withheld from the competition, so neither it nor
+# anything behind it can be lost.
+#
+# DEADNESS HERE MUST BE THE QUERY'S DEADNESS, liveness AND the boot epoch: a live
+# server whose newest record predates boot is a reused pid, which `sl_dropped`
+# treats as dead and offers. Testing liveness alone would rule such a server out
+# of the competition and prune the winner behind it.
 sl_prune() {
   _sl_enabled || return 0
   _sl_load_dead
   _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
-  _max=${AGENTMUX_LOG_MAX_LINES:-2000}
+  # The cheap gate that makes this a no-op on the launch path (sl_open calls it on
+  # every launch). It stays a bare `wc -l`; everything below is comparatively
+  # expensive (210ms at steady state against 23ms for the whole no-op invocation),
+  # so nothing may move above this line.
+  #
+  # THE CAP IS SET AGAINST THE STEADY STATE, NOT AGAINST "BIG". The keep set below
+  # is reachability-shaped, so the pruned ledger settles at a size fixed by the
+  # number of projects and their windows-open-at-death, not by elapsed time —
+  # measured at 272 lines on a real 47-project dir (from 1650). A cap far above
+  # that is self-defeating: the ledger would sawtooth up to the cap and spend most
+  # of its life at multiples of the content anything can reach, which is exactly
+  # the parse cost the keep set exists to remove. 500 is ~1.8x the measured steady
+  # state: the ledger every query folds never grows past roughly twice its
+  # irreducible content, while at the measured 1.7 lines appended per launch a
+  # prune fires only once per ~130 launches — ~1.6ms amortised on top of a gate
+  # that is already the cheapest thing in the function.
+  _max=${AGENTMUX_LOG_MAX_LINES:-500}
   _lines=$(wc -l < "$_ledger" 2>/dev/null | tr -d ' ')
   [ "${_lines:-0}" -gt "$_max" ] 2>/dev/null || return 0
-  _cutoff=$(( $(date +%s) - ${AGENTMUX_LOG_RETAIN_DAYS:-14} * 86400 ))
 
-  # Per-server max ts, then build the KEEP set: live OR recent (maxts >= cutoff).
-  _servers=$(jq -rRn '
-    [ inputs | fromjson? ]
-    | group_by([.socket_path,.server_pid])
-    | map([ .[0].socket_path, (.[0].server_pid|tostring), (map(.ts)|max|tostring) ] | @tsv) | .[]
-  ' "$_ledger")
-  _keep=$(printf '%s\n' "$_servers" | while IFS="$TAB" read -r socket pid maxts; do
+  _dir=$(_sl_state_dir)
+  _boot=$(_sl_boot_epoch)
+  _rows=$(mktemp) || return 0
+  _sl_fold "$_ledger" > "$_rows"
+  if [ ! -s "$_rows" ]; then rm -f "$_rows"; return 0; fi
+
+  # SIDECAR INDEX — ONE awk over the whole glob, never a process per server. The
+  # sidecar's identity is (socket, pid) but its FILENAME only carries
+  # cksum(socket), and cksum is a fork; with 180 distinct sockets on a real dir,
+  # resolving the path forward (as sl_dropped does, per candidate) is exactly the
+  # per-server spawn this pass must not pay. So invert it: each `.sock` companion
+  # names its own socket, so reading the companions maps every sidecar back to its
+  # (socket, pid) in one pass. A companion-less sidecar is the one shape that
+  # cannot be placed — it is emitted with an empty socket and handled as UNKNOWN
+  # below, never guessed at.
+  _side=$(mktemp) || { rm -f "$_rows"; return 0; }
+  set -- "$_dir"/live/*.windows
+  if [ -e "$1" ]; then
+    awk -F"$TAB" -v OFS="$TAB" '
+      BEGIN {
+        # Index off ARGV, not FILENAME: awk yields no records for an EMPTY sidecar,
+        # and an empty sidecar is a real answer ("nothing was open at death"), so a
+        # FILENAME-driven index would silently report those servers as sidecar-less
+        # and offer every window they ever had.
+        for (i = 1; i < ARGC; i++) {
+          f = ARGV[i]
+          s = ""
+          if ((getline s < (f ".sock")) <= 0) s = ""
+          close(f ".sock")
+          sock[f] = s
+          p = f; sub(/\.windows$/, "", p); sub(/.*-/, "", p); pid[f] = p
+        }
+      }
+      # $1 on a 4-field line is the window id and on a legacy bare-id line the whole
+      # line — the same equivalence `cut -f1` gives sl_dropped, which reads this set.
+      $1 != "" { w[FILENAME] = w[FILENAME] " " $1 }
+      END {
+        for (i = 1; i < ARGC; i++) {
+          f = ARGV[i]
+          print "D", f, pid[f], sock[f], substr(w[f], 2)
+        }
+      }
+    ' "$@" 2>/dev/null > "$_side"
+  fi
+
+  # Per-server max ts (over ALL its rows, never scoped — that is the fact the boot
+  # comparison needs), then the ONE liveness probe per server. `_sl_server_live` is
+  # fork-free for every server already in the dead memo, which is the steady state.
+  _stat=$(mktemp) || { rm -f "$_rows" "$_side"; return 0; }
+  awk -F"$TAB" -v OFS="$TAB" '
+    { k = $1 OFS $2; if ($9 + 0 > m[k]) m[k] = $9 + 0 }
+    END { for (k in m) print k, m[k] }
+  ' "$_rows" | while IFS="$TAB" read -r socket pid smax; do
     [ -n "$pid" ] || continue
-    if _sl_server_live "$socket" "$pid" || [ "$maxts" -ge "$_cutoff" ] 2>/dev/null; then
-      printf '%s|%s\n' "$socket" "$pid"
+    if _sl_server_live "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
+      printf 'V\t%s\t%s\n' "$socket" "$pid"
+    else
+      printf 'X\t%s\t%s\n' "$socket" "$pid"
     fi
-  done | jq -R -s 'split("\n") | map(select(length>0))')
+  done > "$_stat"
 
-  _tmp=$(mktemp) || return 0
-  jq -cRn --argjson keep "$_keep" '
+  _notmark="$_dir/notified"
+  _keepf=$(mktemp) || { rm -f "$_rows" "$_side" "$_stat"; return 0; }
+  {
+    cat "$_side" "$_stat"
+    [ -s "$_notmark" ] && awk '{ print "N\t" $0 }' "$_notmark"
+    awk '{ print "R\t" $0 }' "$_rows"
+  } | awk -F"$TAB" -v OFS="$TAB" '
+      # D: a sidecar, already resolved to (socket, pid). An empty socket means the
+      # `.sock` companion was missing/unreadable, so the file can only be placed by
+      # its pid — recorded as UNKNOWN for that pid rather than guessed onto a server.
+      $1 == "D" {
+        if ($4 == "") unkpid[$3] = 1
+        else { has[$4 SUBSEP $3] = 1; set[$4 SUBSEP $3] = $5 }
+        next
+      }
+      $1 == "V" { keep[$2 "|" $3] = 1; next }          # live → kept whole, unconditionally
+      $1 == "X" { dead[$2 SUBSEP $3] = 1; dsrv[$2 "|" $3] = $2 SUBSEP $3; next }
+      $1 == "N" { notif[$2] = 1; next }                # raw "socket|pid|cwd" offer key
+      $1 == "R" {
+        socket = $2; pid = $3; wid = $4; cwd = $7; agent = $8; rcmd = $9; ts = $10 + 0
+        k = socket SUBSEP pid
+        if (!(k in dead)) next
+        # Sidecar unresolvable for this server: keep it AND withhold it from the
+        # argmax. Competing on a guess would shadow (and prune) the true winner;
+        # dropping it outright would lose a restore target. Neither is acceptable,
+        # and abstaining costs only one retained server.
+        if (!(k in has) && (pid in unkpid)) { keep[socket "|" pid] = 1; next }
+        if (agent == "shell" || rcmd == "" || cwd == "") next
+        if (k in has) {                                # sidecar present → intersect it
+          n = split(set[k], a, " "); ok = 0
+          for (i = 1; i <= n; i++) if (a[i] == wid) { ok = 1; break }
+          if (!ok) next
+        }                                              # no sidecar at all → all windows count
+        srv = socket "|" pid
+        ck = cwd SUBSEP srv
+        cw[ck] = cwd; sv[ck] = srv
+        if (ts > mx[ck]) mx[ck] = ts
+        if (!((srv "|" cwd) in notif)) { seenn[ck] = 1; if (ts > mn[ck]) mn[ck] = ts }
+      }
+      END {
+        # Two argmaxes per cwd — ungated (what `dropped <cwd>`/`--global` answer)
+        # and offer-gated (what `--new`/`--pending` answer). Ties keep EVERY server
+        # holding the maximum: sl_dropped breaks a ts tie on `sort`s whole-line
+        # comparison, which this pass deliberately does not model.
+        for (k in mx) { c = cw[k]; if (mx[k] > bx[c]) bx[c] = mx[k] }
+        for (k in mx) { c = cw[k]; if (mx[k] == bx[c]) keep[sv[k]] = 1 }
+        for (k in seenn) { c = cw[k]; if (mn[k] > bn[c]) bn[c] = mn[k] }
+        for (k in seenn) { c = cw[k]; if (mn[k] == bn[c]) keep[sv[k]] = 1 }
+        # Emit each kept server once as K (the key the `notified` trim and the
+        # sidecar sweep run on), then either A (keep every row) or one W per
+        # window (keep only these). A DEAD server with a sidecar is restricted to
+        # it: that set is FROZEN — nothing rewrites a dead server sidecar — and it
+        # is precisely what sl_dropped intersects its rows against, so a row for a
+        # window outside it is already invisible to every query. This, not the
+        # server count, is what actually bounds the ledger: a long-lived project
+        # shard logs one row per launch forever, but only the windows OPEN AT
+        # DEATH are ever restorable. A LIVE server is never restricted — its
+        # sidecar is a moving target this pass could race against a concurrent
+        # open, and `forkcmd` reads its rows directly.
+        for (s in keep) {
+          print "K" OFS s
+          k = dsrv[s]
+          if (k != "" && (k in has)) {
+            n = split(set[k], a, " ")
+            for (i = 1; i <= n; i++) if (a[i] != "") print "W" OFS s "|" a[i]
+            # A row carrying no window_id belongs to no window set, so it rides
+            # with its server rather than being silently dropped by the restriction.
+            print "W" OFS s "|"
+          } else print "A" OFS s
+        }
+      }
+    ' > "$_keepf"
+  _whole=$(awk -F"$TAB" '$1=="A"{print $2}' "$_keepf" | jq -R -s 'split("\n") | map(select(length>0))')
+  _win=$(awk -F"$TAB" '$1=="W"{print $2}' "$_keepf" | jq -R -s 'split("\n") | map(select(length>0))')
+  _keep=$(awk -F"$TAB" '$1=="K"{print $2}' "$_keepf" | jq -R -s 'split("\n") | map(select(length>0))')
+
+  _tmp=$(mktemp) || { rm -f "$_rows" "$_side" "$_stat" "$_keepf"; return 0; }
+  jq -cRn --argjson whole "$_whole" --argjson win "$_win" '
     inputs | fromjson?
-    | ((.socket_path + "|" + (.server_pid|tostring)) as $k | select($keep | index($k)))
+    | (.socket_path + "|" + (.server_pid|tostring)) as $k
+    | ($k + "|" + (.window_id // "")) as $kw
+    | select(($whole | index($k)) != null or ($win | index($kw)) != null)
   ' "$_ledger" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_ledger" || rm -f "$_tmp"
 
   # Trim the `notified` marker the same way as the ledger: it grows one
   # "socket|pid|cwd" line per (server,cwd) offered (sl_dropped --new appends,
   # never prunes), so keep only lines whose "socket|pid" PREFIX is still in the
-  # live-or-recent KEEP set. Drops stale keys (and blank lines) so it self-cleans
-  # instead of growing unbounded.
-  _notmark="$(_sl_state_dir)/notified"
+  # KEEP set. Drops stale keys (and blank lines) so it self-cleans instead of
+  # growing unbounded. It must stay in step with the ledger in BOTH directions: a
+  # marker outliving its server would gate a server that no longer exists, and one
+  # dropped early would re-offer a ghost amux has already cleared.
   if [ -s "$_notmark" ]; then
     _tmpn=$(mktemp) || _tmpn=""
     if [ -n "$_tmpn" ]; then
@@ -1125,11 +1305,14 @@ sl_prune() {
   fi
 
   # Best-effort marker sweep: drop seen/<pid>-* for pids no longer in the ledger.
+  # `${m##*/}` rather than `basename`: this walks every marker on disk (643 on a
+  # real dir), and a fork apiece is the cost that made the old sweep the expensive
+  # half of a prune.
   _livepids=$(jq -rRn '[ inputs | fromjson? | .server_pid ] | unique | .[]' "$_ledger" 2>/dev/null)
-  if [ -d "$(_sl_state_dir)/seen" ]; then
-    for m in "$(_sl_state_dir)"/seen/*; do
+  if [ -d "$_dir/seen" ]; then
+    for m in "$_dir"/seen/*; do
       [ -e "$m" ] || continue
-      mp=$(basename "$m"); mp=${mp%%-*}
+      mp=${m##*/}; mp=${mp%%-*}
       case "
 $_livepids
 " in *"
@@ -1138,21 +1321,30 @@ $mp
     done
   fi
 
-  # Same for the live-set sidecars (<sockethash>-<pid>.windows): drop those whose
-  # server pid is no longer in the ledger. The pid is the trailing '-'-delimited
-  # field (the socket hash precedes it); strip `.windows`, then take everything
-  # after the last '-'.
-  if [ -d "$(_sl_state_dir)/live" ]; then
-    for m in "$(_sl_state_dir)"/live/*.windows; do
-      [ -e "$m" ] || continue
-      mp=$(basename "$m"); mp=${mp%.windows}; mp=${mp##*-}
-      case "
-$_livepids
-" in *"
-$mp
-"*) : ;; *) rm -f "$m" "$m.sock" ;; esac
+  # Sidecar sweep, driven by the SAME keep set as the ledger — the two must agree
+  # exactly. A sidecar deleted from under a server the ledger still names flips
+  # that server to the "no sidecar → every window was open at death" reading and
+  # re-offers tabs that were closed; a sidecar outliving its pruned server lets
+  # `_sl_pending_fast` answer "pending" from a candidate the ledger path can no
+  # longer see. Matching on (socket, pid) from the `.sock` companion is what makes
+  # it exact — a pid-only match keeps a same-pid sidecar belonging to a DIFFERENT
+  # socket, which is the second failure above. A companion-less sidecar cannot be
+  # placed, so it falls back to the pid and is RETAINED on a match: over-retention
+  # is inert (a stale file), where a wrong delete is not.
+  if [ -s "$_side" ]; then
+    awk -F"$TAB" '
+      FNR == NR { if ($1 == "K") { keep[$2] = 1; p = $2; sub(/.*\|/, "", p); kpid[p] = 1 } next }
+      $1 == "D" {
+        if ($4 != "") { if (($4 "|" $3) in keep) next }
+        else if ($3 in kpid) next
+        print $2
+      }
+    ' "$_keepf" "$_side" | while IFS= read -r m; do
+      [ -n "$m" ] && rm -f "$m" "$m.sock"
     done
   fi
+
+  rm -f "$_rows" "$_side" "$_stat" "$_keepf"
 }
 
 # One-shot backfill of the sidecars already on disk, from the ledger.
@@ -1894,26 +2086,234 @@ cat > "$seedl" <<'JSON'
 JSON
 _assert "fold takes latest resume" "1" "$(_sl_fold "$seedl" | grep -c 'claude --resume new')"
 
-# --- prune: dead+old server dropped, live kept, recent-dead kept ---
-now=$(date +%s); old=$(( now - 30*86400 ))
-cat > "$ledger" <<JSON
-{"ts":$old,"event":"open","socket_path":"/s/dead","server_pid":111,"session":"a","window_id":"@1","window_name":"claude","cwd":"/w/a","agent":"claude"}
-{"ts":$now,"event":"open","socket_path":"/s/live","server_pid":222,"session":"b","window_id":"@1","window_name":"claude","cwd":"/w/b","agent":"claude"}
-{"ts":$now,"event":"open","socket_path":"/s/recent","server_pid":333,"session":"c","window_id":"@1","window_name":"claude","cwd":"/w/c","agent":"claude"}
-JSON
-# seed the notified marker with all three servers, in the real 3-field
-# socket|pid|cwd format sl_dropped --new writes (+ a blank line); prune must
-# trim it to the live-or-recent keep set (matched on the socket|pid prefix,
-# with the cwd suffix stripped), matching the ledger.
-printf '%s\n' '/s/dead|111|/w/a' '/s/live|222|/w/b' '' '/s/recent|333|/w/c' > "$AGENTMUX_STATE_DIR/notified"
-AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
-_assert "prune drops dead+old 111" "0" "$(grep -c '"server_pid":111' "$ledger")"
-_assert "prune keeps live 222"     "1" "$(grep -c '"server_pid":222' "$ledger")"
-_assert "prune keeps recent 333"   "1" "$(grep -c '"server_pid":333' "$ledger")"
-_assert "prune trims notified: drops dead"   "0" "$(grep -c '^/s/dead|111|/w/a$' "$AGENTMUX_STATE_DIR/notified")"
-_assert "prune trims notified: keeps live"   "1" "$(grep -c '^/s/live|222|/w/b$' "$AGENTMUX_STATE_DIR/notified")"
-_assert "prune trims notified: keeps recent" "1" "$(grep -c '^/s/recent|333|/w/c$' "$AGENTMUX_STATE_DIR/notified")"
-_assert "prune trims notified: drops blanks" "0" "$(grep -cx '' "$AGENTMUX_STATE_DIR/notified")"
+# ============ prune: the keep set is the QUERY'S REACHABILITY ============
+# sl_dropped collapses to ONE dead server per answer (its NR==1 "last crash only"
+# stage), so every dead server behind the winner for a cwd is unreachable and
+# prune drops it. These blocks pin that, and every drop is paired with a MUTATION
+# that flips the same fixture the other way — a keep-everything prune would pass
+# the "kept" half alone, so the pairs are what make them non-vacuous.
+
+# <ts> <socket> <pid> <wid> <cwd> <label> → the two rows that make one EMITTABLE
+# window (an agent open + a resume hint; either one missing and no query can
+# reach it).
+_pr_pair() {
+  printf '{"ts":%s,"event":"open","socket_path":"%s","server_pid":%s,"session":"s","window_id":"%s","window_name":"claude","cwd":"%s","agent":"claude"}\n' \
+    "$1" "$2" "$3" "$4" "$5"
+  printf '{"ts":%s,"event":"resume","socket_path":"%s","server_pid":%s,"window_id":"%s","label":"%s","resume_cmd":"claude --resume %s"}\n' \
+    "$(( $1 + 1 ))" "$2" "$3" "$4" "$6" "$6"
+}
+_pr_rows() { grep -c "\"server_pid\":$1," "$ledger"; }             # <pid>
+_pr_ask()  { SESSION_LOG_LIVE_PIDS="${_pr_live:-}" SESSION_LOG_BOOT_EPOCH="${_pr_boot:-1}" \
+             SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "$@"; }
+_pr_prune() { AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="${_pr_live:-}" \
+              SESSION_LOG_BOOT_EPOCH="${_pr_boot:-1}" sl_prune; }
+
+# --- the per-cwd winner survives, the runners-up do not ---------------------
+# All rows emittable, no sidecars anywhere (so every window counts):
+#   301  /w/a ts100                       → /w/a runner-up  → DROPPED
+#   302  /w/a ts200 (loses) + /w/b ts250  → /w/b winner     → KEPT (the union)
+#   303  /w/a ts300                       → /w/a winner     → KEPT
+#   304  /w/b ts150                       → /w/b runner-up  → DROPPED
+#   999  /w/a ts50 + /w/a ts60, LIVE      → loses every cwd → KEPT (live)
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live" "$AGENTMUX_STATE_DIR/seen"
+rm -f "$AGENTMUX_STATE_DIR/notified"
+_pr_reach() {
+  { _pr_pair 100 /s/301 301 @1 /w/a r301
+    _pr_pair "${1:-200}" /s/302 302 @1 /w/a r302a
+    _pr_pair 250 /s/302 302 @2 /w/b r302b
+    _pr_pair 300 /s/303 303 @1 /w/a r303
+    _pr_pair 150 /s/304 304 @1 /w/b r304
+    _pr_pair 50  /s/999 999 @1 /w/a r999a
+    _pr_pair 60  /s/999 999 @2 /w/a r999b
+  } > "$ledger"
+}
+_pr_live="999"; _pr_boot=1
+_pr_reach
+_pr_a=$(_pr_ask /w/a); _pr_b=$(_pr_ask /w/b); _pr_g=$(_pr_ask --global)
+_pr_prune
+_assert "prune drops /w/a's runner-up (301)"                 "0" "$(_pr_rows 301)"
+_assert "prune drops /w/b's runner-up (304)"                 "0" "$(_pr_rows 304)"
+_assert "prune keeps /w/a's newest dead server (303)"        "2" "$(_pr_rows 303)"
+_assert "prune keeps a server that wins /w/b, loses /w/a"    "4" "$(_pr_rows 302)"
+_assert "prune keeps a LIVE server that loses every cwd"     "4" "$(_pr_rows 999)"
+# The whole point: the pruned ledger answers every query byte-identically.
+_assert "prune lossless: dropped /w/a"    "$_pr_a" "$(_pr_ask /w/a)"
+_assert "prune lossless: dropped /w/b"    "$_pr_b" "$(_pr_ask /w/b)"
+_assert "prune lossless: dropped --global" "$_pr_g" "$(_pr_ask --global)"
+
+# MUTATION 1 — 301 is dropped for being second, not for being 301: make it /w/a's
+# NEWEST and the verdict inverts.
+_pr_reach
+sed 's/"ts":100,/"ts":400,/; s/"ts":101,/"ts":401,/' "$ledger" > "$ledger.m" && mv "$ledger.m" "$ledger"
+_pr_prune
+_assert "MUTATION: 301 newest for /w/a → kept"               "2" "$(_pr_rows 301)"
+_assert "MUTATION: 303 now second for /w/a → dropped"        "0" "$(_pr_rows 303)"
+
+# MUTATION 2 — 302 survives because of its /w/b win, not its /w/a rows: strip the
+# /w/b pair and the same server, with the same losing /w/a rows, is dropped.
+_pr_reach
+grep -v '/w/b' "$ledger" > "$ledger.m" && mv "$ledger.m" "$ledger"
+_pr_prune
+_assert "MUTATION: 302 without its /w/b win → dropped"       "0" "$(_pr_rows 302)"
+
+# MUTATION 3 — 999 survives on LIVENESS, not on its rows: with nothing live it is
+# just the oldest loser in two cwds.
+_pr_reach
+_pr_live=""; _pr_prune; _pr_live="999"
+_assert "MUTATION: 999 no longer live → dropped"             "0" "$(_pr_rows 999)"
+
+# --- deadness is LIVENESS *AND* THE BOOT EPOCH, exactly as the query reads it --
+# A live server whose newest record predates boot is a reused pid: sl_dropped
+# treats it as dead and OFFERS it. Prune must not use a narrower notion of live
+# than that — a server it wrongly calls dead joins the argmax, wins the cwd, and
+# evicts the server the query would really have answered with.
+#   888 live-per-hook, /w/d ts100 · 889 dead, /w/d ts50
+rm -f "$ledger"
+_pr_boot_fixture() {
+  { _pr_pair 100 /s/888 888 @1 /w/d r888
+    _pr_pair 50  /s/889 889 @1 /w/d r889
+  } > "$ledger"
+}
+_pr_boot_fixture; _pr_live="888"; _pr_boot=1
+_pr_d=$(_pr_ask /w/d)
+_assert "boot: a genuinely live server offers nothing"       "1" \
+  "$(printf '%s\n' "$_pr_d" | grep -c 'r889')"
+_pr_prune
+_assert "boot: live 888 kept whole"                          "2" "$(_pr_rows 888)"
+_assert "boot: dead 889 is /w/d's answer → kept"             "2" "$(_pr_rows 889)"
+_assert "boot: lossless"                                     "$_pr_d" "$(_pr_ask /w/d)"
+
+# MUTATION — same fixture, boot moved PAST 888's newest record. The query now
+# reads 888 as dead and it outranks 889, so 889 becomes unreachable.
+_pr_boot_fixture; _pr_boot=200
+_pr_d=$(_pr_ask /w/d)
+_assert "MUTATION: pre-boot 'live' server is offered"        "1" \
+  "$(printf '%s\n' "$_pr_d" | grep -c 'r888')"
+_pr_prune
+_assert "MUTATION: pre-boot 888 kept (it is the answer)"     "2" "$(_pr_rows 888)"
+_assert "MUTATION: 889 now behind it → dropped"              "0" "$(_pr_rows 889)"
+_assert "MUTATION: still lossless"                           "$_pr_d" "$(_pr_ask /w/d)"
+_pr_boot=1
+
+# --- the offer gate reaches PAST the winner, so the keep set must too ---------
+# --new/--pending skip servers the `notified` marker has already burned for that
+# cwd, so the reachable server there is the newest NOT-yet-offered one — a second
+# argmax, and dropping it would silently stop ghosting a real crash.
+#   501 /w/e ts300, already notified · 502 /w/e ts200, not notified
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
+_pr_gate_fixture() {
+  { _pr_pair 300 /s/501 501 @1 /w/e r501
+    _pr_pair 200 /s/502 502 @1 /w/e r502
+  } > "$ledger"
+  printf '%s\n' '/s/501|501|/w/e' '' > "$AGENTMUX_STATE_DIR/notified"
+}
+_pr_gate_fixture
+_pr_e=$(_pr_ask /w/e); _pr_p=$(AMUX_PENDING_NO_FAST=1 _pr_ask --pending /w/e)
+_assert "gate: ungated /w/e answers with the newest (501)"   "1" \
+  "$(printf '%s\n' "$_pr_e" | grep -c 'r501')"
+_assert "gate: --pending skips it and answers with 502"      "1" \
+  "$(printf '%s\n' "$_pr_p" | grep -c 'r502')"
+_pr_prune
+_assert "gate: ungated winner 501 kept"                      "2" "$(_pr_rows 501)"
+_assert "gate: offer-gated winner 502 kept"                  "2" "$(_pr_rows 502)"
+_assert "gate: lossless (ungated)"                           "$_pr_e" "$(_pr_ask /w/e)"
+_assert "gate: lossless (--pending)"  "$_pr_p" "$(AMUX_PENDING_NO_FAST=1 _pr_ask --pending /w/e)"
+_assert "gate: notified keeps its live key"                  "1" \
+  "$(grep -c '^/s/501|501|/w/e$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "gate: notified drops blank lines"                   "0" \
+  "$(grep -cx '' "$AGENTMUX_STATE_DIR/notified")"
+
+# MUTATION — 502 survives only because the gate can reach it: clear the marker and
+# 501 wins both argmaxes, leaving 502 unreachable.
+_pr_gate_fixture
+: > "$AGENTMUX_STATE_DIR/notified"
+_pr_prune
+_assert "MUTATION: nothing notified → 502 unreachable, dropped" "0" "$(_pr_rows 502)"
+_assert "MUTATION: 501 still kept"                             "2" "$(_pr_rows 501)"
+
+# --- sidecars are swept on the SAME keep set as the ledger --------------------
+# Two failure shapes this pins. A sidecar deleted from under a server the ledger
+# still names flips it to the "no sidecar → every window was open at death"
+# reading and re-offers closed tabs. A sidecar outliving its pruned server lets
+# _sl_pending_fast answer "pending" from a candidate the ledger can no longer see
+# — and matching on PID ALONE causes exactly that, because a same-pid sidecar on a
+# DIFFERENT socket looks kept. Hence 601 twice, on two sockets:
+#   /s/k 601 /w/f ts300 → /w/f winner  → KEPT
+#   /s/d 602 /w/f ts100 → runner-up    → DROPPED
+#   /s/e 601 /w/g ts50  → runner-up    → DROPPED, though pid 601 is still in the ledger
+#   /s/g 603 /w/g ts400 → /w/g winner  → KEPT
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+{ _pr_pair 300 /s/k 601 @1 /w/f rk
+  _pr_pair 100 /s/d 602 @1 /w/f rd
+  _pr_pair 50  /s/e 601 @1 /w/g re
+  _pr_pair 400 /s/g 603 @1 /w/g rg
+} > "$ledger"
+for _pr_s in "/s/k 601" "/s/d 602" "/s/e 601" "/s/g 603"; do
+  # shellcheck disable=SC2086  # deliberate: split the "socket pid" pair
+  set -- $_pr_s
+  printf '@1\t/w/x\tclaude\t1\n' > "$(_sl_live_file "$1" "$2")"
+  printf '%s\n' "$1" > "$(_sl_live_file "$1" "$2").sock"
+done
+printf '%s\n' '/s/k|601|/w/f' '/s/d|602|/w/f' > "$AGENTMUX_STATE_DIR/notified"
+_pr_prune
+_assert "sweep: kept server keeps its sidecar"     "1" "$([ -f "$(_sl_live_file /s/k 601)" ] && echo 1 || echo 0)"
+_assert "sweep: kept server keeps its .sock"       "1" "$([ -f "$(_sl_live_file /s/k 601).sock" ] && echo 1 || echo 0)"
+_assert "sweep: pruned server loses its sidecar"   "0" "$([ -f "$(_sl_live_file /s/d 602)" ] && echo 1 || echo 0)"
+_assert "sweep: pruned server loses its .sock"     "0" "$([ -f "$(_sl_live_file /s/d 602).sock" ] && echo 1 || echo 0)"
+_assert "sweep: same-pid sidecar on a pruned socket goes too" "0" \
+  "$([ -f "$(_sl_live_file /s/e 601)" ] && echo 1 || echo 0)"
+_assert "sweep: /w/g's winner keeps its sidecar"   "1" "$([ -f "$(_sl_live_file /s/g 603)" ] && echo 1 || echo 0)"
+_assert "sweep: notified drops the pruned server's key" "0" \
+  "$(grep -c '^/s/d|602|/w/f$' "$AGENTMUX_STATE_DIR/notified")"
+_assert "sweep: notified keeps the kept server's key"   "1" \
+  "$(grep -c '^/s/k|601|/w/f$' "$AGENTMUX_STATE_DIR/notified")"
+# The invariant behind all of the above: NO server may survive in the ledger
+# having lost the sidecar it had. Checked over the whole pruned dir, not per case.
+_pr_orphans=0
+for _pr_s in "/s/k 601" "/s/g 603"; do
+  # shellcheck disable=SC2086
+  set -- $_pr_s
+  grep -q "\"socket_path\":\"$1\",\"server_pid\":$2," "$ledger" || continue
+  [ -f "$(_sl_live_file "$1" "$2")" ] || _pr_orphans=$((_pr_orphans + 1))
+done
+_assert "sweep: no ledger server left without its sidecar" "0" "$_pr_orphans"
+
+# --- a kept dead server is trimmed to the windows in its own sidecar ----------
+# The sidecar of a DEAD server is frozen, and it is exactly the set sl_dropped
+# intersects rows against — so a row for a window outside it is already invisible
+# to every query. This, not the server count, is what bounds the ledger: a
+# long-lived project shard logs a row per launch forever, but only the windows
+# open AT DEATH are ever restorable.
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+_pr_win_fixture() {  # [sidecar window set]
+  { _pr_pair 300 /s/w 701 @1 /w/h rw1
+    _pr_pair 100 /s/w 701 @2 /w/h rw2
+  } > "$ledger"
+  printf '%s' "${1:-@1}" | tr ' ' '\n' | sed 's/$/\t\/w\/h\tclaude\t1/' > "$(_sl_live_file /s/w 701)"
+  printf '/s/w\n' > "$(_sl_live_file /s/w 701).sock"
+}
+_pr_win_fixture
+_pr_h=$(_pr_ask /w/h)
+_pr_prune
+_assert "windows: row for the open-at-death window kept"  "2" "$(grep -c '"window_id":"@1"' "$ledger")"
+_assert "windows: row for the closed window dropped"      "0" "$(grep -c '"window_id":"@2"' "$ledger")"
+_assert "windows: lossless"                               "$_pr_h" "$(_pr_ask /w/h)"
+
+# MUTATION 1 — @2 is dropped for being outside the sidecar, not for being second:
+# put it in the set and it stays.
+_pr_win_fixture "@1 @2"
+_pr_prune
+_assert "MUTATION: @2 in the sidecar → its rows kept"     "2" "$(grep -c '"window_id":"@2"' "$ledger")"
+
+# MUTATION 2 — a sidecar with no .sock companion cannot be placed on a server, so
+# prune ABSTAINS: it keeps that server whole rather than trimming on a guess (and
+# withholds it from the argmax, which is why nothing else can be evicted by it).
+_pr_win_fixture
+rm -f "$(_sl_live_file /s/w 701).sock"
+_pr_prune
+_assert "MUTATION: unplaceable sidecar → server kept whole" "2" "$(grep -c '"window_id":"@2"' "$ledger")"
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live" "$AGENTMUX_STATE_DIR/notified"
+unset _pr_live _pr_boot
 
 # --- fold tolerates a torn/corrupt line (kill-server mid-append) → roster survives ---
 rm -f "$ledger"

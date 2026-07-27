@@ -131,9 +131,11 @@ CLAUDE.md, and the `t6:` selftest block that pins each shape as a pair):
    is **not** a migration target: writing a sidecar for such a server would invent
    membership and silently convert the deferral into "no drop".
 
-**Measured on a real 516-sidecar / ~1650-line state dir**, over all 47 distinct ledger
-cwds, fast path against the ledger path (`AMUX_PENDING_NO_FAST=1`) — **zero disagreements**
-in every row:
+**Measured on a real state dir** (246 sidecars / 1650 ledger lines before `sl_prune`'s
+reachability keep set landed, 19 / 272 after — the split below is identical either way, so
+the residual is not an artefact of an unpruned dir), over all 47 distinct ledger cwds, fast
+path against the ledger path (`AMUX_PENDING_NO_FAST=1`) — **zero disagreements** in every
+row:
 
 | state | answered from sidecars | deferred |
 |---|---|---|
