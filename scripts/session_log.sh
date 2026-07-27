@@ -402,6 +402,94 @@ _sl_resume_map() {
     | jq -r '.agents[]? | select(.resume) | [.name, .resume] | @tsv' 2>/dev/null
 }
 
+# Answer "is there a restorable drop for <cwd>?" from the live-set sidecars alone.
+#
+# THE HOT PATH: warden polls `dropped --pending <cwd>` once per session-less tab per
+# probe interval, across every tab its root scan discovers. The ledger path this
+# replaces folds the whole ledger through jq and then spawns three processes per
+# candidate server just to re-derive a sidecar path — spawns, not data, were its
+# entire cost. Everything this question needs is already recorded at EVENT time in
+# <state>/live/<sockethash>-<pid>.windows, so answering it is a directory scan.
+#
+# THE SPAWN BUDGET IS THE WHOLE POINT, AND IT IS PER-QUERY, NOT PER-SIDECAR. A
+# state dir accumulates one sidecar per tmux server over the ledger's retention
+# window — hundreds — so anything run once per FILE loses the race by itself: a
+# per-file `awk` over 214 sidecars measured 1458ms against 34ms for one `awk` given
+# all 214 as arguments, i.e. an order of magnitude WORSE than the ledger fold it
+# was meant to replace. So the classify-every-sidecar pass is exactly one awk over
+# the whole glob, and the per-server work that follows (reading the socket back,
+# the liveness probe, the offer gate) runs only for the handful of sidecars that
+# actually name this cwd — usually none. Keep it that way: a fork moved inside the
+# scan is a silent 40x regression that no test asserts on.
+#
+# Exit 0 = yes, 1 = no, 2 = CANNOT ANSWER (fall through to the ledger path).
+#
+# 2 IS DELIBERATELY NOT 1. Missing sidecar dir, no sidecars at all, a legacy
+# single-field sidecar, a .windows with no readable .sock companion — every one of
+# those is absence of information, not evidence of no drop. Answering "no" on any
+# of them would silently stop ghosting recoverable sessions, which is the exact
+# data loss this subsystem exists to prevent, and it would do so invisibly:
+# nothing is logged, nothing fails, the dot simply never lights. An EMPTY sidecar
+# is the one shape that IS a real answer — it records "nothing was open when this
+# server died" (a clean teardown), so it contributes no drop and never reads as 2.
+_sl_pending_fast() {  # <cwd>
+  _pf_cwd=$1
+  _pf_sd=$(_sl_state_dir)
+  [ -d "$_pf_sd/live" ] || return 2
+  # Hand the whole glob to awk as-is. Do NOT pre-filter it in the shell: a loop that
+  # rebuilds the positional list per file (`set -- "$@" "$f"`) is quadratic, and at
+  # 214 sidecars it measured 373ms — ten times the scan it was guarding. There is
+  # nothing to gain either, because awk already yields no records for an empty file,
+  # which is exactly the answer an empty sidecar should contribute: that server was
+  # torn down cleanly, so it offers no drop (and if every sidecar is empty, awk finds
+  # no candidate and the whole query is a plain "no", never a 2).
+  set -- "$_pf_sd"/live/*.windows
+  [ -e "$1" ] || return 2                  # unmatched glob: no sidecars = no information
+  # ONE pass over every sidecar. Emits the files holding a candidate row — an agent
+  # window (never `shell`) in this cwd that recorded a resume hint, the same three
+  # conditions the ledger path applies to its own rows. A line with fewer than 4
+  # tab-separated fields is the legacy pre-enrichment shape, so that server's cwds
+  # are unknown and the query is unanswerable: bail with a distinctive status. Any
+  # other non-zero (a genuine awk failure) lands in the same place, which is the
+  # safe direction — 2 defers to the ledger, it never invents an answer.
+  _pf_cands=$(awk -F"$TAB" -v c="$_pf_cwd" '
+      NF<4 { exit 3 }
+      $2==c && $3!="shell" && $4!="" { if (!(seen[FILENAME]++)) print FILENAME }
+    ' "$@") || return 2
+  [ -n "$_pf_cands" ] || return 1
+  # From here on the work is per-CANDIDATE, and candidates are rare — this is the
+  # branch a tab with a real crashed session takes, not the polling steady state.
+  _sl_load_dead   # one read; every repeat probe of a known-dead server is then fork-free
+  _pf_hit=1
+  _pf_ifs=$IFS; IFS=$_SL_NL
+  # shellcheck disable=SC2086  # deliberate: split the candidate list on newlines only
+  set -- $_pf_cands
+  IFS=$_pf_ifs
+  for _pf_f in "$@"; do
+    # A candidate only counts if its server is DEAD. The filename only HASHES the
+    # socket, so read the path back from the companion file and run the real
+    # (tmux-based) liveness test — never kill -0, which cannot tell a reused pid
+    # from the original server after a reboot. `read` is a builtin, so this costs
+    # no fork; a missing or empty companion (what _sl_discard leaves behind) means
+    # the liveness test cannot run at all, which is 2, not an error and not a "no".
+    _pf_sock=""
+    [ -f "$_pf_f.sock" ] && IFS= read -r _pf_sock < "$_pf_f.sock" 2>/dev/null
+    [ -n "$_pf_sock" ] || return 2
+    _pf_base=${_pf_f##*/}; _pf_base=${_pf_base%.windows}
+    _pf_pid=${_pf_base##*-}
+    _sl_server_live "$_pf_sock" "$_pf_pid" && continue
+    # The once-per-(server,cwd) offer gate, applied READ-ONLY (no marking) on the
+    # same key the ledger path builds. Skipping it here would re-light a ghost amux
+    # has already offered and cleared.
+    if [ -f "$_pf_sd/notified" ] &&
+       grep -qxF "$_pf_sock|$_pf_pid|$_pf_cwd" "$_pf_sd/notified" 2>/dev/null; then
+      continue
+    fi
+    _pf_hit=0
+  done
+  return "$_pf_hit"
+}
+
 # sl_dropped <cwd> | --global | --new <cwd>
 # Emit restorable DROPPED tabs from the SINGLE most recent crash — an agent tab
 # (agent != shell, resume_cmd non-empty) on a DEAD server (pid no longer answers on its
@@ -421,6 +509,20 @@ _sl_resume_map() {
 sl_dropped() {
   _sl_enabled || return 0
   _sl_load_dead   # one read; turns the per-server liveness sweep fork-free for known-dead servers
+  # PRESENCE-POLL FAST PATH. --pending's only consumer (bin/amux's _amux_probe) tests
+  # its output for EMPTINESS, never reads the rows, so a single synthetic line answers
+  # it — that narrowing is what lets the sidecars replace the ledger fold here. Exit 2
+  # means the sidecars cannot answer, so the ledger path below runs unchanged.
+  # AMUX_PENDING_NO_FAST forces that fallback: it is the seam the selftest uses to
+  # observe both paths against one fixture and prove they agree.
+  if [ "${1:-}" = "--pending" ] && [ -n "${2:-}" ] && [ -z "${AMUX_PENDING_NO_FAST:-}" ]; then
+    _sl_pending_fast "$2"
+    case $? in
+      0) printf 'pending\n'; return 0 ;;
+      1) return 0 ;;
+      *) ;;                      # 2 = cannot answer; fall through to the ledger path
+    esac
+  fi
   # _gate_new: apply the once-per-(server,cwd) offer filter. _mark_new: also record the
   # offer. --new does both (the launch picker consumes it once). --pending gates WITHOUT
   # marking: warden's presence probe polls this every few seconds, so a marking read would
@@ -886,7 +988,17 @@ _assert "dropped(--global): has drop3"   "1"          "$(printf '%s\n' "$outg" |
 # ============ --pending: --new's filter, without --new's marking ============
 # --pending sees an un-offered drop, exactly as --new would.
 outp=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
-_assert "pending: sees un-offered drop"  "1"  "$(printf '%s\n' "$outp" | grep -c 'claude-work --resume drop1')"
+# What --pending PROMISES is a boolean: its only consumer (bin/amux's _amux_probe)
+# tests the output for emptiness and never reads the rows, so the sidecar fast path
+# answers it with one synthetic line. Assert that contract, not the row text.
+_assert "pending: sees un-offered drop"  "1"  "$([ -n "$outp" ] && echo 1 || echo 0)"
+# This fixture's sidecar is the LEGACY single-field shape (`@1\n@3` above), so the
+# fast path reads "cannot answer" and $outp came from the ledger fallback — which is
+# why the program-swapped row is still assertable here. That fallback shares its
+# emitter with --new, and that emitter is what keeps the restore picker honest, so
+# it is worth pinning; the assertion is only meaningful while the fixture stays legacy.
+_assert "pending(ledger fallback): swaps the resume program" "1" \
+  "$(printf '%s\n' "$outp" | grep -c 'claude-work --resume drop1')"
 
 # GATE (Task 2): a cwd that never appears in the ledger returns empty via the fast path — the
 # same answer as the slow path, so this must hold both before and after the gate is added.
@@ -1621,6 +1733,126 @@ else
   echo "SKIP: t3 (tmux not found)"
 fi
 rm -rf "$_t3_dir"
+
+# ============ Task 4: --pending is answered from the live/ sidecars, not the
+#     ledger. This is warden's hot path (one poll per session-less tab, every
+#     few seconds), so the answer must cost a directory scan, not a jq fold.
+#
+#     The exit code carries THREE states: 0 = yes, 1 = no, 2 = CANNOT ANSWER.
+#     2 must never collapse to 1 — answering "no" on missing information
+#     silently stops ghosting recoverable sessions, the exact loss this whole
+#     subsystem exists to prevent — so every no-information fixture below pins
+#     2, and every genuine-negative fixture pins 1. Conflating the two is the
+#     one bug in here that fails silently, which is why they are tested apart.
+#
+#     Placed AFTER the `unset -f tmux` above so _sl_server_live runs the REAL
+#     tmux probe: a socket path that does not exist reads DEAD, which is what
+#     every fixture here needs. Under the canned stub these would read dead
+#     too — but for the wrong reason (it answers every call successfully), and
+#     a test that passes without the liveness call having happened is exactly
+#     the kind that hides a broken wiring. ============
+_t4_dir=$(mktemp -d) || exit 1
+_t4_put() {  # <socket> <pid> <sidecar line>  → sidecar + its .sock companion
+  _t4_f="$_t4_dir/live/$(printf '%s' "$1" | cksum | cut -d' ' -f1)-$2.windows"
+  printf '%s\n' "$3" > "$_t4_f"; printf '%s\n' "$1" > "$_t4_f.sock"
+}
+_t4_rm() {  # <socket> <pid>
+  _t4_f="$_t4_dir/live/$(printf '%s' "$1" | cksum | cut -d' ' -f1)-$2.windows"
+  rm -f "$_t4_f" "$_t4_f.sock"
+}
+# Run in $() so the AGENTMUX_STATE_DIR prefix stays in the subshell: a prefix
+# assignment on a SHELL FUNCTION call persists in POSIX sh (see the
+# SESSION_LOG_CTX comments above), and leaking it here would redirect the rest
+# of the suite — and the EXIT trap's rm -rf — at this fixture.
+_t4_fast() {  # <cwd> → prints the exit code
+  _ignore=$(AGENTMUX_STATE_DIR="$_t4_dir" _sl_pending_fast "$1"); printf '%s' "$?"
+}
+
+# NO INFORMATION: a missing or empty live/ dir is not "no drops", it is "I cannot see".
+_assert "t4: no live dir cannot answer"    "2" "$(_t4_fast /w/four)"
+mkdir -p "$_t4_dir/live"
+_assert "t4: empty live dir cannot answer" "2" "$(_t4_fast /w/four)"
+
+# pid 999999+ is above the default pid_max, so no real tmux server can own it.
+_t4_put /s/four 999999 "@1${TAB}/w/four${TAB}work${TAB}1"
+_assert "t4: finds the restorable drop"    "0" "$(_t4_fast /w/four)"
+_assert "t4: other cwd is not a hit"       "1" "$(_t4_fast /w/other)"
+
+# The two rows that must never ghost: the shell agent has nothing to resume, and
+# an agent window that never emitted a resume hint has no command to restore it.
+_t4_put /s/sh   999998 "@1${TAB}/w/sh${TAB}shell${TAB}1"
+_assert "t4: shell agent never ghosts"     "1" "$(_t4_fast /w/sh)"
+_t4_put /s/norc 999997 "@1${TAB}/w/norc${TAB}work${TAB}"
+_assert "t4: no resume hint is not a hit"  "1" "$(_t4_fast /w/norc)"
+
+# An EMPTY sidecar is a REAL answer — nothing was open when that server died (a
+# clean teardown, i.e. you closed the last window). It yields no drop, and must
+# not be mistaken for the no-information case above.
+: > "$_t4_dir/live/$(printf '%s' /s/empty | cksum | cut -d' ' -f1)-999994.windows"
+_assert "t4: empty sidecar is a teardown, not a ghost" "1" "$(_t4_fast /w/empty)"
+
+# The once-per-(server,cwd) offer gate, applied READ-ONLY. The ledger path skips a
+# server already offered for this cwd; the fast path must skip the same ones on the
+# same key, or the ghost that amux has already cleared lights up again.
+printf '%s\n' "/s/four|999999|/w/four" > "$_t4_dir/notified"
+_assert "t4: honours the notified gate"    "1" "$(_t4_fast /w/four)"
+printf '%s\n' "/s/four|999999|/w/elsewhere" > "$_t4_dir/notified"
+_assert "t4: gate is per-cwd, not per-server" "0" "$(_t4_fast /w/four)"
+rm -f "$_t4_dir/notified"
+
+# The remaining no-information shapes. A legacy (single-field) sidecar predates
+# the enriched format, so that server's cwds are unknown; a .windows with no
+# .sock companion (what _sl_discard writes) leaves no way to run the real
+# liveness probe. Both are 2 — defer to the ledger — never a guessed 1.
+_t4_put /s/legacy 999996 "@1"
+_assert "t4: legacy sidecar defers to ledger" "2" "$(_t4_fast /w/four)"
+_t4_rm  /s/legacy 999996
+_t4_put /s/nosock 999995 "@1${TAB}/w/four${TAB}work${TAB}1"
+rm -f "$_t4_dir/live/$(printf '%s' /s/nosock | cksum | cut -d' ' -f1)-999995.windows.sock"
+_assert "t4: missing .sock defers to ledger"  "2" "$(_t4_fast /w/four)"
+_t4_rm  /s/nosock 999995
+_assert "t4: recovers once the unanswerable sidecars are gone" "0" "$(_t4_fast /w/four)"
+rm -rf "$_t4_dir"
+
+# ============ Task 4b: the fast and the ledger path must AGREE. Two code paths
+#     answering one question is exactly the shadow that rots, so pin both against
+#     ONE fixture. Driven through sl_dropped rather than _sl_pending_fast, because
+#     a helper tested only in isolation hides call-site bugs (argument order, the
+#     escape hatch, the boolean the caller actually reads). ============
+_t4b_dir=$(mktemp -d) || exit 1
+mkdir -p "$_t4b_dir/live"
+cat > "$_t4b_dir/sessions.jsonl" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/here","server_pid":111,"session":"h","window_id":"@1","window_name":"claude","cwd":"/w/here","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/here","server_pid":111,"window_id":"@1","label":"drophere","resume_cmd":"claude --resume drophere"}
+JSON
+_t4b_f="$_t4b_dir/live/$(printf '%s' /s/here | cksum | cut -d' ' -f1)-111.windows"
+printf '@1\t/w/here\twork\t1\n' > "$_t4b_f"; printf '/s/here\n' > "$_t4b_f.sock"
+_t4b_run() {  # <cwd> [extra env assignments applied by the caller]
+  AGENTMUX_STATE_DIR="$_t4b_dir" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" \
+    sl_dropped --pending "$1"
+}
+_assert "t4b: fast path sees the drop"  "1" "$(_t4b_run /w/here | grep -c .)"
+_assert "t4b: fast path misses nothing" "0" "$(_t4b_run /w/nowhere | grep -c .)"
+# The discriminator that makes the pair above non-vacuous: --pending's fast answer
+# is a synthetic boolean row, so the ledger's program-swapped resume text is ABSENT
+# from it. Without this the two assertions pass identically whether the fast path
+# ran or fell through, and the agreement guard would prove nothing.
+_assert "t4b: fast answer is synthetic, not a ledger row" "0" \
+  "$(_t4b_run /w/here | grep -c 'claude-work --resume drophere')"
+# Same question, ledger path. AMUX_PENDING_NO_FAST is the escape hatch that makes
+# the two independently observable; without it there is no way to prove agreement.
+_t4b_slow=$(AMUX_PENDING_NO_FAST=1 AGENTMUX_STATE_DIR="$_t4b_dir" SESSION_LOG_BOOT_EPOCH=1 \
+  SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/here")
+_t4b_slowmiss=$(AMUX_PENDING_NO_FAST=1 AGENTMUX_STATE_DIR="$_t4b_dir" SESSION_LOG_BOOT_EPOCH=1 \
+  SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/nowhere")
+_assert "t4b: ledger path agrees (drop)"    "1" "$(printf '%s\n' "$_t4b_slow" | grep -c .)"
+_assert "t4b: ledger path agrees (no drop)" "0" "$(printf '%s' "$_t4b_slowmiss" | grep -c .)"
+# The ledger fallback keeps emitting the full program-swapped row — --pending's
+# consumer only tests emptiness, but the fallback shares its emitter with --new,
+# and that emitter is what keeps the restore picker honest.
+_assert "t4b: ledger fallback still swaps the resume program" "1" \
+  "$(printf '%s\n' "$_t4b_slow" | grep -c 'claude-work --resume drophere')"
+rm -rf "$_t4b_dir"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
