@@ -633,6 +633,19 @@ fi
 
 # ============================ selftest ============================
 # SESSION_LOG_SELFTEST=1 sh scripts/session_log.sh
+#
+# **Footgun** — clear the selftest marker FIRST, before anything spawns a child.
+# It arrives as an EXPORTED env var (test.sh runs `env SESSION_LOG_SELFTEST=1 sh
+# …`), so every descendant inherits it — including the real tmux SERVERS the
+# end-to-end blocks below start, which are daemons that outlive this run and
+# invoke this script again from their own hooks at arbitrary later times. A hook
+# child that inherits the marker skips the dispatcher entirely and falls into
+# THIS selftest, which starts another real server, whose hooks fall in again:
+# an exponential fork bomb (observed: ~100k processes, load 50, PID counter
+# wrapped). Unsetting here is the single point that keeps every child clean —
+# do not push this down to individual `tmux` invocations.
+unset SESSION_LOG_SELFTEST
+
 AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
 AGENTMUX_SESSION_LOG=1
 export AGENTMUX_STATE_DIR AGENTMUX_SESSION_LOG
@@ -1196,7 +1209,11 @@ unset -f tmux 2>/dev/null   # drop the canned stub — this block must hit the r
 if command -v tmux >/dev/null 2>&1; then
   _sk_dir="/tmp/slsktest-$$"; export TMUX_TMPDIR="$_sk_dir"; mkdir -p "$_sk_dir"
   _sk_sock="agentmux-agent-777"
-  tmux -L "$_sk_sock" new-session -d -s sktest -c /tmp 2>/dev/null
+  # -f /dev/null: a test server must be hermetic. Without it tmux loads the
+  # USER's ~/.tmux.conf, which source-files agentmux.conf — pulling the live
+  # window-unlinked/after-new-window hooks and the whole tpm plugin set into a
+  # server this test is about to kill. Nothing here wants the live config.
+  tmux -L "$_sk_sock" -f /dev/null new-session -d -s sktest -c /tmp 2>/dev/null
   _sk_realsock=$(tmux -L "$_sk_sock" display-message -p '#{socket_path}' 2>/dev/null)
   _sk_pid=$(tmux -L "$_sk_sock" display-message -p '#{pid}' 2>/dev/null)
   _sk_wid=$(tmux -L "$_sk_sock" display-message -p -t sktest '#{window_id}' 2>/dev/null)
@@ -1233,10 +1250,13 @@ if command -v tmux >/dev/null 2>&1; then
   _lw_sock="agentmux-agent-778"
   _lw_script=$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")
   if [ -f "$_lw_script" ]; then
-    tmux -L "$_lw_sock" new-session -d -s lwtest -c /tmp 2>/dev/null
-    # SESSION_LOG_SELFTEST= so the hook's child runs the DISPATCHER, not this selftest.
+    tmux -L "$_lw_sock" -f /dev/null new-session -d -s lwtest -c /tmp 2>/dev/null
+    # Hermetic server (-f /dev/null above), so this installs the hook explicitly
+    # rather than inheriting agentmux.conf's — same hook, under test control.
+    # The child runs the DISPATCHER, not this selftest, because the marker was
+    # unset at the top of the selftest; don't re-guard it here.
     tmux -L "$_lw_sock" set-hook -g window-unlinked \
-      "run-shell \"SESSION_LOG_SELFTEST= sh '$_lw_script' snapshot #{socket_path} #{pid}\"" 2>/dev/null
+      "run-shell \"sh '$_lw_script' snapshot #{socket_path} #{pid}\"" 2>/dev/null
     tmux -L "$_lw_sock" new-window -t lwtest -c /tmp 2>/dev/null
     _lw_rs=$(tmux -L "$_lw_sock" display-message -p '#{socket_path}' 2>/dev/null)
     _lw_pid=$(tmux -L "$_lw_sock" display-message -p '#{pid}' 2>/dev/null)

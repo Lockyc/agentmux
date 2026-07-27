@@ -20,6 +20,11 @@ source "$SCRIPT_DIR/agent_window_style.sh"
 # would not reproduce. Own short TMUX_TMPDIR (AF_UNIX 104-char limit) with an
 # EXIT trap, mirroring session_log.sh's real-tmux block.
 if [ "${RELAUNCH_SELFTEST:-}" = "1" ]; then
+  # Clear the marker before anything spawns a child — test.sh passes it as an
+  # EXPORTED var, so the real tmux server started below would otherwise inherit
+  # it and any later re-entry of this script from that server would run the
+  # selftest instead of the relaunch. Same invariant as session_log.sh's.
+  unset RELAUNCH_SELFTEST
   command -v tmux >/dev/null 2>&1 || { echo "SKIP: relaunch selftest (tmux not found)"; exit 0; }
   command -v toml2json >/dev/null 2>&1 || { echo "SKIP: relaunch selftest (toml2json not found)"; exit 0; }
   _rl_dir="/tmp/rltest-$$"; mkdir -p "$_rl_dir" || exit 1
@@ -40,7 +45,10 @@ TOML
   # A tab created WITH a start command — exactly how _amux_restore_into and
   # fork_session.sh create restored/forked tabs (the resume line as the pane's
   # start command, which is what suppresses launch_agent.sh's auto-launch).
-  tmux -L rlselftest new-session -d -s rl -c /tmp \
+  # -f /dev/null: hermetic. Without it the server loads the user's ~/.tmux.conf
+  # → agentmux.conf, whose after-new-window hook would fire launch_agent.sh and
+  # actually start an agent inside this test's throwaway server.
+  tmux -L rlselftest -f /dev/null new-session -d -s rl -c /tmp \
     "sh -c 'touch $_rl_resumed; sleep 30'" 2>/dev/null
   tmux -L rlselftest set-option -t rl "@autoagent" 1 2>/dev/null
   tmux -L rlselftest set-option -t rl "@agent-mode" work 2>/dev/null
