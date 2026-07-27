@@ -18,6 +18,10 @@
 #   discard  <socket> <pid>  mark a server's windows deliberately closed (empty
 #                            sidecar) — the amux --kill path, so a torn-down shard
 #                            isn't recovered as a crash
+#   migrate                  one-shot backfill: bring the sidecars already on disk up
+#                            to the current contract (enrich legacy bare-id lines from
+#                            the ledger, write missing `.sock` companions). Idempotent;
+#                            never changes a sidecar's window-id membership
 #
 # We reconcile against the set of windows that were open. For a LIVE server that
 # set is queried directly (tmux list-windows). A DEAD server can't be queried, so
@@ -941,6 +945,206 @@ $mp
   fi
 }
 
+# One-shot backfill of the sidecars already on disk, from the ledger.
+#
+# WHY IT EXISTS. Everything `_sl_pending_fast` needs is written at EVENT time, so a
+# sidecar born under the current code is already correct — but the ones already in
+# live/ predate it, and the fast path answers only when EVERY sidecar it scans is
+# current. Two independent shortfalls each force it back to the ledger fold, and
+# fixing either alone changes nothing (measured: 47 of 47 cwds still deferred):
+#   - a legacy line (bare window id, no tabs) → the whole scan bails (exit 3);
+#   - a `.windows` with no `.sock` companion → no socket path, so neither the
+#     liveness probe nor the ledger join can run (exit 2 / exit 4).
+# So this fixes BOTH in one pass, and is idempotent: a second run finds every line
+# already 4-field and every companion already present, writes nothing.
+#
+# WHAT IT MAY AND MAY NOT DO. It may only ADD FIELDS to lines that are already
+# there. A sidecar's set of window ids is the record of what was open at that
+# server's death, so the migration never adds an id, never removes one, and never
+# creates a sidecar for a server that has none (that absence is what makes the fast
+# path defer — see its "sidecar-less server" comment — and inventing one would turn
+# a deferral into a silent "no drop"). An EMPTY `.windows` is the sharpest case: it
+# means "nothing was open when this server died" (a clean teardown, or `amux
+# --kill` via _sl_discard), so it stays byte-for-byte empty — awk yields no records
+# for it, so it can never become an output file. It still gains its `.sock`, which
+# carries no membership. And a line whose ledger row cannot be found is left
+# LEGACY: the fast path then keeps deferring for that sidecar, which is the safe
+# direction — a guessed row would be a wrong answer, and 2 must never collapse to 1.
+#
+# THE FORK BUDGET IS A SINGLE PASS, exactly as on the poll path. The state dir holds
+# hundreds of sidecars, and anything run per FILE loses by itself (a per-file awk
+# over 214 sidecars measured 3241ms against 32ms for one awk given them all). So:
+# one awk to list the ledger's distinct socket paths, ONE `cksum` over all of them
+# at once, one awk over (hashes + sockets + ledger + every sidecar), and ONE `mv`
+# to publish. The `cksum` batch is what joins a sidecar back to its ledger server:
+# the filename hashes the socket (see _sl_sock_hash), so the map has to run the same
+# checksum over each candidate socket path — the shell writes each to its own file
+# (a builtin `printf`, no fork) and hands the lot to one `cksum`, whose per-file
+# output IS the hash table. Using the real binary rather than a reimplementation is
+# what guarantees the two can never disagree.
+#
+# PUBLISHING IS ATOMIC, per file, the same way _sl_snapshot writes: every rewrite
+# lands in a staging dir first, and the final `mv` renames each into live/ — a
+# rename over the old file, so a concurrent reader sees either the whole old
+# sidecar or the whole new one, never a half-written set. Staging under the STATE
+# dir (not $TMPDIR) keeps the rename same-filesystem, which is what makes it atomic
+# at all. Safe against a live server snapshotting underneath us precisely because
+# membership never changes: the worst case is that our rewrite carries the same ids
+# the file already had, and the server's next window event re-snapshots anyway.
+sl_migrate() {
+  _sl_enabled || return 0
+  _mg_sd=$(_sl_state_dir)
+  [ -d "$_mg_sd/live" ] || return 0
+  _mg_ledger="$_mg_sd/$_SL_LEDGER_NAME"
+  [ -s "$_mg_ledger" ] || return 0
+  set -- "$_mg_sd"/live/*.windows
+  [ -e "$1" ] || return 0                    # unmatched glob: nothing to migrate
+  _mg_tmp="$_mg_sd/live.migrate.$$"
+  rm -rf "$_mg_tmp" 2>/dev/null
+  mkdir -p "$_mg_tmp/h" "$_mg_tmp/o" 2>/dev/null || return 1
+  # Distinct socket paths, read from the ledger's RAW bytes. A path needing JSON
+  # escaping (a quote or backslash in it) is deliberately excluded by the character
+  # class: matching it raw would be unsound, and an unmatched socket simply leaves
+  # its sidecars alone — the same "defer rather than guess" direction as everywhere
+  # else here.
+  awk 'match($0, /"socket_path":"[^"\\]*"/) {
+         _s = substr($0, RSTART + 15, RLENGTH - 16)
+         if (_s != "" && !(_s in seen)) { seen[_s] = 1; print _s }
+       }' "$_mg_ledger" > "$_mg_tmp/socks" 2>/dev/null
+  # One file per socket path, holding the path with NO trailing newline — byte-for-byte
+  # what `_sl_sock_hash` feeds `cksum` on stdin. `printf` is a shell builtin, so this
+  # loop forks nothing however many sockets the ledger names.
+  _mg_n=0
+  while IFS= read -r _mg_sp; do
+    _mg_n=$((_mg_n + 1))
+    printf '%s' "$_mg_sp" > "$_mg_tmp/h/$_mg_n"
+  done < "$_mg_tmp/socks"
+  if [ "$_mg_n" -eq 0 ]; then rm -rf "$_mg_tmp"; return 0; fi
+  cksum "$_mg_tmp"/h/* > "$_mg_tmp/crcs" 2>/dev/null || { rm -rf "$_mg_tmp"; return 1; }
+  # ONE pass over: the checksums, the socket list, the ledger, then every sidecar —
+  # in that order, because each stage is built from the one before it. Paths arrive
+  # through ENVIRON, not `-v`: `-v` runs its value through escape processing, so a
+  # state dir containing a backslash would be mangled.
+  _mg_sum=$(SL_MG_OUT="$_mg_tmp/o" awk -F"$TAB" '
+      function jstr(l, k,   p) {              # "<k>":"<value>", value needing no escaping
+        p = "\"" k "\":\"[^\"\\\\]*\""
+        if (!match(l, p)) return ""
+        return substr(l, RSTART + length(k) + 4, RLENGTH - length(k) - 5)
+      }
+      function jnum(l, k,   p) {              # "<k>":<digits>
+        p = "\"" k "\":[0-9]+"
+        if (!match(l, p)) return ""
+        return substr(l, RSTART + length(k) + 3, RLENGTH - length(k) - 3)
+      }
+      # Emit the sidecar being read, but ONLY if a line actually changed. Closing the
+      # handle per file keeps at most one output open: awk caps simultaneously-open
+      # files well below the hundreds of sidecars in a real state dir.
+      function flush(   i, out) {
+        if (curf == "") return
+        if (dirty) {
+          out = outdir "/" bname[curf]
+          for (i = 1; i <= nb; i++) print buf[i] > out
+          close(out)
+          nenrich++
+        }
+        curf = ""; nb = 0; dirty = 0
+      }
+      BEGIN {
+        outdir = ENVIRON["SL_MG_OUT"]
+        # Index the sidecars straight off ARGV — no file is read to build this, so it
+        # still sees the EMPTY ones (awk yields no records for those, yet an empty
+        # sidecar is a real answer and must still get its .sock companion).
+        for (i = 1; i < ARGC; i++) {
+          f = ARGV[i]
+          if (f !~ /\.windows$/) continue
+          b = f; sub(/.*\//, "", b); bname[f] = b
+          s = b; sub(/\.windows$/, "", s)
+          p = s; sub(/.*-/, "", p)            # <sockethash>-<pid> → pid
+          h = s; sub(/-[^-]*$/, "", h)        #                    → sockethash
+          fpid[f] = p; fhash[f] = h
+          nfiles++; files[nfiles] = f
+        }
+      }
+      FNR == 1 { fno++ }
+      # cksum: "<crc> <size> <path>/h/<i>". Keyed by the trailing index rather than by
+      # output order, so a lexicographic glob (h/1, h/10, h/2, …) cannot misalign it.
+      # The crc is forced to a STRING before it is used as a subscript: as a number it
+      # would round-trip through CONVFMT and index as "1.00309e+09".
+      fno == 1 {
+        if (!match($0, /\/h\/[0-9]+$/)) next
+        idx = substr($0, RSTART + 3, RLENGTH - 3)
+        split($0, a, " ")
+        crc[idx + 0] = a[1] ""
+        next
+      }
+      fno == 2 {                              # socket list: line N is h/N
+        c = crc[FNR] ""
+        if (c == "") next
+        if ((c in sockof) && sockof[c] != $0) ambig[c] = 1   # two paths, one hash: unusable
+        sockof[c] = $0
+        next
+      }
+      fno == 3 {
+        sp = jstr($0, "socket_path"); if (sp == "") next
+        pid = jnum($0, "server_pid"); if (pid == "") next
+        wid = jstr($0, "window_id");  if (wid == "") next
+        k = sp SUBSEP pid SUBSEP wid
+        if (index($0, "\"event\":\"open\"")) {
+          # LAST open wins, matching _sl_fold. An open whose cwd/agent cannot be read
+          # raw DELETES the earlier readable one rather than leaving it: the newest
+          # record is the truth, and if we cannot represent it the line stays legacy.
+          cwd = jstr($0, "cwd"); ag = jstr($0, "agent")
+          if (cwd != "" && ag != "") { ocwd[k] = cwd; oag[k] = ag }
+          else { delete ocwd[k]; delete oag[k] }
+        } else if (index($0, "\"event\":\"resume\"")) {
+          # `resumable` mirrors exactly what the ledger path gates on (rcmd != ""), and
+          # is decided WITHOUT decoding the command: a resume_cmd containing a backslash
+          # must still read as resumable, or the fast path would answer "no drop" where
+          # the ledger answers "drop".
+          if (index($0, "\"resume_cmd\":\"\"") == 0 && index($0, "\"resume_cmd\":\"") > 0) ores[k] = 1
+        }
+        next
+      }
+      FILENAME ~ /\.windows$/ {
+        if (FILENAME != curf) { flush(); curf = FILENAME }
+        nb++
+        if (NF >= 4) { buf[nb] = $0; next }   # already current — never rewritten
+        if ($1 == "") { buf[nb] = $0; nleg++; next }
+        h = fhash[FILENAME] ""
+        if ((h in ambig) || sockof[h] == "") { buf[nb] = $0; nleg++; next }
+        k = sockof[h] SUBSEP fpid[FILENAME] SUBSEP $1
+        if (!(k in ocwd)) { buf[nb] = $0; nleg++; next }   # no ledger row → leave legacy
+        buf[nb] = $1 "\t" ocwd[k] "\t" oag[k] "\t" ((k in ores) ? "1" : "")
+        dirty = 1
+      }
+      END {
+        flush()
+        for (i = 1; i <= nfiles; i++) {
+          f = files[i]; h = fhash[f] ""
+          if ((h in ambig) || sockof[h] == "") continue
+          sf = f ".sock"
+          line = ""
+          got = (getline line < sf); close(sf)
+          if (got > 0 && line != "") continue  # present and non-empty: the -s guard _sl_snapshot uses
+          of = outdir "/" bname[f] ".sock"
+          print sockof[h] > of
+          close(of)
+          nsock++
+        }
+        printf "enriched=%d sock=%d legacy_left=%d\n", nenrich + 0, nsock + 0, nleg + 0
+      }
+    ' "$_mg_tmp/crcs" "$_mg_tmp/socks" "$_mg_ledger" "$@") || { rm -rf "$_mg_tmp"; return 1; }
+  # Publish. One `mv` for every staged file: each rename is atomic on its own, and
+  # nothing is staged at all when the run was a no-op, so an already-migrated state
+  # dir is not even touched.
+  set -- "$_mg_tmp"/o/*
+  if [ -e "$1" ]; then
+    mv "$_mg_tmp"/o/* "$_mg_sd/live/" 2>/dev/null || true
+  fi
+  rm -rf "$_mg_tmp"
+  printf 'migrate: %s\n' "$_mg_sum"
+}
+
 # ---- dispatch ----
 if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
   cmd="${1:-}"; [ $# -gt 0 ] && shift
@@ -952,6 +1156,7 @@ if [ "${SESSION_LOG_SELFTEST:-}" != "1" ]; then
     prune)     sl_prune     "$@" ;;
     snapshot)  sl_snapshot  "$@" ;;
     discard)   sl_discard   "$@" ;;
+    migrate)   sl_migrate   "$@" ;;
     *) echo "session_log.sh: unknown subcommand '$cmd'" >&2; exit 2 ;;
   esac
   exit 0
@@ -2051,6 +2256,100 @@ _assert "t4d: an unaffected cwd still answers from the sidecars" "0" "$(_t4d_fas
 # A server the ledger names WITH a sidecar is not a deferral, only a missing one is.
 _assert "t4d: no deferral for a cwd the ledger never names" "1" "$(_t4d_fast /w/absent)"
 rm -rf "$_t4d_dir"
+
+# ============ Task 5: `migrate` — the one-shot backfill of sidecars already on
+#     disk. It is the piece that makes the fast path's speedup real: every sidecar
+#     written before the enrichment change is a legacy bare-id file, and every one
+#     written before the `.sock` companion existed has no socket path, and EITHER
+#     shortfall alone sends every poll back to the ledger fold.
+#
+#     Fixture covers each shape at once, in ONE state dir, so the single pass has to
+#     get them all right together:
+#       A (/s/mig,  4001) legacy 2 lines, no .sock   → enriched + companion written
+#       B (/s/mig2, 4002) EMPTY, no .sock            → stays empty, companion written
+#       C (/s/mig3, 4003) legacy, one line the ledger knows and one it does not
+#                                                    → per-LINE: @1 enriched, @9 left legacy
+#       D (/s/mig4, 4004) already 4-field, has .sock → byte-identical afterwards
+#       E (/s/mig5, 4005) named by the ledger, NO sidecar → none is created
+#     B is the dangerous one: an empty sidecar records "nothing was open when this
+#     server died", so enriching it into anything non-empty would resurrect tabs the
+#     user deliberately closed. E is the other: a sidecar-less server is what MAKES
+#     the fast path defer, and inventing one would turn that deferral into a silent
+#     "no drop".
+#
+#     Non-vacuity is asserted explicitly rather than assumed: the pre-state checks
+#     below prove A/C really are legacy and A/B/C really have no companion before the
+#     run, and the reported counters prove the run did the work rather than no-op'd.
+#     ============
+_mig_dir=$(mktemp -d) || exit 1
+mkdir -p "$_mig_dir/live"
+_mig_f() { printf '%s/live/%s-%s.windows' "$_mig_dir" "$(printf '%s' "$1" | cksum | cut -d' ' -f1)" "$2"; }
+_mig_a=$(_mig_f /s/mig 4001); _mig_b=$(_mig_f /s/mig2 4002)
+_mig_c=$(_mig_f /s/mig3 4003); _mig_d=$(_mig_f /s/mig4 4004)
+printf '@1\n@2\n' > "$_mig_a"        # legacy, no .sock
+: > "$_mig_b"                        # EMPTY (clean teardown), no .sock
+printf '@1\n@9\n' > "$_mig_c"        # legacy; @9 has no ledger row
+printf '@1\t/w/d\twork\t1\n' > "$_mig_d"; printf '/s/mig4\n' > "$_mig_d.sock"
+cat > "$_mig_dir/sessions.jsonl" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/mig","server_pid":4001,"session":"m","window_id":"@1","window_name":"claude","cwd":"/w/mig","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/mig","server_pid":4001,"window_id":"@1","label":"mig1","resume_cmd":"claude --resume mig1"}
+{"ts":102,"event":"open","socket_path":"/s/mig","server_pid":4001,"session":"m","window_id":"@2","window_name":"claude","cwd":"/w/mig","agent":"work"}
+{"ts":103,"event":"open","socket_path":"/s/mig2","server_pid":4002,"session":"m2","window_id":"@1","window_name":"claude","cwd":"/w/mig2","agent":"work"}
+{"ts":104,"event":"open","socket_path":"/s/mig3","server_pid":4003,"session":"m3","window_id":"@1","window_name":"claude","cwd":"/w/mig3","agent":"work"}
+{"ts":105,"event":"open","socket_path":"/s/mig5","server_pid":4005,"session":"m5","window_id":"@1","window_name":"claude","cwd":"/w/mig5","agent":"work"}
+JSON
+# Pre-state: prove the fixture really is in the shape the migration is supposed to
+# fix, so a green run below cannot be green because there was nothing to do.
+_assert "t5 pre: A/C carry legacy (<4-field) lines" "4" \
+  "$(awk -F"$TAB" 'NF<4{n++} END{print n+0}' "$_mig_a" "$_mig_c")"
+_mig_count() { _mn=0; for _mp in "$@"; do [ -e "$_mp" ] && _mn=$((_mn + 1)); done; printf '%s' "$_mn"; }
+_assert "t5 pre: A/B/C have no .sock companion" "0" \
+  "$(_mig_count "$_mig_a.sock" "$_mig_b.sock" "$_mig_c.sock")"
+_mig_manifest() { for _mf in "$_mig_dir"/live/*; do printf '%s:%s ' "${_mf##*/}" "$(cksum < "$_mf" | cut -d' ' -f1)"; done; }
+_mig_ids() { awk -F"$TAB" '{print FILENAME "|" $1}' "$_mig_dir"/live/*.windows; }
+_mig_before_ids=$(_mig_ids)
+_mig_d_before=$(cksum < "$_mig_d")
+
+_mig_out=$(AGENTMUX_STATE_DIR="$_mig_dir" sl_migrate)
+_assert "t5: migrate reports the work it did" "migrate: enriched=2 sock=3 legacy_left=1" "$_mig_out"
+
+# A: legacy lines enriched from the ledger — cwd/agent off the `open` row, and
+# `resumable` set only where a resume hint was recorded (mirroring exactly what the
+# ledger path gates on, rcmd != "").
+_assert "t5: legacy sidecar enriched, resumable window" "@1${TAB}/w/mig${TAB}work${TAB}1" "$(sed -n 1p "$_mig_a")"
+_assert "t5: legacy sidecar enriched, non-resumable window" "@2${TAB}/w/mig${TAB}work${TAB}" "$(sed -n 2p "$_mig_a")"
+_assert "t5: .sock-less sidecar gains its companion" "/s/mig" "$(cat "$_mig_a.sock")"
+
+# B: THE dangerous case. An empty sidecar means "nothing was open at this server's
+# death"; it must stay byte-for-byte empty, while still gaining the companion (which
+# carries no membership).
+_assert "t5: EMPTY sidecar stays empty" "0" "$(wc -c < "$_mig_b" | tr -d ' ')"
+_assert "t5: empty sidecar still gains its .sock" "/s/mig2" "$(cat "$_mig_b.sock")"
+
+# C: per-LINE, not per-file — a line the ledger cannot explain is left legacy so the
+# fast path keeps DEFERRING for it (2), rather than being handed a guessed row.
+_assert "t5: line with a ledger row is enriched" "@1${TAB}/w/mig3${TAB}work${TAB}" "$(sed -n 1p "$_mig_c")"
+_assert "t5: line with NO ledger row left legacy" "@9" "$(sed -n 2p "$_mig_c")"
+
+# D: an already-current sidecar is not rewritten at all.
+_assert "t5: already-current sidecar untouched" "$_mig_d_before" "$(cksum < "$_mig_d")"
+
+# E: the ledger names /s/mig5 4005, which has no sidecar. Creating one would convert
+# the fast path's deliberate deferral into a silent "no drop".
+_assert "t5: no sidecar invented for a sidecar-less ledger server" "0" \
+  "$(_mig_count "$(_mig_f /s/mig5 4005)")"
+_assert "t5: sidecar count unchanged" "4" "$(_mig_count "$_mig_dir"/live/*.windows)"
+
+# Membership is the invariant: fields may be added, window ids may not move.
+_assert "t5: window-id membership unchanged" "$_mig_before_ids" "$(_mig_ids)"
+
+# Idempotent: a second run finds every line 4-field and every companion present, so
+# it stages nothing and the directory is bit-identical.
+_mig_after=$(_mig_manifest)
+_mig_out2=$(AGENTMUX_STATE_DIR="$_mig_dir" sl_migrate)
+_assert "t5: second run is a no-op" "migrate: enriched=0 sock=0 legacy_left=1" "$_mig_out2"
+_assert "t5: second run changes no bytes" "$_mig_after" "$(_mig_manifest)"
+rm -rf "$_mig_dir"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
