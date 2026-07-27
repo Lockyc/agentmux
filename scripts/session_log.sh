@@ -126,6 +126,17 @@ EOF
   # actually resolved. Writing that row would corrupt the ledger with a
   # windowless "open" event. A real target always populates window_id too.
   [ -n "$_pid" ] && [ -n "$_wid" ] || return 0
+  # Stamp the two facts the presence probe needs onto the WINDOW itself. They are
+  # born and destroyed with the window, so they cannot outlive what they describe —
+  # the lifetime rule the sidecar depends on. $_cwd is the LAUNCH dir, deliberately
+  # not pane_current_path, which follows the user's cd and would drift off the tab.
+  if [ -n "$_sock" ]; then
+    env -u TMUX tmux -L "$_sock" set-option -w -t "$_wid" @amux_cwd   "$_cwd"   2>/dev/null || true
+    env -u TMUX tmux -L "$_sock" set-option -w -t "$_wid" @amux_agent "$_agent" 2>/dev/null || true
+  else
+    tmux set-option -w -t "$_wid" @amux_cwd   "$_cwd"   2>/dev/null || true
+    tmux set-option -w -t "$_wid" @amux_agent "$_agent" 2>/dev/null || true
+  fi
   _line=$(jq -cn \
     --argjson ts "$(date +%s)" \
     --arg sp "$_socket" --argjson pid "$_pid" --arg s "$_session" \
@@ -913,6 +924,42 @@ SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$R
 outp3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
 _assert "pending: empty after --new offered" "0" "$(printf '%s' "$outp3" | grep -c .)"
 rm -f "$(_sl_state_dir)/notified"
+
+# ---- Task 1: sl_open stamps cwd + agent onto the window --------------------
+# unset SESSION_LOG_CTX defensively: an earlier test's prefix assignment
+# (SESSION_LOG_CTX="..." sl_open claude) leaks past the command when sl_open
+# is a shell FUNCTION and this file runs under `sh` — verified: bash in POSIX
+# mode does not restore a prefix-assigned var after a function call, unlike a
+# real external command. Without this, _sl_ctx would return the stale mock
+# instead of querying the real tmux server started below.
+unset SESSION_LOG_CTX
+# `command tmux` (not bare `tmux`): a `tmux()` stub function is still active
+# here from earlier mocked tests (only unset much further down, for the
+# real-tmux e2e blocks) and would otherwise shadow every direct call this
+# test makes. sl_open's OWN internal tmux calls are unaffected — they all go
+# through `env -u TMUX tmux …`, and `env` execs the real binary via PATH,
+# never resolving a same-named shell function.
+_t1_dir=$(mktemp -d) || exit 1
+_t1_sock="agentmux-t1-$$"
+if command -v tmux >/dev/null 2>&1; then
+  TMUX_TMPDIR="$_t1_dir" command tmux -L "$_t1_sock" -f /dev/null new-session -d -s t1 -c /tmp 2>/dev/null
+  _t1_wid=$(TMUX_TMPDIR="$_t1_dir" command tmux -L "$_t1_sock" display-message -p -t t1 '#{window_id}' 2>/dev/null)
+  _ignore=$(AGENTMUX_STATE_DIR="$_t1_dir" TMUX_TMPDIR="$_t1_dir" sl_open work t1 "$_t1_sock")
+  _assert "t1: stamps @amux_agent" "work" \
+    "$(TMUX_TMPDIR="$_t1_dir" command tmux -L "$_t1_sock" show-options -qvw -t "$_t1_wid" @amux_agent 2>/dev/null)"
+  # Expected value is /tmp's REALPATH, not the literal string: tmux's
+  # #{pane_current_path} (what $_cwd is sourced from) always reports the
+  # resolved physical path, and on macOS /tmp is itself a symlink to
+  # /private/tmp — a literal "/tmp" here would fail on any box where that
+  # symlink exists, which is every stock macOS install.
+  _t1_tmp_real=$(cd /tmp && pwd -P)
+  _assert "t1: stamps @amux_cwd" "$_t1_tmp_real" \
+    "$(TMUX_TMPDIR="$_t1_dir" command tmux -L "$_t1_sock" show-options -qvw -t "$_t1_wid" @amux_cwd 2>/dev/null)"
+  TMUX_TMPDIR="$_t1_dir" command tmux -L "$_t1_sock" kill-server 2>/dev/null
+else
+  echo "SKIP: t1 (tmux not found)"
+fi
+rm -rf "$_t1_dir"
 
 # dead server with NO sidecar (pre-feature) → all its windows count as dropped.
 rm -rf "$AGENTMUX_STATE_DIR/live"
