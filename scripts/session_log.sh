@@ -573,6 +573,18 @@ EOF
 # call) is DEFERRED to a miss, where the authoritative socket/window_id are needed
 # for the ledger line + sidecar. No usable $TMUX (manual/selftest) → fall back to
 # deriving the key from _sl_ctx too.
+# Mark/unmark a window as having a resume command. Its own function (not inlined into
+# sl_resume) because the sidecar read path in Task 3 is specified against this exact
+# option, and the selftest drives it directly without a full sl_resume record.
+_sl_mark_resumable() {  # <socket> <window_id> <resume_cmd>
+  [ -n "$2" ] || return 0
+  if [ -n "$3" ]; then
+    env -u TMUX tmux -L "$1" set-option -w -t "$2" @amux_resumable 1 2>/dev/null || true
+  else
+    env -u TMUX tmux -L "$1" set-option -uw -t "$2" @amux_resumable 2>/dev/null || true
+  fi
+}
+
 sl_resume() {  # <label> <resume_cmd> [fork_cmd]
   _label="$1"; _rcmd="$2"; _fcmd="${3:-}"
   [ -n "$_label" ] || return 0
@@ -607,6 +619,9 @@ EOF
 
   mkdir -p "$_dir/seen" 2>/dev/null || return 0
   printf '%s' "$_sig" > "$_marker" 2>/dev/null || true
+  # Stamp the resumable fact onto the window itself, same lifetime rule as
+  # sl_open's @amux_cwd/@amux_agent: born and destroyed with the window.
+  _sl_mark_resumable "$_socket" "$_wid" "$_rcmd"
   _line=$(jq -cn \
     --argjson ts "$(date +%s)" --arg sp "$_socket" --argjson pid "$_pid" \
     --arg wid "$_wid" --arg label "$_label" --arg rc "$_rcmd" --arg fc "$_fcmd" \
@@ -960,6 +975,32 @@ else
   echo "SKIP: t1 (tmux not found)"
 fi
 rm -rf "$_t1_dir"
+
+# ---- Task 2: sl_resume marks the window resumable --------------------------
+# unset defensively: an earlier test's prefix-assigned SESSION_LOG_CTX can
+# leak past a function call under this shell (same trap Task 1 hit above).
+unset SESSION_LOG_CTX
+_t2_dir=$(mktemp -d) || exit 1
+_t2_sock="agentmux-t2-$$"
+if command -v tmux >/dev/null 2>&1; then
+  TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" -f /dev/null new-session -d -s t2 -c /tmp 2>/dev/null
+  _t2_wid=$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" display-message -p -t t2 '#{window_id}' 2>/dev/null)
+  _assert "t2: not resumable before" "" \
+    "$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" show-options -qvw -t "$_t2_wid" @amux_resumable 2>/dev/null)"
+  _ignore=$(AGENTMUX_STATE_DIR="$_t2_dir" TMUX_TMPDIR="$_t2_dir" \
+    SESSION_LOG_CTX="/s/x${TAB}999${TAB}t2${TAB}${_t2_wid}${TAB}claude${TAB}/tmp" \
+    _sl_mark_resumable "$_t2_sock" "$_t2_wid" "claude --resume abc")
+  _assert "t2: resumable after"      "1" \
+    "$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" show-options -qvw -t "$_t2_wid" @amux_resumable 2>/dev/null)"
+  _ignore=$(AGENTMUX_STATE_DIR="$_t2_dir" TMUX_TMPDIR="$_t2_dir" \
+    _sl_mark_resumable "$_t2_sock" "$_t2_wid" "")
+  _assert "t2: empty cmd clears it"  "" \
+    "$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" show-options -qvw -t "$_t2_wid" @amux_resumable 2>/dev/null)"
+  TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" kill-server 2>/dev/null
+else
+  echo "SKIP: t2 (tmux not found)"
+fi
+rm -rf "$_t2_dir"
 
 # dead server with NO sidecar (pre-feature) → all its windows count as dropped.
 rm -rf "$AGENTMUX_STATE_DIR/live"
