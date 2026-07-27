@@ -43,6 +43,16 @@ _sl_state_dir() {
   printf '%s' "${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}"
 }
 _sl_ledger() { printf '%s/sessions.jsonl' "$(_sl_state_dir)"; }
+# Confirmed-dead (socket,pid) memo — one "socket|pid" per line.
+#
+# Server death is MONOTONIC: a (socket,pid) that failed a liveness probe can never
+# answer again, because the only way that pair returns is tmux reusing the pid on the
+# same socket — and that path logs a fresh `open`, which drops the memo entry (see
+# sl_open). Without this, every presence poll re-probed every dead server recorded for
+# the cwd: warden polls `dropped --pending` per session-less tab, each _sl_server_live
+# forks a tmux, and the dead-server count only ever grows (the ledger keeps 14 days).
+# That is O(dead servers) forks per poll, forever, for an answer that cannot change.
+_sl_dead_file() { printf '%s/dead' "$(_sl_state_dir)"; }
 
 # Logging on unless explicitly disabled. Env override wins; else toml [log].sessions.
 _sl_enabled() {
@@ -132,12 +142,33 @@ EOF
 
 # Is the tmux server instance at <socket> still the one with <pid>?
 # Querying tmux (not kill -0) defeats PID reuse after a reboot.
+_SL_NL='
+'
+# Load the confirmed-dead memo ONCE per query into $_SL_DEAD (one fork), so the
+# per-server check below is a pattern match rather than a tmux round-trip. Callers
+# that sweep many servers (sl_dropped, sl_prune) must call this first; not calling it
+# is safe — an unset $_SL_DEAD simply misses every time and probes as before.
+_sl_load_dead() {
+  _SL_DEAD_FILE=$(_sl_dead_file)
+  _SL_DEAD="$_SL_NL$(cat "$_SL_DEAD_FILE" 2>/dev/null)$_SL_NL"
+}
+
 _sl_server_live() {  # <socket> <pid>
   if [ -n "${SESSION_LOG_LIVE_PIDS+x}" ]; then
     case " $SESSION_LOG_LIVE_PIDS " in *" $2 "*) return 0 ;; *) return 1 ;; esac
   fi
-  got=$(tmux -S "$1" display-message -p '#{pid}' 2>/dev/null) || return 1
-  [ "$got" = "$2" ]
+  # Memo hit → already proven dead, and death is monotonic (see _sl_dead_file). No fork.
+  case "${_SL_DEAD:-}" in *"$_SL_NL$1|$2$_SL_NL"*) return 1 ;; esac
+  got=$(tmux -S "$1" display-message -p '#{pid}' 2>/dev/null) || { _sl_mark_dead "$1" "$2"; return 1; }
+  [ "$got" = "$2" ] || { _sl_mark_dead "$1" "$2"; return 1; }
+}
+
+# Record a confirmed death. Append-only and best-effort: losing a write costs one
+# re-probe, never correctness. Skipped when the memo was never loaded (no file path
+# resolved) or when the test hook is driving liveness.
+_sl_mark_dead() {  # <socket> <pid>
+  [ -n "${_SL_DEAD_FILE:-}" ] || return 0
+  printf '%s|%s\n' "$1" "$2" >> "$_SL_DEAD_FILE" 2>/dev/null || true
 }
 
 # Window ids currently open on the live server at <socket>. Used to intersect a
@@ -193,7 +224,25 @@ _sl_live_file() { printf '%s/live/%s-%s.windows' "$(_sl_state_dir)" "$(_sl_sock_
 # is written as such (see _sl_live_windows): that is the last-window close, and
 # the resulting empty sidecar means "nothing was open at death" — the same state
 # _sl_discard writes for a deliberate `amux --kill`.
+# Drop a (socket,pid) from the confirmed-dead memo. The ONLY way a memoised pair can
+# answer a liveness probe again is tmux reusing that pid on that socket — and such a
+# server always records a snapshot (open, or the window-unlinked hook) before anything
+# polls it, so clearing here is the complete invalidation. Costs a rewrite, but runs on
+# session events only, never on the poll path.
+_sl_clear_dead() {  # <socket> <pid>
+  _df=$(_sl_dead_file); [ -s "$_df" ] || return 0
+  grep -qxF "$1|$2" "$_df" 2>/dev/null || return 0
+  _dt="$_df.$$.tmp"
+  # `grep -v` EXITS 1 when it emits nothing — which is exactly the case that matters here
+  # (removing the memo's only line). Gating the mv on its status would silently keep the
+  # stale entry forever, so the write is unconditional. Safe: this file is a pure cache,
+  # and the worst case of losing it is one re-probe.
+  grep -vxF "$1|$2" "$_df" > "$_dt" 2>/dev/null
+  mv "$_dt" "$_df" 2>/dev/null || rm -f "$_dt"
+}
+
 _sl_snapshot() {  # <socket> <pid>
+  _sl_clear_dead "$1" "$2"
   _lf=$(_sl_live_file "$1" "$2"); _dir=${_lf%/*}
   mkdir -p "$_dir" 2>/dev/null || return 0
   _tmp="$_dir/.$2.$$.tmp"
@@ -328,6 +377,7 @@ _sl_resume_map() {
 # plain `amux` launch here would offer a restore, and a marking read would burn the gate.
 sl_dropped() {
   _sl_enabled || return 0
+  _sl_load_dead   # one read; turns the per-server liveness sweep fork-free for known-dead servers
   # _gate_new: apply the once-per-(server,cwd) offer filter. _mark_new: also record the
   # offer. --new does both (the launch picker consumes it once). --pending gates WITHOUT
   # marking: warden's presence probe polls this every few seconds, so a marking read would
@@ -541,6 +591,7 @@ EOF
 
 sl_prune() {
   _sl_enabled || return 0
+  _sl_load_dead
   _ledger=$(_sl_ledger); [ -s "$_ledger" ] || return 0
   _max=${AGENTMUX_LOG_MAX_LINES:-2000}
   _lines=$(wc -l < "$_ledger" 2>/dev/null | tr -d ' ')
@@ -796,11 +847,37 @@ _assert "scope: omits other-cwd drop"            "0" "$(printf '%s\n' "$scope_ou
 _assert "scope: probed the this-cwd server"      "1" "$(grep -c '/s/here' "$_scope_probed")"
 _assert "scope: did NOT probe the other server"  "0" "$(grep -c '/s/elsewhere' "$_scope_probed")"
 : > "$_scope_probed"
+# Drop the dead-memo the scoped query above just populated. This assertion measures SCOPE
+# (does --global narrow the server set?), and the memo is an orthogonal concern with its own
+# coverage below — leaving it would make /s/here a memo hit and silently turn a scope
+# regression into a passing test. Independent observations need independent memo state.
+rm -f "$_scope_dir/dead"
 # Wrapped in $() so the prefix assignments stay scoped to the subshell (a bare prefix on a
 # function call persists in POSIX sh); the tally write lands in the outer $_scope_probed file.
 _ignore=$(_SL_TEST_PROBED="$_scope_probed" AGENTMUX_STATE_DIR="$_scope_dir" \
   SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
 _assert "scope(--global): still probes every server" "2" "$(sort -u "$_scope_probed" | grep -c .)"
+
+# --- dead-server memo -----------------------------------------------------------
+# Death is monotonic, so a (socket,pid) proven dead must never be re-probed: warden polls
+# --pending per session-less tab, and without this every poll forked a tmux per dead server
+# recorded for that cwd — unbounded, for an answer that cannot change.
+_has_memo() { grep -qxF "$1" "$_scope_dir/dead" 2>/dev/null && echo 1 || echo 0; }
+rm -f "$_scope_dir/dead"; : > "$_scope_probed"
+_memo1=$(_SL_TEST_PROBED="$_scope_probed" AGENTMUX_STATE_DIR="$_scope_dir" \
+  SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/here")
+_assert "memo: first query probes the server"  "1" "$(grep -c '/s/here' "$_scope_probed")"
+_assert "memo: records the proven-dead server" "1" "$(_has_memo '/s/here|111')"
+: > "$_scope_probed"
+_memo2=$(_SL_TEST_PROBED="$_scope_probed" AGENTMUX_STATE_DIR="$_scope_dir" \
+  SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/here")
+_assert "memo: second query re-probes nothing" "0" "$(grep -c '/s/here' "$_scope_probed")"
+# The point of the memo is that it changes COST, never the ANSWER.
+_assert "memo: answer is unchanged"            "$_memo1" "$_memo2"
+# Pid reuse is the one way a memoised pair can answer again, and such a server always
+# snapshots before anything polls it — so the snapshot is the complete invalidation.
+_ignore=$(SESSION_LOG_LIVE_WINDOWS="@1" AGENTMUX_STATE_DIR="$_scope_dir" _sl_snapshot "/s/here" 111)
+_assert "memo: snapshot clears the entry"      "0" "$(_has_memo '/s/here|111')"
 rm -rf "$_scope_dir"; unset _ignore
 
 # THE REGRESSION GUARD: --pending must not write the notified marker. If it did, warden's
