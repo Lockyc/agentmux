@@ -21,9 +21,17 @@
 #
 # We reconcile against the set of windows that were open. For a LIVE server that
 # set is queried directly (tmux list-windows). A DEAD server can't be queried, so
-# while alive each server keeps a per-pid "live-set" sidecar at
-# <state>/live/<pid>.windows (one window id per line), overwritten in place — no
-# growth. It is refreshed PURELY event-driven — no background loop:
+# while alive each server keeps a per-(socket,pid) "live-set" sidecar at
+# <state>/live/<sockethash>-<pid>.windows, overwritten in place — no growth. Each
+# line is FOUR tab-separated fields: window_id, cwd, agent, resumable (the same
+# facts sl_dropped needs to render a restore row without re-querying tmux); a
+# bare single-field line (just window_id, no tabs) is the legacy pre-migration
+# shape and is still accepted everywhere the sidecar is read (`cut -f1` on such a
+# line returns the whole line unchanged). A companion file at the same path plus
+# `.sock` holds the socket path alone — kept separate so `.windows` keeps its
+# "empty means nothing was open at death" meaning, while the presence poll still
+# has the path it needs to run the real (tmux-based) liveness check. It is
+# refreshed PURELY event-driven — no background loop:
 #   - OPEN  → sl_open/sl_resume snapshot (the window set just grew);
 #   - CLOSE → a `window-unlinked` tmux hook (agentmux.conf) runs this script's
 #             `snapshot` subcommand. The trick that makes closes catchable: we do
@@ -262,8 +270,12 @@ _sl_snapshot() {  # <socket> <pid>
   mkdir -p "$_dir" 2>/dev/null || return 0
   # The sidecar name only hashes the socket; the presence poll needs the path back to run
   # the real (tmux-based) liveness test. Separate file so .windows keeps its "empty means
-  # nothing was open at death" meaning.
-  printf '%s\n' "$1" > "$_dir/${_lf##*/}.sock" 2>/dev/null || true
+  # nothing was open at death" meaning. Content is deterministic per filename (it's just
+  # $1), so the write only needs to happen once — guarding it (rather than truncating in
+  # place on every snapshot) removes both the tear window a concurrent reader could
+  # observe and the redundant churn of rewriting an unchanging value every snapshot.
+  _sockf="$_dir/${_lf##*/}.sock"
+  [ -f "$_sockf" ] || printf '%s\n' "$1" > "$_sockf" 2>/dev/null || true
   _tmp="$_dir/.$2.$$.tmp"
   if _sl_live_windows "$1" "$2" > "$_tmp" 2>/dev/null; then
     mv "$_tmp" "$_lf" 2>/dev/null || rm -f "$_tmp"
@@ -477,7 +489,13 @@ sl_dropped() {
     # was pure waste.
     _lf=$(_sl_live_file "$socket" "$pid")
     if [ -f "$_lf" ]; then
-      _sw=$(tr '\n' ' ' < "$_lf")
+      # Each line may carry 4 tab-separated fields (window_id, cwd, agent,
+      # resumable); keep only the window_id column before flattening to
+      # space-separated, or the remaining fields spill into $5, $6, … below
+      # and every window past the first silently drops out of lw[]. `cut -f1`
+      # on a legacy bare-id line (no tabs) returns the line unchanged, so both
+      # shapes are handled by the one pipeline.
+      _sw=$(cut -f1 < "$_lf" | tr '\n' ' ')
       printf 'S\t%s\t%s\t%s\n' "$socket" "$pid" "$_sw"
     else
       printf 'S\t%s\t%s\t*\n' "$socket" "$pid"
@@ -712,7 +730,7 @@ $mp
 $_livepids
 " in *"
 $mp
-"*) : ;; *) rm -f "$m" ;; esac
+"*) : ;; *) rm -f "$m" "$m.sock" ;; esac
     done
   fi
 }
@@ -1315,6 +1333,30 @@ _assert "socket B sidecar keeps its own set"       "@1" \
   "$(tr '\n' ' ' < "$(_sl_live_file "/s/b" 100)" | sed 's/ *$//')"
 rm -rf "$AGENTMUX_STATE_DIR/live"
 
+# --- Finding 1 regression: a REAL multi-line 4-field sidecar (window_id, cwd,
+#     agent, resumable — the on-disk shape since 35b4303) must offer ALL its
+#     windows on restore, not just the first. Written directly to disk, NOT
+#     via SESSION_LOG_LIVE_WINDOWS (that hook only ever emits bare ids, which
+#     is exactly why this regression stayed green: tr '\n' ' ' on a sidecar
+#     whose lines carry tabs collapses newlines but preserves the tabs, so
+#     field 4 of the flattened "S" record holds only the FIRST window id —
+#     the rest spill into $5, $6, … and never reach lw[], so every other
+#     window's ledger row is silently skipped). Self-contained: own ledger
+#     content + own live/ sidecar, cleaned up before the next block. ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
+cat > "$ledger" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/mw","server_pid":5555,"session":"multi","window_id":"@1","window_name":"claude","cwd":"/w/multi","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/mw","server_pid":5555,"window_id":"@1","label":"mw1","resume_cmd":"claude --resume mw1"}
+{"ts":102,"event":"open","socket_path":"/s/mw","server_pid":5555,"session":"multi","window_id":"@2","window_name":"claude","cwd":"/w/multi","agent":"work"}
+{"ts":103,"event":"resume","socket_path":"/s/mw","server_pid":5555,"window_id":"@2","label":"mw2","resume_cmd":"claude --resume mw2"}
+JSON
+printf '@1\t/w/multi\twork\t0\n@2\t/w/multi\twork\t0\n' > "$(_sl_live_file "/s/mw" 5555)"
+mw=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_dropped "/w/multi")
+_assert "4-field sidecar: both windows offered" "2" "$(printf '%s\n' "$mw" | grep -c .)"
+_assert "4-field sidecar: window 1 offered"     "1" "$(printf '%s\n' "$mw" | grep -c 'mw1')"
+_assert "4-field sidecar: window 2 offered"     "1" "$(printf '%s\n' "$mw" | grep -c 'mw2')"
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
+
 # --- prune removes sidecars for dropped servers ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
 now=$(date +%s); old=$(( now - 30*86400 ))
@@ -1325,9 +1367,18 @@ JSON
 _lf_dead=$(_sl_live_file "/s/dead" 111); _lf_live=$(_sl_live_file "/s/live" 222)
 printf '@1\n' > "$_lf_dead"   # dead+old → sweep
 printf '@1\n' > "$_lf_live"   # live → keep
+# Finding 2: every sidecar has a `.sock` companion; the sweep must take it with
+# the `.windows` file it belongs to, or every snapshot ever taken leaks one
+# permanent file into live/ forever.
+printf '%s\n' "/s/dead" > "$_lf_dead.sock"
+printf '%s\n' "/s/live" > "$_lf_live.sock"
 AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="222" sl_prune
 _assert "prune removes dead sidecar"      "0" "$([ -f "$_lf_dead" ] && echo 1 || echo 0)"
 _assert "prune keeps live sidecar"        "1" "$([ -f "$_lf_live" ] && echo 1 || echo 0)"
+_assert "prune removes dead sidecar's .sock companion" "0" \
+  "$([ -f "$_lf_dead.sock" ] && echo 1 || echo 0)"
+_assert "prune keeps live sidecar's .sock companion"   "1" \
+  "$([ -f "$_lf_live.sock" ] && echo 1 || echo 0)"
 
 # --- snapshot subcommand re-records the live window set (the window-unlinked hook
 #     path — this is how CLOSES are caught: re-query the whole set, closed window
