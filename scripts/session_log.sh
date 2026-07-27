@@ -11,8 +11,17 @@
 #                            fork hint) for the current window. fork_cmd is owned by the
 #                            agent adapter, never composed here — this core stays agnostic.
 #   forkcmd [target]         emit `agent<TAB>fork_cmd` for one LIVE window (or nothing)
-#   dropped <cwd>|--global|--new <cwd>|--pending <cwd>
-#                                        restorable dropped tabs (dead server, open-at-death)
+#   dropped <cwd>|--global|--new <cwd>
+#                            restorable dropped tabs (dead server, open-at-death),
+#                            one TSV row each; --new also marks them offered
+#   dropped --pending <cwd>  the same question as a BOOLEAN, for warden's presence
+#                            poll: one synthetic line if a restore would be offered
+#                            here, nothing if not. Its consumer tests emptiness and
+#                            never reads the row, which is what lets the sidecar
+#                            fast path answer it. Exit code is three-state INSIDE
+#                            that path (_sl_pending_fast: 0 = drop, 1 = none,
+#                            2 = cannot answer → fall back to the ledger fold);
+#                            the subcommand itself always exits 0
 #   prune                    trim the ledger (dead, old server instances)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
 #   discard  <socket> <pid>  mark a server's windows deliberately closed (empty
@@ -28,10 +37,13 @@
 # while alive each server keeps a per-(socket,pid) "live-set" sidecar at
 # <state>/live/<sockethash>-<pid>.windows, overwritten in place — no growth. Each
 # line is FOUR tab-separated fields: window_id, cwd, agent, resumable (the same
-# facts sl_dropped needs to render a restore row without re-querying tmux); a
-# bare single-field line (just window_id, no tabs) is the legacy pre-migration
-# shape and is still accepted everywhere the sidecar is read (`cut -f1` on such a
-# line returns the whole line unchanged). UNENFORCED, deliberately: `cwd` is user
+# facts sl_dropped needs to render a restore row without re-querying tmux). A
+# line whose cwd is UNKNOWN — a bare single-field line (just window_id, no tabs,
+# the pre-migration shape) or a four-field line from a window whose @amux_*
+# options were never stamped (`@2<TAB><TAB><TAB>`) — is still accepted everywhere
+# the sidecar is read (`cut -f1` on either returns the window id), and
+# `_SL_SHAPE_FN` is the one place that tells the two apart. UNENFORCED,
+# deliberately: `cwd` is user
 # data (a launch dir), and neither a tab nor a newline in it is escaped — a tab
 # shifts every later field, a newline splits the record into two lines. Nothing
 # breaks today (`cut -f1` on the split remainder just yields a token matching no
@@ -351,6 +363,17 @@ _sl_boot_epoch() {
   fi
 }
 
+# Mtime of <file> in epoch seconds; empty when it cannot be read. `stat` is not in
+# POSIX and the two flavours spell this differently, so try GNU FIRST: BSD `stat -c`
+# is a hard error (clean fallthrough), while GNU `stat -f` means --file-system and
+# would SUCCEED with a mount point — a wrong answer, not a failure. Callers must
+# treat empty as "cannot tell" and fall back to whatever they do without the fact.
+# Deliberately NO SESSION_LOG_* override: the selftest drives it with a real
+# `touch -t`, so the flavour detection above is itself under test.
+_sl_mtime() {  # <file>
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
 # Fold ledger → TSV, one row per opened window (latest open + latest resume per
 # (socket,pid,window_id) tuple). Columns: socket pid window_id session
 # window_name cwd agent resume_cmd maxts fork_cmd. `maxts` (the newest event ts
@@ -391,6 +414,32 @@ function swap_prog(cmd, p,   sp) {
   if (p == "") return cmd
   sp = index(cmd," ")
   return (sp > 0) ? p substr(cmd, sp) : p
+}'
+
+# The ONE encoding of "is this sidecar line in the CURRENT (enriched) shape?" —
+# window_id, cwd, agent, resumable. Two passes have to tell the shapes apart and
+# they must never disagree: _sl_pending_fast (a non-current line's cwd is unknown,
+# so it is resolved against the ledger instead of being read as a non-match) and
+# sl_migrate (a non-current line is the one it backfills). They already drifted
+# once — both encoded the test as a bare field count, and both therefore misread
+# the SAME line — so the rule lives here, not at either call site.
+#
+# FIELD COUNT ALONE IS NOT THE TEST. `_sl_live_windows` formats every window with
+# the full four-field -F string, so a window whose @amux_* options were never
+# stamped still yields four fields, all but the id EMPTY (`@2<TAB><TAB><TAB>`).
+# That is a legacy line wearing the current shape: counted as current, its empty
+# cwd fails the `$2 == c` match and the query resolves to "definitely not this
+# cwd" — a silent 1 where the ledger offers a restore. The stamps are best-effort
+# (`set-option … 2>/dev/null || true`) and every window open before they shipped
+# re-snapshots this way, so the shape is ordinary, not a corner. `$2` is the
+# discriminator: `#{pane_current_path}` is never empty for a real window, so an
+# empty cwd can only mean "unknown".
+#
+# Carried as awk SOURCE, like _SL_SWAP_FN above, because both consumers apply it
+# mid-pass. Reads the current record (NF/$2), so it takes no arguments.
+_SL_SHAPE_FN='
+function sl_line_current() {
+  return (NF >= 4 && $2 != "")
 }'
 
 # Map of agent name → resume program, from amux.toml's [[agents]] `resume` fields.
@@ -476,6 +525,9 @@ _sl_resume_map() {
 # sidecar. Any that doesn't makes the query unanswerable here.
 _sl_pending_fast() {  # <cwd>
   _pf_cwd=$1
+  _pf_boot=""; _pf_bootq=0   # boot epoch, resolved lazily and at most once per call
+                             # (sh has no locals, and this function is called many
+                             # times in one process by the selftest)
   # jq stores a control character in a cwd \u-escaped, and the ledger scan below
   # matches the ledger's RAW bytes — so for such a cwd the sidecar-less-server check
   # could not run soundly, and an unsound check here means a wrong 1. Defer instead.
@@ -506,9 +558,10 @@ _sl_pending_fast() {  # <cwd>
   [ -s "$_pf_ledger" ] && set -- "$@" "$_pf_ledger"
   # ONE pass over every input. Emits the files holding a candidate row — an agent
   # window (never `shell`) in this cwd that recorded a resume hint, the same three
-  # conditions the ledger path applies to its own rows. A line with fewer than 4
-  # tab-separated fields is the legacy pre-enrichment shape, so that window's cwd
-  # is unknown; it is REMEMBERED, not bailed on, and resolved against the ledger in
+  # conditions the ledger path applies to its own rows. A line the shared
+  # classifier (_SL_SHAPE_FN) does not call current has an unknown cwd — a bare
+  # legacy id, or a 4-field line from an unstamped window whose cwd is empty —
+  # so it is REMEMBERED, not bailed on, and resolved against the ledger in
   # the END block, which bails with a distinctive status (3) only if the window
   # could belong to this cwd. A ledger server with no sidecar bails the same way
   # (4). Any other non-zero (a genuine awk failure) lands in the same place, which
@@ -517,7 +570,7 @@ _sl_pending_fast() {  # <cwd>
   # The cwd arrives through ENVIRON, NOT `-v`: `-v` runs its value through escape
   # processing, so a cwd containing a backslash would be compared mangled and the
   # query would false-negative. ENVIRON is the byte-exact channel.
-  _pf_cands=$(SL_PF_CWD="$_pf_cwd" awk -F"$TAB" '
+  _pf_cands=$(SL_PF_CWD="$_pf_cwd" awk -F"$TAB" "$_SL_SHAPE_FN"'
       BEGIN {
         c = ENVIRON["SL_PF_CWD"]
         # The ledger stores cwd JSON-encoded, so match on the ENCODED needle. Built
@@ -544,8 +597,11 @@ _sl_pending_fast() {  # <cwd>
       }
       FNR == 1 { mode = (FILENAME ~ /\.windows$/) ? 1 : 3 }
       mode == 1 {
-        if (NF < 4) {
-          # Legacy shape: a bare window id, cwd unknown. Remember it (per sidecar,
+        if (!sl_line_current()) {
+          # Legacy shape: cwd unknown — a bare window id, or an UNSTAMPED window,
+          # whose four fields are all empty but the id (see _SL_SHAPE_FN: the field
+          # count alone cannot tell them apart, and reading the latter as current
+          # resolves it to a false non-match). Remember it (per sidecar,
           # and its pid, which is all the ledger scan below needs to know whether to
           # index a row) and let END decide whether it can concern this cwd. A BLANK
           # line names no window at all, so it hides nothing and is simply skipped —
@@ -661,7 +717,33 @@ _sl_pending_fast() {  # <cwd>
     [ -n "$_pf_sock" ] || return 2
     _pf_base=${_pf_f##*/}; _pf_base=${_pf_base%.windows}
     _pf_pid=${_pf_base##*-}
-    _sl_server_live "$_pf_sock" "$_pf_pid" && continue
+    if _sl_server_live "$_pf_sock" "$_pf_pid"; then
+      # LIVENESS IS NOT THE WHOLE DEADNESS TEST — the ledger path pairs it with the
+      # boot epoch (`_sl_server_live … && { -z "$_boot" || smax >= _boot; }`), and the
+      # fast path must too. A reboot can hand a NEW tmux server the same pid on the
+      # same socket path; it then answers our probe as if it were the dead one, and
+      # `continue` here would silently drop a real drop — a collapse to 1 in the
+      # unsafe direction, which is the one thing this exit code exists to prevent.
+      # The two paths hold the same evidence in different form: the ledger's `smax`
+      # is that server's newest recorded event, and the sidecar's MTIME is the same
+      # fact (it is rewritten on every open and every window-unlinked close). Older
+      # than boot → the recorded set belongs to a pre-reboot server → the ledger's
+      # business, so defer (2) rather than answer. Deferring, not offering, because
+      # the fast path has no way to check that server's OTHER windows.
+      #
+      # Costs a fork only HERE — a live server holding an agent window with a resume
+      # hint in the very cwd being polled, which is not the polling steady state
+      # (warden probes session-LESS tabs). The dead-candidate branch below, and every
+      # poll answered before the loop, are untouched. Unknown boot epoch or unreadable
+      # mtime → treat as live, exactly the fallback the ledger path takes when
+      # `_sl_boot_epoch` comes back empty.
+      if [ "$_pf_bootq" = 0 ]; then _pf_boot=$(_sl_boot_epoch); _pf_bootq=1; fi
+      if [ -n "$_pf_boot" ]; then
+        _pf_mt=$(_sl_mtime "$_pf_f")
+        [ -n "$_pf_mt" ] && [ "$_pf_mt" -lt "$_pf_boot" ] 2>/dev/null && return 2
+      fi
+      continue
+    fi
     # The once-per-(server,cwd) offer gate, applied READ-ONLY (no marking) on the
     # same key the ledger path builds. Skipping it here would re-light a ghost amux
     # has already offered and cleared.
@@ -1120,7 +1202,7 @@ sl_migrate() {
   # in that order, because each stage is built from the one before it. Paths arrive
   # through ENVIRON, not `-v`: `-v` runs its value through escape processing, so a
   # state dir containing a backslash would be mangled.
-  _mg_sum=$(SL_MG_OUT="$_mg_tmp/o" awk -F"$TAB" '
+  _mg_sum=$(SL_MG_OUT="$_mg_tmp/o" awk -F"$TAB" "$_SL_SHAPE_FN"'
       function jstr(l, k,   p) {              # "<k>":"<value>", value needing no escaping
         p = "\"" k "\":\"[^\"\\\\]*\""
         if (!match(l, p)) return ""
@@ -1203,7 +1285,10 @@ sl_migrate() {
       FILENAME ~ /\.windows$/ {
         if (FILENAME != curf) { flush(); curf = FILENAME }
         nb++
-        if (NF >= 4) { buf[nb] = $0; next }   # already current — never rewritten
+        # Already current (shared classifier — a 4-field line with an EMPTY cwd is
+        # an unstamped window, not a current one, and is backfilled like any other
+        # legacy line) — never rewritten.
+        if (sl_line_current()) { buf[nb] = $0; next }
         if ($1 == "") { buf[nb] = $0; nleg++; next }
         h = fhash[FILENAME] ""
         if ((h in ambig) || sockof[h] == "") { buf[nb] = $0; nleg++; next }
@@ -2356,6 +2441,108 @@ _assert "t4d: an unaffected cwd still answers from the sidecars" "0" "$(_t4d_fas
 _assert "t4d: no deferral for a cwd the ledger never names" "1" "$(_t4d_fast /w/absent)"
 rm -rf "$_t4d_dir"
 
+# ============ Task 4e: an UNSTAMPED window is a legacy line wearing the current
+#     shape. `_sl_live_windows` formats every window with the full four-field -F
+#     string, so a window whose @amux_* options were never stamped still snapshots
+#     as `@N<TAB><TAB><TAB>` — four fields, cwd EMPTY. A field-count-only classifier
+#     reads that as current, the `$2 == c` test then fails, and the query resolves
+#     to "definitely not this cwd": a silent 1 where the ledger offers a restore,
+#     and the dot never lights. Not a corner — the three stamps are best-effort
+#     (`2>/dev/null || true`) and any window open before they shipped re-snapshots
+#     this way (three such lines were on the real machine when this was found).
+#
+#     Asserted as the same PAIR t6 uses, because that is what makes each half
+#     non-vacuous: the line must NOT suppress a cwd the ledger places elsewhere,
+#     and MUST defer for the cwd the ledger places it in. Mutation-proof in the
+#     direction that matters — restore the bare `NF < 4` and the second assert
+#     drops to 1, the exact data loss. ============
+_t4e_dir=$(mktemp -d) || exit 1
+mkdir -p "$_t4e_dir/live"
+_t4e_f="$_t4e_dir/live/$(printf '%s' /s/unst | cksum | cut -d' ' -f1)-999991.windows"
+# The live shape, verbatim: id present, cwd/agent empty, the resumable stamp landed.
+printf '@2\t\t\t1\n' > "$_t4e_f"; printf '/s/unst\n' > "$_t4e_f.sock"
+_t4e_seed() {  # <cwd the ledger places @2 in>
+  cat > "$_t4e_dir/sessions.jsonl" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/unst","server_pid":999991,"session":"u","window_id":"@2","window_name":"claude","cwd":"$1","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/unst","server_pid":999991,"window_id":"@2","label":"dropunst","resume_cmd":"claude --resume dropunst"}
+{"ts":102,"event":"open","socket_path":"/s/ok","server_pid":999990,"session":"o","window_id":"@1","window_name":"claude","cwd":"/w/ok","agent":"work"}
+{"ts":103,"event":"resume","socket_path":"/s/ok","server_pid":999990,"window_id":"@1","label":"dropok","resume_cmd":"claude --resume dropok"}
+JSON
+}
+# A second, fully-stamped dead server, so the queried cwd has a real answer to lose.
+_t4e_ok="$_t4e_dir/live/$(printf '%s' /s/ok | cksum | cut -d' ' -f1)-999990.windows"
+printf '@1\t/w/ok\twork\t1\n' > "$_t4e_ok"; printf '/s/ok\n' > "$_t4e_ok.sock"
+_t4e_fast() {  # <cwd> → prints the exit code (see _t4_fast on the $() wrapper)
+  _ignore=$(AGENTMUX_STATE_DIR="$_t4e_dir" _sl_pending_fast "$1"); printf '%s' "$?"
+}
+_t4e_seed /w/away
+_assert "t4e: unstamped line the ledger puts in ANOTHER cwd does not suppress" \
+  "0" "$(_t4e_fast /w/ok)"
+# Same fixture, one field changed: the ledger now places that window in /w/lost,
+# where NOTHING else can answer. The unstamped line is the only information about
+# that cwd, and it hides its own — so this must defer, never resolve. THIS is the
+# assertion that pins the data loss: read as current, its empty cwd fails `$2 == c`,
+# no other row is a candidate, and the query returns a confident 1.
+_t4e_seed /w/lost
+_assert "t4e: unstamped line the ledger puts in THIS cwd defers" "2" "$(_t4e_fast /w/lost)"
+# ...and the deferral is worth making: the ledger path really does report a drop
+# there, so the old 1 was a silently-lost ghost and the dot never lit.
+_t4e_out=$(AGENTMUX_STATE_DIR="$_t4e_dir" SESSION_LOG_BOOT_EPOCH=1 \
+  SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending /w/lost)
+_assert "t4e: the deferred-to ledger path DOES report that drop" "1" \
+  "$(printf '%s\n' "$_t4e_out" | grep -c .)"
+# The scoping still holds: a fully-stamped cwd is answered from the sidecars, not
+# dragged into the deferral by the unresolvable line beside it.
+_assert "t4e: an unaffected cwd still answers from the sidecars" "0" "$(_t4e_fast /w/ok)"
+rm -rf "$_t4e_dir"
+
+# ============ Task 4f: the BOOT-EPOCH half of the deadness test. `_sl_server_live`
+#     alone cannot see a reboot: a new tmux server handed the same pid on the same
+#     socket answers the probe as if it were the dead one. The ledger path pairs
+#     liveness with `smax >= boot`; the fast path pairs it with the sidecar's mtime,
+#     which records the same fact (the sidecar is rewritten on every open and every
+#     window-unlinked close). Older than boot → defer, never `continue` — the
+#     omission read such a server as live and skipped it, a collapse to 1 in the
+#     unsafe direction.
+#
+#     SESSION_LOG_LIVE_PIDS makes the server read LIVE without a real one; the
+#     sidecar's mtime is set with a REAL `touch -t`, so `_sl_mtime`'s own
+#     GNU-vs-BSD flavour detection is under test rather than stubbed. Non-vacuous
+#     as a pair: with the boot epoch BELOW the sidecar's mtime nothing is stale and
+#     both paths say "no drop"; above it, both say "drop". ============
+_t4f_dir=$(mktemp -d) || exit 1
+mkdir -p "$_t4f_dir/live"
+_t4f_f="$_t4f_dir/live/$(printf '%s' /s/reb | cksum | cut -d' ' -f1)-999899.windows"
+printf '@1\t/w/reb\twork\t1\n' > "$_t4f_f"; printf '/s/reb\n' > "$_t4f_f.sock"
+cat > "$_t4f_dir/sessions.jsonl" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/reb","server_pid":999899,"session":"r","window_id":"@1","window_name":"claude","cwd":"/w/reb","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/reb","server_pid":999899,"window_id":"@1","label":"dropreb","resume_cmd":"claude --resume dropreb"}
+JSON
+touch -t 200001010000 "$_t4f_f"      # mtime 2000-01-01 ≈ 946684800
+_t4f_fast() {  # <boot epoch> → prints the exit code (see _t4_fast on the $() wrapper)
+  _ignore=$(AGENTMUX_STATE_DIR="$_t4f_dir" SESSION_LOG_LIVE_PIDS="999899" \
+    SESSION_LOG_BOOT_EPOCH="$1" _sl_pending_fast /w/reb); printf '%s' "$?"
+}
+_t4f_pend() {  # <boot epoch> → the --pending row count, fast path in play
+  AGENTMUX_STATE_DIR="$_t4f_dir" SESSION_LOG_LIVE_PIDS="999899" \
+    SESSION_LOG_BOOT_EPOCH="$1" SESSION_LOG_RESUME_MAP="$RMAP" \
+    sl_dropped --pending /w/reb | grep -c .
+}
+_t4f_slow() {  # <boot epoch> → the row count with the fast path forced off
+  AMUX_PENDING_NO_FAST=1 AGENTMUX_STATE_DIR="$_t4f_dir" SESSION_LOG_LIVE_PIDS="999899" \
+    SESSION_LOG_BOOT_EPOCH="$1" SESSION_LOG_RESUME_MAP="$RMAP" \
+    sl_dropped --pending /w/reb | grep -c .
+}
+# Boot BEFORE the sidecar was written: the live server really is ours, no drop.
+_assert "t4f: live server, sidecar newer than boot → no drop" "1" "$(_t4f_fast 1)"
+_assert "t4f: ...and the ledger path agrees"                  "0" "$(_t4f_slow 1)"
+_assert "t4f: ...and --pending emits nothing"                 "0" "$(_t4f_pend 1)"
+# Boot AFTER it: the recorded set predates this boot, so the live pid is a reuse.
+_assert "t4f: live server, sidecar older than boot → defer"   "2" "$(_t4f_fast 1000000000)"
+_assert "t4f: the deferred-to ledger path reports the drop"   "1" "$(_t4f_slow 1000000000)"
+_assert "t4f: --pending therefore ghosts it"                  "1" "$(_t4f_pend 1000000000)"
+rm -rf "$_t4f_dir"
+
 # ============ Task 6: every unanswerable shape is SCOPED TO THE QUERIED cwd.
 #     A state dir is the residue of every project on the machine, so an
 #     unresolvable sidecar is guaranteed, not rare — and a bail-on-sight makes the
@@ -2545,10 +2732,17 @@ mkdir -p "$_mig_dir/live"
 _mig_f() { printf '%s/live/%s-%s.windows' "$_mig_dir" "$(printf '%s' "$1" | cksum | cut -d' ' -f1)" "$2"; }
 _mig_a=$(_mig_f /s/mig 4001); _mig_b=$(_mig_f /s/mig2 4002)
 _mig_c=$(_mig_f /s/mig3 4003); _mig_d=$(_mig_f /s/mig4 4004)
+_mig_e=$(_mig_f /s/mig6 4006)
 printf '@1\n@2\n' > "$_mig_a"        # legacy, no .sock
 : > "$_mig_b"                        # EMPTY (clean teardown), no .sock
 printf '@1\n@9\n' > "$_mig_c"        # legacy; @9 has no ledger row
 printf '@1\t/w/d\twork\t1\n' > "$_mig_d"; printf '/s/mig4\n' > "$_mig_d.sock"
+# F: an UNSTAMPED window — four fields, cwd EMPTY, the shape `_sl_live_windows`
+# writes for a window whose @amux_* options never landed. `NF >= 4` called this
+# already-current and short-circuited it, so migrate could never repair the very
+# lines that make the fast path misread a cwd. Companion present, so it exercises
+# enrichment alone.
+printf '@1\t\t\t\n' > "$_mig_e"; printf '/s/mig6\n' > "$_mig_e.sock"
 cat > "$_mig_dir/sessions.jsonl" <<JSON
 {"ts":100,"event":"open","socket_path":"/s/mig","server_pid":4001,"session":"m","window_id":"@1","window_name":"claude","cwd":"/w/mig","agent":"work"}
 {"ts":101,"event":"resume","socket_path":"/s/mig","server_pid":4001,"window_id":"@1","label":"mig1","resume_cmd":"claude --resume mig1"}
@@ -2556,11 +2750,17 @@ cat > "$_mig_dir/sessions.jsonl" <<JSON
 {"ts":103,"event":"open","socket_path":"/s/mig2","server_pid":4002,"session":"m2","window_id":"@1","window_name":"claude","cwd":"/w/mig2","agent":"work"}
 {"ts":104,"event":"open","socket_path":"/s/mig3","server_pid":4003,"session":"m3","window_id":"@1","window_name":"claude","cwd":"/w/mig3","agent":"work"}
 {"ts":105,"event":"open","socket_path":"/s/mig5","server_pid":4005,"session":"m5","window_id":"@1","window_name":"claude","cwd":"/w/mig5","agent":"work"}
+{"ts":106,"event":"open","socket_path":"/s/mig6","server_pid":4006,"session":"m6","window_id":"@1","window_name":"claude","cwd":"/w/mig6","agent":"work"}
+{"ts":107,"event":"resume","socket_path":"/s/mig6","server_pid":4006,"window_id":"@1","label":"mig6","resume_cmd":"claude --resume mig6"}
 JSON
 # Pre-state: prove the fixture really is in the shape the migration is supposed to
 # fix, so a green run below cannot be green because there was nothing to do.
 _assert "t5 pre: A/C carry legacy (<4-field) lines" "4" \
   "$(awk -F"$TAB" 'NF<4{n++} END{print n+0}' "$_mig_a" "$_mig_c")"
+# F is the shape a field count CANNOT catch: four fields, cwd empty. Pinning both
+# halves is what proves the enrichment below came from the cwd test, not the count.
+_assert "t5 pre: F is 4-field with an EMPTY cwd" "1" \
+  "$(awk -F"$TAB" 'NF>=4 && $2==""{n++} END{print n+0}' "$_mig_e")"
 _mig_count() { _mn=0; for _mp in "$@"; do [ -e "$_mp" ] && _mn=$((_mn + 1)); done; printf '%s' "$_mn"; }
 _assert "t5 pre: A/B/C have no .sock companion" "0" \
   "$(_mig_count "$_mig_a.sock" "$_mig_b.sock" "$_mig_c.sock")"
@@ -2570,7 +2770,7 @@ _mig_before_ids=$(_mig_ids)
 _mig_d_before=$(cksum < "$_mig_d")
 
 _mig_out=$(AGENTMUX_STATE_DIR="$_mig_dir" sl_migrate)
-_assert "t5: migrate reports the work it did" "migrate: enriched=2 sock=3 legacy_left=1" "$_mig_out"
+_assert "t5: migrate reports the work it did" "migrate: enriched=3 sock=3 legacy_left=1" "$_mig_out"
 
 # A: legacy lines enriched from the ledger — cwd/agent off the `open` row, and
 # `resumable` set only where a resume hint was recorded (mirroring exactly what the
@@ -2593,11 +2793,16 @@ _assert "t5: line with NO ledger row left legacy" "@9" "$(sed -n 2p "$_mig_c")"
 # D: an already-current sidecar is not rewritten at all.
 _assert "t5: already-current sidecar untouched" "$_mig_d_before" "$(cksum < "$_mig_d")"
 
+# F: the unstamped line is repaired in place — fields filled from the ledger, the
+# window id untouched, and still exactly one line (membership byte-identical).
+_assert "t5: unstamped 4-field line enriched" "@1${TAB}/w/mig6${TAB}work${TAB}1" "$(cat "$_mig_e")"
+_assert "t5: unstamped sidecar keeps its one line" "1" "$(grep -c . "$_mig_e")"
+
 # E: the ledger names /s/mig5 4005, which has no sidecar. Creating one would convert
 # the fast path's deliberate deferral into a silent "no drop".
 _assert "t5: no sidecar invented for a sidecar-less ledger server" "0" \
   "$(_mig_count "$(_mig_f /s/mig5 4005)")"
-_assert "t5: sidecar count unchanged" "4" "$(_mig_count "$_mig_dir"/live/*.windows)"
+_assert "t5: sidecar count unchanged" "5" "$(_mig_count "$_mig_dir"/live/*.windows)"
 
 # Membership is the invariant: fields may be added, window ids may not move.
 _assert "t5: window-id membership unchanged" "$_mig_before_ids" "$(_mig_ids)"
