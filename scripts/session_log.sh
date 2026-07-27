@@ -442,6 +442,29 @@ _sl_resume_map() {
 # shape that IS a real answer — it records "nothing was open when this server
 # died" (a clean teardown), so it contributes no drop and never reads as 2.
 #
+# EVERY BAIL IS SCOPED TO THE QUERIED cwd, AND THAT SCOPING IS THE WHOLE VALUE.
+# A state dir accumulates the residue of every project on the machine, so an
+# unresolvable sidecar is not rare — it is guaranteed. Bailing on sight makes the
+# fast path answer for NO cwd at all (measured: 11 legacy lines in 6 sidecars, all
+# on long-dead servers belonging to other projects, deferred all 47 cwds), i.e. it
+# costs the whole feature. So each of the three unresolvable shapes bails only
+# when it could affect THIS cwd — and "could" is decided from information we
+# actually hold, never from the assumption that absence means irrelevance:
+#   - a LEGACY line hides its own cwd, so the sidecar cannot say whom it concerns.
+#     The LEDGER can: it records cwd per (socket_path, server_pid, window_id). A
+#     legacy window the ledger places in another cwd is irrelevant here (the
+#     ledger path drops it on the same `cwd != scope` test, so ignoring it cannot
+#     disagree). One the ledger places in THIS cwd, or one the ledger does not
+#     name at all on a server whose ledger rows DO mention this cwd, stays
+#     unresolvable. The `.sock` companion is what joins sidecar → ledger socket
+#     path; without it the join degrades to the pid alone, which can only rule the
+#     sidecar out (no ledger row for this cwd carries that pid), never in.
+#   - a .sock-LESS sidecar blocks the liveness probe, so it bails only where the
+#     probe would have run: a candidate row in this cwd (the per-candidate loop
+#     below), or the sidecar of a ledger server named for this cwd (the END join).
+#   - a SIDECAR-LESS ledger server is bailed on only for the cwds the ledger says
+#     that server had — the ledger knows them exactly.
+#
 # THE SIDECAR-LESS SERVER IS THE CASE THAT MAKES THE LEDGER AN INPUT HERE. The
 # ledger path treats a dead server with no sidecar as "every one of its windows was
 # open at death" (sl_dropped's '*' branch) and offers them. Sidecars alone cannot
@@ -484,11 +507,12 @@ _sl_pending_fast() {  # <cwd>
   # ONE pass over every input. Emits the files holding a candidate row — an agent
   # window (never `shell`) in this cwd that recorded a resume hint, the same three
   # conditions the ledger path applies to its own rows. A line with fewer than 4
-  # tab-separated fields is the legacy pre-enrichment shape, so that server's cwds
-  # are unknown and the query is unanswerable: bail with a distinctive status (3);
-  # a ledger server with no sidecar bails the same way (4). Any other non-zero (a
-  # genuine awk failure) lands in the same place, which is the safe direction — 2
-  # defers to the ledger, it never invents an answer.
+  # tab-separated fields is the legacy pre-enrichment shape, so that window's cwd
+  # is unknown; it is REMEMBERED, not bailed on, and resolved against the ledger in
+  # the END block, which bails with a distinctive status (3) only if the window
+  # could belong to this cwd. A ledger server with no sidecar bails the same way
+  # (4). Any other non-zero (a genuine awk failure) lands in the same place, which
+  # is the safe direction — 2 defers to the ledger, it never invents an answer.
   #
   # The cwd arrives through ENVIRON, NOT `-v`: `-v` runs its value through escape
   # processing, so a cwd containing a backslash would be compared mangled and the
@@ -514,26 +538,63 @@ _sl_pending_fast() {  # <cwd>
           f = ARGV[i]
           if (f !~ /\.windows$/) continue
           p = f; sub(/\.windows$/, "", p); sub(/.*-/, "", p)
+          fpid[f] = p
           byp[p] = byp[p] "\n" f
         }
       }
       FNR == 1 { mode = (FILENAME ~ /\.windows$/) ? 1 : 3 }
       mode == 1 {
-        if (NF < 4) exit 3
+        if (NF < 4) {
+          # Legacy shape: a bare window id, cwd unknown. Remember it (per sidecar,
+          # and its pid, which is all the ledger scan below needs to know whether to
+          # index a row) and let END decide whether it can concern this cwd. A BLANK
+          # line names no window at all, so it hides nothing and is simply skipped —
+          # treating it as legacy would be an unresolvable bail with no window id to
+          # resolve, i.e. the global bail this scoping exists to remove.
+          if ($1 == "") next
+          if (!(FILENAME in legw)) legf[++nlegf] = FILENAME
+          legw[FILENAME] = legw[FILENAME] "\n" $1
+          legpid[fpid[FILENAME]] = 1
+          next
+        }
         if ($2 == c && $3 != "shell" && $4 != "") { if (!(seen[FILENAME]++)) print FILENAME }
         next
       }
-      index($0, need) && match($0, /"socket_path":"[^"]*"/) {
+      {
+        # Ledger rows are indexed for two questions: which servers this cwd was open
+        # on (`wsock`, for the sidecar-less-server check), and — only when a legacy
+        # sidecar exists to resolve — which cwd each window of that server pid was
+        # opened in (`lrel`/`lknown`). Both questions are about the cwd of a window, and
+        # only an `open` row carries one, so the two cheap `index` tests screen out
+        # every `resume` row (683 of 1629 on a real ledger) before the regex — and a
+        # fully-enriched state dir, where `nlegf` is 0, pays exactly what it paid
+        # before this scoping existed.
+        hit = index($0, need)
+        if (!hit && (nlegf == 0 || !index($0, "\"cwd\":\""))) next
+        if (!match($0, /"server_pid":[0-9]+/)) next
+        pid = substr($0, RSTART + 13, RLENGTH - 13)
+        if (!hit && !(pid in legpid)) next
+        if (!match($0, /"socket_path":"[^"]*"/)) next
         sp = substr($0, RSTART + 15, RLENGTH - 16)
-        if (match($0, /"server_pid":[0-9]+/)) {
-          k = sp SUBSEP substr($0, RSTART + 13, RLENGTH - 13)
-          wsock[k] = sp; wpid[k] = substr($0, RSTART + 13, RLENGTH - 13)
+        if (hit) { k = sp SUBSEP pid; wsock[k] = sp; wpid[k] = pid }
+        # Only an `open` row carries a cwd, and it is the row the ledger fold keys a
+        # window on — so a window with a cwd-bearing row has a KNOWN cwd, and one
+        # whose every row lacks it (a bare `resume`) stays unknown. `lrel` wins over
+        # `lknown` on purpose: a window id reopened in a second cwd is ambiguous, and
+        # the safe reading of ambiguity is "could be this cwd".
+        if ((pid in legpid) && index($0, "\"cwd\":\"") &&
+            match($0, /"window_id":"[^"]*"/)) {
+          w = sp SUBSEP pid SUBSEP substr($0, RSTART + 13, RLENGTH - 14)
+          if (hit) lrel[w] = 1; else lknown[w] = 1
         }
       }
-      # Does every server the ledger names for this cwd actually HAVE a sidecar? The
-      # filename only hashes the socket, so the .sock companion is the only join back
-      # to the ledger socket_path — read it here, for the pid-matching sidecars alone.
       END {
+        # 1. Does every server the ledger names FOR THIS CWD actually HAVE a sidecar?
+        # The filename only hashes the socket, so the .sock companion is the only join
+        # back to the ledger socket_path — read it here, for the pid-matching sidecars
+        # alone. A sidecar with no readable companion cannot be matched, so a server
+        # whose only candidate sidecar lacks one reads as sidecar-less: 4, correctly,
+        # because we cannot tell that it is not.
         for (k in wsock) {
           ok = 0
           n = split(byp[wpid[k]], ff, "\n")
@@ -545,6 +606,37 @@ _sl_pending_fast() {  # <cwd>
             if (ok) break
           }
           if (!ok) exit 4
+          cwdsock[k] = 1          # (socket,pid) the ledger places in this cwd
+          cwdpid[wpid[k]] = 1     # ...and the pid alone, for the socket-less join
+        }
+        # 2. Legacy lines, resolved against that index. Reached only for sidecars that
+        # actually hold one, so a migrated state dir does no work here at all.
+        for (i = 1; i <= nlegf; i++) {
+          f = legf[i]; p = fpid[f]
+          s = ""
+          if ((getline s < (f ".sock")) <= 0) s = ""
+          close(f ".sock")
+          if (s == "") {
+            # No socket path: the ledger join degrades to the pid, which can only rule
+            # the sidecar OUT. No ledger row for this cwd carries this pid → no window
+            # of this server is in this cwd, so its unreadable lines hide nothing.
+            # Otherwise it might BE that server, and we cannot tell: bail.
+            if (p in cwdpid) exit 3
+            continue
+          }
+          n = split(legw[f], ww, "\n")
+          for (m = 1; m <= n; m++) {
+            if (ww[m] == "") continue
+            w = s SUBSEP p SUBSEP ww[m]
+            if (w in lrel) exit 3          # ledger puts this window in THIS cwd
+            if (w in lknown) continue      # ...in another one: irrelevant here
+            # The ledger names no cwd for this window. It can then never be offered by
+            # the ledger path either (its fold needs an `open` row), but that argument
+            # rests on a raw text scan of the ledger rather than the fold itself, so it
+            # is only leaned on where it costs nothing: for a server the ledger never
+            # ties to this cwd. On a server it DOES, the unknown stays unknown.
+            if ((s SUBSEP p) in cwdsock) exit 3
+          }
         }
       }
     ' "$@") || return 2
@@ -949,14 +1041,17 @@ $mp
 #
 # WHY IT EXISTS. Everything `_sl_pending_fast` needs is written at EVENT time, so a
 # sidecar born under the current code is already correct — but the ones already in
-# live/ predate it, and the fast path answers only when EVERY sidecar it scans is
-# current. Two independent shortfalls each force it back to the ledger fold, and
-# fixing either alone changes nothing (measured: 47 of 47 cwds still deferred):
-#   - a legacy line (bare window id, no tabs) → the whole scan bails (exit 3);
+# live/ predate it, and each stale one costs the fast path the cwds it cannot then
+# resolve. Two independent shortfalls:
+#   - a legacy line (bare window id, no tabs) → that window's cwd is unknown, so the
+#     fast path has to join it back through the ledger, and defers for every cwd the
+#     join cannot rule it out for (exit 3);
 #   - a `.windows` with no `.sock` companion → no socket path, so neither the
-#     liveness probe nor the ledger join can run (exit 2 / exit 4).
-# So this fixes BOTH in one pass, and is idempotent: a second run finds every line
-# already 4-field and every companion already present, writes nothing.
+#     liveness probe nor that ledger join can run (exit 2 / exit 4).
+# This fixes BOTH in one pass, and is idempotent: a second run finds every line
+# already 4-field and every companion already present, writes nothing. It buys
+# SPEED, never correctness — the fast path is sound on an unmigrated dir, it just
+# answers for fewer cwds.
 #
 # WHAT IT MAY AND MAY NOT DO. It may only ADD FIELDS to lines that are already
 # there. A sidecar's set of window ids is the record of what was open at that
@@ -2098,12 +2193,16 @@ printf '%s\n' "/s/four|999999|/w/elsewhere" > "$_t4_dir/notified"
 _assert "t4: gate is per-cwd, not per-server" "0" "$(_t4_fast /w/four)"
 rm -f "$_t4_dir/notified"
 
-# The remaining no-information shapes. A legacy (single-field) sidecar predates
-# the enriched format, so that server's cwds are unknown; a .windows with no
-# .sock companion (what _sl_discard writes) leaves no way to run the real
-# liveness probe. Both are 2 — defer to the ledger — never a guessed 1.
+# The remaining no-information shapes, both SCOPED to the queried cwd (t6 owns the
+# scoping pairs; these two pin the shapes themselves against this fixture, which
+# has no ledger at all). A legacy (single-field) sidecar predates the enriched
+# format, so its window's cwd is unknown — but with no ledger row tying that server
+# to /w/four, nothing it could hide is anything the ledger path could have offered,
+# so it must not suppress the answer. A .windows with no .sock companion (what
+# _sl_discard writes) leaves no way to run the liveness probe, and this one DOES
+# name /w/four, so it is 2 — defer to the ledger — never a guessed 1.
 _t4_put /s/legacy 999996 "@1"
-_assert "t4: legacy sidecar defers to ledger" "2" "$(_t4_fast /w/four)"
+_assert "t4: unplaceable legacy sidecar does not suppress" "0" "$(_t4_fast /w/four)"
 _t4_rm  /s/legacy 999996
 _t4_put /s/nosock 999995 "@1${TAB}/w/four${TAB}work${TAB}1"
 rm -f "$_t4_dir/live/$(printf '%s' /s/nosock | cksum | cut -d' ' -f1)-999995.windows.sock"
@@ -2256,6 +2355,166 @@ _assert "t4d: an unaffected cwd still answers from the sidecars" "0" "$(_t4d_fas
 # A server the ledger names WITH a sidecar is not a deferral, only a missing one is.
 _assert "t4d: no deferral for a cwd the ledger never names" "1" "$(_t4d_fast /w/absent)"
 rm -rf "$_t4d_dir"
+
+# ============ Task 6: every unanswerable shape is SCOPED TO THE QUERIED cwd.
+#     A state dir is the residue of every project on the machine, so an
+#     unresolvable sidecar is guaranteed, not rare — and a bail-on-sight makes the
+#     fast path answer for NO cwd at all. Measured on the real dir: 11 legacy lines
+#     across 6 sidecars, every one of them a window on some other project's
+#     long-dead server, deferred all 47 cwds; scoped, 23 of them answer.
+#
+#     Each shape is asserted as a PAIR — the unrelated state must NOT suppress an
+#     answerable cwd, and the SAME state made to concern that cwd MUST still
+#     return 2. The pairs are what make each other non-vacuous: delete the scoping
+#     and every first half fails; over-scope it into "absence means irrelevance"
+#     and every second half fails, which is the direction that loses data. ============
+_t6_dir=$(mktemp -d) || exit 1
+mkdir -p "$_t6_dir/live"
+_t6_f() {  # <socket> <pid> → the sidecar path
+  printf '%s/live/%s-%s.windows' "$_t6_dir" "$(printf '%s' "$1" | cksum | cut -d' ' -f1)" "$2"
+}
+_t6_put() {  # <socket> <pid> <line…>  → sidecar (lines separated by the literal \n printf expands) + .sock
+  _t6_p=$(_t6_f "$1" "$2"); printf "$3\n" > "$_t6_p"; printf '%s\n' "$1" > "$_t6_p.sock"
+}
+_t6_fast() {  # <cwd> → prints the exit code (see _t4_fast on the $() wrapper)
+  _ignore=$(AGENTMUX_STATE_DIR="$_t6_dir" _sl_pending_fast "$1"); printf '%s' "$?"
+}
+# The answerable baseline every assertion below is measured against: one dead
+# server (pid 999889 is above the default pid_max) with a restorable /w/six drop.
+# Rewritten by _t6_base so each case starts from the same known-good state.
+_t6_base() {  # [extra ledger lines on stdin]
+  rm -rf "$_t6_dir/live" "$_t6_dir/dead"; mkdir -p "$_t6_dir/live"
+  _t6_put /s/six 999889 "@1${TAB}/w/six${TAB}work${TAB}1"
+  cat > "$_t6_dir/sessions.jsonl" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/six","server_pid":999889,"session":"s","window_id":"@1","window_name":"claude","cwd":"/w/six","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/six","server_pid":999889,"window_id":"@1","label":"dropsix","resume_cmd":"claude --resume dropsix"}
+JSON
+  cat >> "$_t6_dir/sessions.jsonl"
+}
+_t6_base </dev/null
+_assert "t6: baseline answers from the sidecars" "0" "$(_t6_fast /w/six)"
+
+# --- shape 1: a LEGACY line (bare window id, cwd unknown). The sidecar cannot say
+# whose it is; the ledger can, keyed on (socket_path, server_pid, window_id).
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/leg","server_pid":999888,"session":"l","window_id":"@9","window_name":"claude","cwd":"/w/away","agent":"work"}
+JSON
+_t6_put /s/leg 999888 "@9"
+_assert "t6: legacy line the ledger puts in ANOTHER cwd does not suppress" "0" "$(_t6_fast /w/six)"
+# Same fixture, one field changed: the ledger now puts that window in /w/six, so
+# its unknown agent/resume could be a drop. This is the half that must never
+# collapse to 1.
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/leg","server_pid":999888,"session":"l","window_id":"@9","window_name":"claude","cwd":"/w/six","agent":"work"}
+JSON
+_t6_put /s/leg 999888 "@9"
+_assert "t6: legacy line the ledger puts in THIS cwd still defers" "2" "$(_t6_fast /w/six)"
+# The ambiguous window: a reused window id opened in two cwds. The ledger fold
+# keeps only the LAST open, so a purely mechanical read would place @9 in /w/away
+# and ignore it — but "which open is last" is a jq fold this raw scan does not do,
+# so a window seen in this cwd AT ALL reads as this cwd. This is the one fixture
+# where that precedence is load-bearing: /s/other is not tied to /w/six by any
+# other row, so nothing else here would catch @9.
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/other","server_pid":999883,"session":"o","window_id":"@9","window_name":"claude","cwd":"/w/six","agent":"work"}
+{"ts":103,"event":"open","socket_path":"/s/other","server_pid":999883,"session":"o","window_id":"@9","window_name":"claude","cwd":"/w/away","agent":"work"}
+JSON
+_t6_put /s/other 999883 "@9"
+_assert "t6: a legacy window seen in this cwd at all defers" "2" "$(_t6_fast /w/six)"
+# A legacy window the ledger does not name AT ALL. On a server with no /w/six row
+# it hides nothing the ledger path could have offered; on one the ledger DOES tie
+# to /w/six it stays unknown, and unknown is 2.
+_t6_base </dev/null
+_t6_put /s/leg 999888 "@9"
+_assert "t6: unnamed legacy window on an unrelated server does not suppress" "0" "$(_t6_fast /w/six)"
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/leg","server_pid":999888,"session":"l","window_id":"@8","window_name":"sh","cwd":"/w/six","agent":"shell"}
+JSON
+_t6_put /s/leg 999888 "@8${TAB}/w/six${TAB}shell${TAB}\n@9"
+_assert "t6: unnamed legacy window on a THIS-cwd server defers" "2" "$(_t6_fast /w/six)"
+
+# --- shape 2: a .windows with no .sock companion. The companion is the only join
+# back to the socket path, so without it neither the liveness probe nor the
+# per-window ledger join can run.
+_t6_base </dev/null
+_t6_put /s/nosock 999887 "@1${TAB}/w/away${TAB}work${TAB}1"
+rm -f "$(_t6_f /s/nosock 999887).sock"
+_assert "t6: .sock-less sidecar for another cwd does not suppress" "0" "$(_t6_fast /w/six)"
+_t6_base </dev/null
+_t6_put /s/nosock 999887 "@1${TAB}/w/six${TAB}work${TAB}1"
+rm -f "$(_t6_f /s/nosock 999887).sock"
+_assert "t6: .sock-less sidecar naming THIS cwd still defers" "2" "$(_t6_fast /w/six)"
+# A .sock-less LEGACY sidecar is both shapes at once: no socket path AND no cwd,
+# so the join degrades to the pid — which can only rule the sidecar out. An
+# unrelated pid is ignorable; a pid the ledger ties to this cwd is not.
+_t6_base </dev/null
+_t6_put /s/legns 999886 "@9"
+rm -f "$(_t6_f /s/legns 999886).sock"
+_assert "t6: .sock-less legacy sidecar on an unrelated pid does not suppress" "0" "$(_t6_fast /w/six)"
+# Its pair needs TWO sidecars sharing that pid — one properly joined (so the
+# sidecar-less-server check passes and cannot be what produces the 2) and the
+# .sock-less legacy one beside it. That is the only shape in which the pid-only
+# fallback is the deciding test rather than a second guard.
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/legok","server_pid":999886,"session":"l","window_id":"@8","window_name":"sh","cwd":"/w/six","agent":"shell"}
+JSON
+_t6_put /s/legok 999886 "@8${TAB}/w/six${TAB}shell${TAB}"
+_t6_put /s/legns 999886 "@9"
+rm -f "$(_t6_f /s/legns 999886).sock"
+_assert "t6: .sock-less legacy sidecar on a THIS-cwd pid defers" "2" "$(_t6_fast /w/six)"
+
+# --- shape 3: a ledger server with NO sidecar. The ledger path reads it as "every
+# window was open at death" and offers them, so it is unanswerable here — but the
+# ledger also says exactly which cwds it had, so only those need defer.
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/gone","server_pid":999885,"session":"g","window_id":"@1","window_name":"claude","cwd":"/w/away","agent":"work"}
+{"ts":103,"event":"resume","socket_path":"/s/gone","server_pid":999885,"window_id":"@1","label":"dropgone","resume_cmd":"claude --resume dropgone"}
+JSON
+_assert "t6: sidecar-less ledger server for another cwd does not suppress" "0" "$(_t6_fast /w/six)"
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/gone","server_pid":999885,"session":"g","window_id":"@1","window_name":"claude","cwd":"/w/six","agent":"work"}
+{"ts":103,"event":"resume","socket_path":"/s/gone","server_pid":999885,"window_id":"@1","label":"dropgone","resume_cmd":"claude --resume dropgone"}
+JSON
+_assert "t6: sidecar-less ledger server for THIS cwd still defers" "2" "$(_t6_fast /w/six)"
+
+# All three unrelated shapes at once — the real state dir has all of them, and the
+# scoping only pays off if they compose rather than each costing the whole query.
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/leg","server_pid":999888,"session":"l","window_id":"@9","window_name":"claude","cwd":"/w/away","agent":"work"}
+{"ts":104,"event":"open","socket_path":"/s/gone","server_pid":999885,"session":"g","window_id":"@1","window_name":"claude","cwd":"/w/away","agent":"work"}
+{"ts":105,"event":"resume","socket_path":"/s/gone","server_pid":999885,"window_id":"@1","label":"dropgone","resume_cmd":"claude --resume dropgone"}
+JSON
+_t6_put /s/leg 999888 "@9"
+_t6_put /s/nosock 999887 "@1${TAB}/w/away${TAB}work${TAB}1"
+rm -f "$(_t6_f /s/nosock 999887).sock"
+_assert "t6: all three unrelated shapes together still answer" "0" "$(_t6_fast /w/six)"
+# ...and the same pile answers a genuine NO, not a deferral: scoping must not turn
+# "no drop here" into "cannot tell" either, or the fast path never returns 1.
+_assert "t6: ...and still answers a genuine no for an unnamed cwd" "1" "$(_t6_fast /w/nothing)"
+# The blank line: it names no window, so it hides nothing. Treating it as legacy
+# would be an unresolvable bail with no window id to resolve — the global bail
+# this whole block exists to remove.
+_t6_base </dev/null
+_t6_put /s/blank 999884 "@1${TAB}/w/away${TAB}work${TAB}1\n"
+_assert "t6: a blank sidecar line is not a legacy line" "0" "$(_t6_fast /w/six)"
+
+# Agreement against the ledger path, on the fixture that exercises the scoping:
+# an answer the ledger path contradicts is the failure mode all of the above is
+# guarding, and only sl_dropped can observe both (AMUX_PENDING_NO_FAST).
+_t6_base <<JSON
+{"ts":102,"event":"open","socket_path":"/s/leg","server_pid":999888,"session":"l","window_id":"@9","window_name":"claude","cwd":"/w/away","agent":"work"}
+JSON
+_t6_put /s/leg 999888 "@9"
+_t6_cmp() {  # <cwd> → "<fast rows>|<ledger rows>"
+  _t6_a=$(AGENTMUX_STATE_DIR="$_t6_dir" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" \
+    sl_dropped --pending "$1" | grep -c .)
+  _t6_b=$(AMUX_PENDING_NO_FAST=1 AGENTMUX_STATE_DIR="$_t6_dir" SESSION_LOG_BOOT_EPOCH=1 \
+    SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "$1" | grep -c .)
+  printf '%s|%s' "$_t6_a" "$_t6_b"
+}
+_assert "t6: fast and ledger agree (drop, scoped past a legacy sidecar)" "1|1" "$(_t6_cmp /w/six)"
+_assert "t6: fast and ledger agree (no drop)" "0|0" "$(_t6_cmp /w/nothing)"
+rm -rf "$_t6_dir"
 
 # ============ Task 5: `migrate` — the one-shot backfill of sidecars already on
 #     disk. It is the piece that makes the fast path's speedup real: every sidecar

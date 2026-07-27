@@ -121,27 +121,32 @@ fail if it moved.
 **Trigger to revisit:** the real state dir grows visibly from test runs, or someone needs a
 repeatable-from-clean test baseline.
 
-## `--pending` still defers to the ledger on a real state dir
+## `--pending` still defers to the ledger for the cwds of sidecar-less servers
 
-**Status:** deferred — the `--pending` fast path is correct today (it defers rather than
-guesses) and `migrate` has drained everything it may soundly touch, but the speedup is
-still not realised: a small unenrichable residue keeps every poll on the ledger path.
+**Status:** deferred — roughly half the cwds on a real state dir now answer from the
+sidecars; the rest defer on a condition that is *not* a migration target and needs its own
+design. This is a speed ceiling, never a correctness one: a deferral is the ledger path
+answering, which is always right.
 
 **Where:** `<state>/live/*.windows` + their `.sock` companions, produced by `_sl_snapshot`;
 consumed by `_sl_pending_fast` in `scripts/session_log.sh`.
 
-**What — THREE independent conditions, each of which alone forces a deferral.** They are
-checked in this order, and the first one hides the ones after it, which is what made this
-look like a single shape-only problem:
+**What — THREE independent conditions make a query unanswerable from the sidecars alone,
+and every one of them is scoped to the queried cwd** (an unresolvable sidecar belonging to
+another project must never suppress the answer here — see the presence-dot footgun in
+CLAUDE.md, and the `t6:` selftest block that pins each shape as a pair):
 
 1. **Legacy line shape** (`exit 3`). The current shape is 4 tab-separated fields (window
    id, cwd, agent, resumable); sidecars written before the enrichment change carry a bare
-   window id per line. `_sl_pending_fast` treats *any* line with fewer than 4 fields as
-   "this server's cwds are unknown" and bails for the **whole query** — the bail is global,
-   not per-sidecar, so one legacy line anywhere in `live/` sends every poll to the ledger.
+   window id per line, so that window's cwd is unknown. The **ledger** places it, by
+   `(socket_path, server_pid, window_id)`, and the `.sock` companion is the join back to
+   the socket path. It defers only where the join cannot rule the window out: the ledger
+   puts it in *this* cwd, or the ledger does not name it at all **and** names its server
+   for this cwd.
 2. **Missing `.sock` companion** (`exit 4` / `return 2`). The filename only *hashes* the
    socket, so the companion is the only way back to the socket path — without it neither
-   the liveness probe nor the ledger join can run.
+   the liveness probe nor that ledger join can run. It defers where the probe would have
+   run: a candidate row in this cwd, or the sidecar of a ledger server named for this cwd.
 3. **A ledger server with no sidecar at all** (`exit 4`). The ledger names a (socket, pid)
    for the queried cwd that `live/` cannot see — a crash at launch, where `sl_open` writes
    the row and the follow-up `_sl_snapshot` liveness query then fails. The ledger path
@@ -149,74 +154,69 @@ look like a single shape-only problem:
    is **not** a migration target: writing a sidecar for such a server would invent
    membership and silently convert the deferral into "no drop".
 
-**Measured on a real 227-sidecar / ~1600-line state dir**, classifying all 47 distinct
-ledger cwds by which condition fires:
+**Measured on a real 232-sidecar / ~1600-line state dir**, over all 47 distinct ledger
+cwds, fast path against the ledger path (`AMUX_PENDING_NO_FAST=1`) — **zero disagreements**
+in every row:
 
-| state | answered from sidecars | bail: legacy (1) | bail: sidecar-less server (2/3) |
-|---|---|---|---|
-| before `migrate` | 0 | 47 | 0 |
-| after `migrate` | 0 | 47 | 0 |
-| after `migrate`, residue also removed | 23 | 0 | 24 |
-| after `migrate` but companions reverted | 0 | 0 | 47 |
+| state | answered from sidecars | deferred |
+|---|---|---|
+| bail on sight (before the scoping) | 0 | 47 |
+| scoped to the queried cwd | 23 | 24 |
+| scoped, and the legacy residue also deleted | 23 | 24 |
 
-Read down the last two rows: the `.sock` backfill is **load-bearing** — revert it and all
-47 fall to condition 2 — but it buys nothing on its own while condition 1 still fires. That
-is the same "fixing one alone achieves nothing" result as before, now with the third
-condition visible behind them.
+Read the last two rows together: the 11 residual legacy lines now cost **nothing** — the
+same 23 cwds answer with or without them, because every one of those windows sits on some
+other project's server. What caps the win at 23 is condition 3 alone.
 
-**Where it stands now.** New sidecars are born correct (both facts are written at event
-time), and `session_log.sh migrate` backfills old ones from the ledger: on that dir it took
-condition 2 to **zero** (180 companions written) and condition 1 from 205 legacy lines in
-142 sidecars to **11 lines in 6 sidecars**. Those 11 are the ones `migrate` deliberately
-refuses to touch — their window ids have no `open` row in the ledger (windows created by
-hand on a shared tmux server, plus `resume`-only rows left by the test suite), and `migrate`
-may only add fields it can source, because a guessed row would be a wrong answer and 2 must
-never collapse to 1. Because condition 1 bails globally, those 11 lines keep **every** poll
-on the ledger: ~180ms per poll before and after, unchanged. The payoff is real once they
-are gone — for a cwd that then answers from sidecars, the same query is **58ms against
-138ms** — but it is capped at 23 of 47 cwds by condition 3.
+**Timing** (`dropped --pending <cwd>`, same dir): a cwd that answers went **103ms → 37ms**.
+A cwd that defers went **~160ms → ~175ms** — a real, accepted regression: scoping means
+reading every sidecar and the ledger *before* concluding "cannot answer", where the old
+code aborted at the first legacy line it saw. It buys the 37ms case, and it is the case
+that grows as residue drains.
 
-**They do not drain on their own.** All six sidecars belong to servers that are already
-dead, and a dead server is never re-snapshotted, so the only exit is `sl_prune` — which
-self-gates on `AGENTMUX_LOG_MAX_LINES` (default 2000) and does not run at all while the
-ledger sits at ~1600 lines.
+**What is left, and why it does not drain.** The 24 deferring cwds all trace to one
+long-lived shared tmux server whose sidecar carries hand-created windows the ledger has no
+`open` row for. `migrate` deliberately refuses to enrich those (a guessed row would be a
+wrong answer), and the server is already dead so it is never re-snapshotted — the only exit
+is `sl_prune`, which self-gates on `AGENTMUX_LOG_MAX_LINES` (default 2000) and does not run
+while the ledger sits at ~1600 lines.
 
 **Do NOT just delete the residual sidecars.** It is the tempting one-line unblock and it is
 wrong: an **absent** sidecar means "dead server predating this feature → offer ALL its
 windows" (`sl_dropped`'s `*` branch), so deleting one converts a server that currently
 offers nothing into one that offers every window it ever had. That is precisely the ghost
-resurrection the sidecars exist to prevent.
+resurrection the sidecars exist to prevent. (It is also now pointless — the table above
+shows it changes no answer.)
 
-**Fix when we act on it, either:** (a) **narrow the bail** — make a legacy line unanswerable
-only for the servers the ledger names *for the queried cwd*, rather than for every query.
-Sound on the ledger path's own semantics (a server with no row whose `cwd` matches the
-scope can never contribute an offered row, so ignoring its unreadable sidecar cannot
-disagree with the ledger); it needs the `.windows` scan to record which files were legacy
-and test that in the END block instead of `exit 3` on sight. Or (b) **let `migrate` split
-the unenrichable case in two** — a window id with *no* `open` row anywhere in the ledger was
-never an amux window, and the ledger fold (which requires an `open`) provably cannot offer
-it, so writing it as `<wid><TAB><TAB><TAB>` — the exact bytes `_sl_live_windows` itself
-writes for a window with no `@amux_cwd` — cannot disagree with the ledger path; only the
-case where an `open` row *exists* but its cwd/agent cannot be read raw (JSON-escaped) must
-stay legacy. (a) fixes it for every state dir including future residue; (b) keeps the hot
-path untouched. Neither lifts condition 3, which caps the win at roughly half the cwds.
+**Fix when we act on it:** the remaining lever is condition 3, and it is not a sidecar
+question — the fast path would have to reproduce what the ledger path does with a
+sidecar-less server (treat every window it ever opened as open at death) from a raw scan
+rather than the `jq` fold. That is a real design, not a narrowing, and it is only worth it
+if the sidecar-less population stops being dominated by one legacy server. A cheaper
+half-measure first: have `sl_prune` run on age as well as line count, so dead-server
+residue leaves on its own.
 
-**Trigger to revisit:** count conditions 1 and 2, over *every* line (the real code tests
-every line, not just the first) —
+**Trigger to revisit:** the answer/defer split, measured directly rather than inferred from
+on-disk counts (both remaining conditions are per-cwd, so no file-level counter can see
+them) —
 
 ```sh
-awk -F'\t' '
-  BEGIN { for (i = 1; i < ARGC; i++) { f = ARGV[i]; s = ""
-            if ((getline s < (f ".sock")) <= 0 || s == "") nosock++; close(f ".sock") } }
-  NF < 4 { legacy++; badf[FILENAME] = 1 }
-  END { n = 0; for (f in badf) n++
-        printf "legacy lines=%d in %d sidecars; sidecars with no .sock=%d of %d\n",
-               legacy + 0, n, nosock + 0, ARGC - 1 }
-' ~/.local/state/agentmux/live/*.windows
+sh - <<'SH'
+awk '/^# ---- dispatch ----$/{exit} {print}' scripts/session_log.sh > /tmp/sl.$$
+AGENTMUX_SESSION_LOG=1 . /tmp/sl.$$; rm -f /tmp/sl.$$
+SD=$HOME/.local/state/agentmux; export AGENTMUX_STATE_DIR="$SD"
+jq -r 'select(.cwd)|.cwd' "$SD/sessions.jsonl" | sort -u | while IFS= read -r c; do
+  _i=$(_sl_pending_fast "$c"); rc=$?
+  s=$(AMUX_PENDING_NO_FAST=1 sl_dropped --pending "$c" | grep -c .)
+  printf '%s\t%s\t%s\n' "$rc" "$s" "$c"
+done | awk -F'\t' '
+  {n++; if ($1==2) d++; else a++
+   if (($1==0 && $2!=1) || ($1==1 && $2!=0)) { bad++; print "DISAGREE: " $0 }}
+  END { printf "answered=%d deferred=%d of %d; disagreements=%d\n", a+0, d+0, n, bad+0 }'
+SH
 ```
 
-Anything but `legacy lines=0 … no .sock=0` means `--pending` is still paying the ledger
-price. Run `session_log.sh migrate` first (it is idempotent); if the numbers do not move,
-what is left is unenrichable and one of the two fixes above is the answer. Condition 3 has
-no on-disk counter — it is per-cwd, and shows up as `_sl_pending_fast` returning 2 with no
-legacy line and no missing companion.
+`disagreements=0` is the invariant — anything else is a correctness bug, not a speed one,
+and outranks every number beside it. A falling `answered` count means new unenrichable
+residue is accumulating; run `session_log.sh migrate` (idempotent) before concluding
+anything from it.
