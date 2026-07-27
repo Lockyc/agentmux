@@ -576,12 +576,12 @@ EOF
 # Mark/unmark a window as having a resume command. Its own function (not inlined into
 # sl_resume) because the sidecar read path in Task 3 is specified against this exact
 # option, and the selftest drives it directly without a full sl_resume record.
-_sl_mark_resumable() {  # <socket> <window_id> <resume_cmd>
+_sl_mark_resumable() {  # <socket_path> <window_id> <resume_cmd>
   [ -n "$2" ] || return 0
   if [ -n "$3" ]; then
-    env -u TMUX tmux -L "$1" set-option -w -t "$2" @amux_resumable 1 2>/dev/null || true
+    env -u TMUX tmux -S "$1" set-option -w -t "$2" @amux_resumable 1 2>/dev/null || true
   else
-    env -u TMUX tmux -L "$1" set-option -uw -t "$2" @amux_resumable 2>/dev/null || true
+    env -u TMUX tmux -S "$1" set-option -uw -t "$2" @amux_resumable 2>/dev/null || true
   fi
 }
 
@@ -985,17 +985,35 @@ _t2_sock="agentmux-t2-$$"
 if command -v tmux >/dev/null 2>&1; then
   TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" -f /dev/null new-session -d -s t2 -c /tmp 2>/dev/null
   _t2_wid=$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" display-message -p -t t2 '#{window_id}' 2>/dev/null)
+  # _sl_mark_resumable takes a socket PATH (tmux -S), not the -L NAME this test
+  # server was started with — resolve the real path tmux reports for it, the
+  # same value _sl_ctx's #{socket_path} field yields in production.
+  _t2_path=$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" display-message -p -t t2 '#{socket_path}' 2>/dev/null)
   _assert "t2: not resumable before" "" \
     "$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" show-options -qvw -t "$_t2_wid" @amux_resumable 2>/dev/null)"
   _ignore=$(AGENTMUX_STATE_DIR="$_t2_dir" TMUX_TMPDIR="$_t2_dir" \
     SESSION_LOG_CTX="/s/x${TAB}999${TAB}t2${TAB}${_t2_wid}${TAB}claude${TAB}/tmp" \
-    _sl_mark_resumable "$_t2_sock" "$_t2_wid" "claude --resume abc")
+    _sl_mark_resumable "$_t2_path" "$_t2_wid" "claude --resume abc")
   _assert "t2: resumable after"      "1" \
     "$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" show-options -qvw -t "$_t2_wid" @amux_resumable 2>/dev/null)"
   _ignore=$(AGENTMUX_STATE_DIR="$_t2_dir" TMUX_TMPDIR="$_t2_dir" \
-    _sl_mark_resumable "$_t2_sock" "$_t2_wid" "")
+    _sl_mark_resumable "$_t2_path" "$_t2_wid" "")
   _assert "t2: empty cmd clears it"  "" \
     "$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" show-options -qvw -t "$_t2_wid" @amux_resumable 2>/dev/null)"
+
+  # ---- Task 2 (call-site integration): drive sl_resume() ITSELF, not
+  # _sl_mark_resumable directly — the three assertions above all still pass
+  # even if sl_resume's call to _sl_mark_resumable (session_log.sh line ~624)
+  # is replaced with a no-op, since none of them go through sl_resume. Point
+  # SESSION_LOG_CTX at the real test server/window so the option write lands
+  # on the real tmux server, and assert on that server's actual option value.
+  unset TMUX TMUX_PANE
+  _ignore=$(AGENTMUX_STATE_DIR="$_t2_dir" TMUX_TMPDIR="$_t2_dir" \
+    SESSION_LOG_CTX="${_t2_path}${TAB}999${TAB}t2${TAB}${_t2_wid}${TAB}claude${TAB}/tmp" \
+    sl_resume "t2-integration" "claude --resume t2int")
+  _assert "t2: sl_resume() itself marks the window resumable" "1" \
+    "$(TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" show-options -qvw -t "$_t2_wid" @amux_resumable 2>/dev/null)"
+
   TMUX_TMPDIR="$_t2_dir" command tmux -L "$_t2_sock" kill-server 2>/dev/null
 else
   echo "SKIP: t2 (tmux not found)"
