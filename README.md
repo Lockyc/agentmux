@@ -75,7 +75,7 @@ amux
 
 ## Prerequisites
 
-- tmux
+- tmux (no minimum version is pinned repo-wide yet; the notes feature's click-to-edit prefill uses `command-prompt -l`, so pinning a minimum tmux version is an open decision)
 - `toml2json`: `brew install go-toml`
 - `jq`: `brew install jq`
 - A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
@@ -144,6 +144,7 @@ All of these are pressed **after the prefix** (`C-b` by default).
 | `prefix m` | Cycle `@agent-mode` through your defined agents (agentmux sessions only) |
 | `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched. agentmux already knows the session id and which wrapper to launch it with, so there is nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
 | `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
+| `prefix N` | Toggle this tab's three summary rows between the AI summary and your own notes. In notes mode, **click any row** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). Clicking a row while the AI summary is showing switches to notes and edits that row, so the keys are optional. Notes are per-tab and live in memory: they survive `prefix x`, but not a crash, `amux --kill`, or a reboot. The AI summary keeps updating underneath, so toggling back shows a current one |
 
 ### Customizing tmux (per-role overlays)
 

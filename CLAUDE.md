@@ -61,6 +61,12 @@ pointer list at the end rather than a second copy here.)
 **The CWD-derived `--probe`/`--kill` are dir-guarded — don't collapse them to a bare name check (`bin/amux`).** A session is named after `$PWD`'s basename, so two projects sharing one (`~/work/api`, `~/personal/api`) collide. warden drives the arg-less probe/kill by cwd, so a naïve `has-session <basename>` would probe — and `--kill` would tear down — the wrong same-basename project. Each session records `@amux_dir`; `_amux_*_session_is_mine` gate the arg-less path on `@amux_dir == $PWD`. Invariants: an **explicit** `<name>` skips the guard (targets by name); a session with **no** `@amux_dir` counts as ours (no regression for pre-existing sessions). Residual cross-fire on the *named* path when two same-basename agents run at once is tracked in `docs/FOLLOWUPS.md` ("Named `--kill <basename>`").
 
 **Summary status rows are PUSHED (event-driven) — never turn them back into a `#()` poll (`tmux-status.sh`, `agentmux.conf`).** The writer renders the three rows on each hook event and sets them as `@amux_row1/2/3` **pane options**; `status-format[1..3]` reference those statically, so a redraw substitutes a value and **spawns nothing**. The old `#(summary_rows.sh …)` poll re-ran per client per `status-interval` with no backpressure — under load (a post-reboot Spotlight storm) spawns outran drain and exhausted the **per-user process table** (`kern.maxprocperuid`), so `fork()` failed for everything while CPU/RAM sat idle: a lockup that reads like a freeze. Diagnose with `ps -Axo user= | grep -c $(id -un)` climbing past ~400. Show live status via pushed options, never a `#()` in the status format.
+The notes surface rides the same rule: `status-format` picks between `@amux_rowN` and
+`@amux_noteN` on a flag, so a redraw still substitutes values and spawns nothing. A note
+row must never become a `#()` either. Two options per row is load-bearing —
+`@amux_note_rawN` is what the user typed and `@amux_noteN` is that text with `#` doubled
+for `status-format`'s re-parse; collapsing them to one option makes every edit re-escape
+its own output (`fix #42` → `fix ##42` → `fix ####42`).
 
 **Hot-path config/socket lookups must ride the launch-time memo, never re-fork (`bin/amux`).** A cold `amux` launch fires dozens of `$()` subshells, and each `$()` inherits the parent's caches but its own writes die with it — so a per-process memo (`_amux_json_cache`, `_amux_pwd_hash_val`) re-forks `stat`/`cksum`/`cut`/`cat` on every call. This turned acute post-sharding (fixed-name sockets were constant strings; `cksum`-derived ones are not). `_amux_warm_launch_caches` runs **once** as a direct (non-substituted) statement at the top of the launch paths, so every later `$()` inherits populated memos. Add a launch-path helper that shells out per call → warm it in parent context too. Companion lever on the same cost: chain consecutive same-socket `tmux` calls with the `';'` separator instead of one `env`+`tmux` exec each. (macOS `fork`+`exec` is ~10ms idle but 50–250ms under load, so this is a real cold-start floor — though machine load still dominates.)
 
@@ -82,6 +88,7 @@ pointer list at the end rather than a second copy here.)
 | `scripts/clear_icon.sh` | `prefix v` binding target — one-shot strips the leading state emoji off the current window name (emoji-agnostic; relies on `tmux-status.sh`'s `"<emoji> <label>"` invariant). Hooks re-badge on the next event |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`, `goal.sh`) |
 | `scripts/fork_session.sh` | `prefix f` binding target — forks the current tab's agent session into a new tab, using the `fork_cmd` its adapter recorded in the session log. Passes the fork command as the new window's `pane_start_command`, which is what makes `launch_agent.sh` skip its auto-launch |
+| `scripts/notes.sh` | `prefix N` and status-row click target — per-tab notes in the three summary rows. Writes `@amux_note_rawN` (what you typed, the prefill source) and `@amux_noteN` (escaped for display); `@amux_notes` selects which the row shows. Never touches `@amux_rowN`, so the summary pipeline is untouched and toggling back shows a current summary |
 | `scripts/session_log.sh` | Durable open/close ledger of agent windows amux opens, for crash recovery. The `dropped [<cwd>\|--global\|--new <cwd>\|--pending <cwd>]` subcommand emits restorable dropped tabs (agent tab, dead server, open-at-death, resume-program-swapped from `[[agents]] resume`); `amux`'s launch picker (and `amux --restore`) consume it. `--new` gates the launch offer once per (dead-server, cwd) via the `notified` marker; `--pending` applies that gate **read-only** — it's what the CWD-derived `amux --probe` uses to exit 3 ("restorable"), and a marking read there would let warden's poll burn the offer. `--pending` is answered from the live-set sidecars and emits only the literal line `pending`; the row contract above is the **ledger fallback's** (see the presence-dot footgun). `migrate` is the one-shot backfill that brings a pre-existing `live/` up to that sidecar contract. The `forkcmd [target]` subcommand emits `agent<TAB>fork_cmd` for one LIVE window, program-swapped the same way; `scripts/fork_session.sh` consumes it. `prune` (run from every `sl_open`, self-gated on `AGENTMUX_LOG_MAX_LINES`) trims the ledger, the `notified` marker and the `live/` sidecars to that reachable set — see the footgun |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
@@ -204,6 +211,37 @@ matters because the tmux server the block spawns must inherit it. Acceptance che
 for any such block: `wc -l` the real ledger and count `live/` entries before and
 after a full `sh test.sh` — both must be unchanged.
 
+**Third invariant — a selftest that exercises a HOOK-PATH helper must also isolate
+`$TMUX`, not just `TMUX_TMPDIR`.** A hook-path helper (`notes.sh`, and the same class
+as `session_log.sh`'s `_sl_ctx` and `agent_window_style.sh`) resolves its server from
+the ambient `$TMUX` by design — it calls bare `tmux` with no `-L`, because tmux itself
+invokes it from a key binding. So a selftest run *from inside a live agentmux pane*
+writes its options onto the **user's real session** — this actually happened during
+development, when an un-isolated run set `@amux_note1` on a live pane. Isolating
+`TMUX_TMPDIR` alone does **not** prevent it — that variable only governs where *new*
+sockets are created, not which server a bare `tmux` resolves. Save `$TMUX`, point it
+at the throwaway socket (ask tmux for it, `display-message -p '#{socket_path}'`, the
+way `session_log.sh` does — don't hand-build the path from `TMUX_TMPDIR`'s layout),
+and restore it on every exit path alongside `TMUX_TMPDIR`. In a clean CI environment
+with no ambient `$TMUX` the unfixed version still fails, just without the
+contamination: bare `tmux` resolves to socket `default`, which the test never creates.
+This is the mirror image of the CLI-path/hook-path split in Footguns above — that one
+says a CLI-invoked helper must take the resolved socket because it has no ambient
+`$TMUX`; this one says a *test* of a hook-path helper must fake the ambient `$TMUX`
+precisely because the helper trusts it.
+
+**A selftest's cleanup trap must be `EXIT`-only and idempotent.** Adding `INT TERM`
+alongside `EXIT` looks like better signal coverage, but a POSIX-sh handler that
+doesn't itself `exit` lets the shell *resume* after it — so an `INT TERM EXIT` trap
+list runs cleanup once from the signal and again from the normal fall-through, and a
+cleanup that `rm -rf`s a variable it then reassigns will, on that second run, delete
+the **user's real** directory once the first run has already restored it to its real
+value. Caught in review before shipping. `bin/amux`'s selftest is the precedent:
+`EXIT` only, plus a done-guard so a repeat call is a no-op regardless. Accepted cost
+of `EXIT`-only: under `dash` (CI's `/bin/sh`) an untrapped `SIGINT` doesn't fire the
+`EXIT` trap either, so one throwaway dir is stranded — non-destructive, and it matches
+`bin/amux`'s existing behaviour.
+
 Several scripts also have built-in selftests — run the relevant one directly for
 a targeted check while changing a script:
 
@@ -220,6 +258,7 @@ AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 SESSION_LOG_SELFTEST=1       sh scripts/session_log.sh
 FORK_SESSION_SELFTEST=1      bash scripts/fork_session.sh
 RELAUNCH_SELFTEST=1          bash scripts/relaunch.sh
+NOTES_SELFTEST=1              sh scripts/notes.sh
 AMUX_SELFTEST=1              bash bin/amux
 CLEAR_ICON_SELFTEST=1        sh scripts/clear_icon.sh
 VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
