@@ -241,8 +241,11 @@ done-guard is the second half and is `notes.sh`'s own: `bin/amux` needs none bec
 nothing calls its cleanup a second time, whereas a block that also cleans up on its
 normal fall-through must be safe to run twice. Accepted cost
 of `EXIT`-only: under `dash` (CI's `/bin/sh`) an untrapped `SIGINT` doesn't fire the
-`EXIT` trap either, so one throwaway dir is stranded — non-destructive, and it matches
-`bin/amux`'s existing behaviour.
+`EXIT` trap either, so one throwaway dir is stranded — non-destructive, and specific to
+POSIX-sh scripts run under dash. It does **not** match `bin/amux`'s behaviour: `bin/amux`
+is bash, and bash **does** fire its `EXIT` trap on an untrapped `SIGINT`, so it never
+strands anything this way. The shared precedent with `bin/amux` is the trap-list
+*shape* (`EXIT` only, no `INT`/`TERM`), not this dash-specific stranding.
 
 Several scripts also have built-in selftests — run the relevant one directly for
 a targeted check while changing a script:

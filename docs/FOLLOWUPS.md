@@ -155,3 +155,79 @@ tests the ledger path applies to its own rows. Both facts live on rows this sing
 already reads, but `resume_cmd` sits on a `resume` row while `agent` sits on the `open`
 row, so it means joining two rows per window inside the scan. Revisit when that residual
 cost is worth 3 cwds — or sooner if a real project's dot is measurably slow.
+
+## Notes click target can misland if a sibling pane closes mid-prompt
+
+**Status:** deferred — narrow, and the code that would need to change is exactly the code
+that avoids a worse hazard (a tmux `command-prompt` template-substitution collision), so
+there's no drop-in fix yet.
+
+**Where:** `scripts/notes.sh` → `click` subcommand, the `_cg` target build
+(`#{window_id}.#{pane_index}`).
+
+**What:** `pane_index` is positional *within its window*. If another pane in that window
+closes while the `command-prompt` (opened by this same click) is still open, tmux
+renumbers the survivors, so `_cg` can end up naming a different pane by the time the
+prompt's answer runs the deferred `set-option @amux_note_rawN` — the note lands on a
+neighbouring pane instead of the one actually clicked. This is the only failure mode in
+the notes feature that fails **open** (silently mislands data) rather than failing closed
+or loud.
+
+**Why it's fine today:** agentmux agent windows are single-pane by construction — nothing
+ever splits one — so there is no sibling pane that could close and trigger a renumber.
+
+**Why there's no queued fix:** the obvious alternative, `#{pane_id}` (`%N`), is *stable*
+across renumbering, but it collides with `command-prompt`'s own template substitution
+(`%1`-`%9` are replaced by the typed response — this is the exact hazard the long comment
+above `_cg` in `notes.sh` already documents and the reason `pane_index` was chosen over
+it). A real fix needs a target that is both renumber-stable *and* free of that
+substitution collision, which hasn't been identified yet.
+
+**Trigger to revisit:** agentmux windows ever gain more than one pane, or a target is found
+that is both stable and substitution-safe.
+
+## `notes.sh`'s selftest cleanup can strand one throwaway dir under dash's SIGINT handling
+
+**Status:** accepted, non-blocking — recorded here as the deferred-work register's home for
+the tradeoff, not a bug to fix.
+
+**Where:** `scripts/notes.sh` → `NOTES_SELFTEST` block, `_nt_st_cleanup` (see CLAUDE.md's
+Selftests "Fourth invariant" for the full reasoning).
+
+**What:** the cleanup trap is deliberately `EXIT`-only. POSIX-sh bash fires its `EXIT` trap
+even on an untrapped `SIGINT`, but `dash` (CI's `/bin/sh`) does not — so a Ctrl-C during
+`dash scripts/notes.sh` can leave one `/tmp/nt$$` directory behind. This is specific to
+dash; `bin/amux`'s own `EXIT`-only selftest trap never strands anything this way, because
+`bin/amux` is bash.
+
+**Why it's accepted:** non-destructive (a single throwaway dir, no live state touched), and
+the tempting fix — adding `INT TERM` to the trap list — is the one already ruled out: a
+POSIX-sh handler that doesn't itself `exit` lets the shell *resume* afterward, so an
+`INT TERM EXIT` list runs cleanup twice, and a second run operating on already-restored
+values previously `rm -rf`'d the **user's real** `TMUX_TMPDIR` (the Critical that keeps
+`INT`/`TERM` off the list for good).
+
+**Trigger to revisit:** none identified — this is expected to stay accepted permanently
+unless dash's SIGINT/EXIT-trap semantics change.
+
+## Repo-wide minimum tmux version is documented, not enforced
+
+**Status:** deferred — the README states the requirement; nothing checks it.
+
+**Where:** `README.md` Prerequisites; the notes feature (`scripts/notes.sh`'s
+`command-prompt -l` usage, `tmux/agentmux.conf`'s format/mouse plumbing).
+
+**What:** the README documents `tmux >= 3.6` (verified against the CHANGES file shipped
+with tmux 3.7b: `-l` on `command-prompt` shipped in the section headed
+`CHANGES FROM 3.5a TO 3.6`). Nothing in the repo — `install.sh`, a selftest, a runtime
+check — verifies the installed tmux actually meets that; a user on an older tmux just
+hits the notes feature's silent-failure paths (mitigated by the `command-prompt` fallback
+message in `notes.sh`'s `click`, but still discovered at click time, not install time).
+
+**Fix when acted on:** add a version check — e.g. in `install.sh`, or an `amux --doctor`-
+style command — comparing `tmux -V` against the documented minimum, and warn (not hard-fail,
+since most of agentmux works fine on an older tmux) when it's under 3.6.
+
+**Trigger to revisit:** another feature raises the minimum further, or a user reports
+hitting the notes-feature silent-failure mode despite the README already stating the
+requirement.

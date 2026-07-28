@@ -75,7 +75,7 @@ amux
 
 ## Prerequisites
 
-- tmux (no minimum version is pinned repo-wide yet; the notes feature's click-to-edit prefill uses `command-prompt -l`, so pinning a minimum tmux version is an open decision)
+- tmux >= 3.6 (the notes feature's click-to-edit prefill uses `command-prompt -l`, added in that release)
 - `toml2json`: `brew install go-toml`
 - `jq`: `brew install jq`
 - A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)

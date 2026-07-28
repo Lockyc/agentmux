@@ -91,8 +91,26 @@ case "${1:-}" in
   toggle)
     [ -n "${2:-}" ] || exit 0
     _tp=$2
-    if [ -n "$(tmux show-options -p -v -t "$_tp" @amux_notes 2>/dev/null)" ]; then
-      tmux set-option -up -t "$_tp" @amux_notes 2>/dev/null
+    # Ask tmux the SAME question status-format[1..3]'s #{?@amux_notes,…} asks
+    # (tmux/agentmux.conf) — never `show-options -p -v` + `[ -n … ]`, which
+    # LOOKS equivalent and is not. Two disagreements, both real: (1) truthiness
+    # — the literal string "0" is FALSE to `#{?…}` but "on" to `[ -n … ]`; (2)
+    # scope — `show-options -p` reads the PANE level only (prints nothing, even
+    # with a option set at any wider scope), while `#{?…}` resolves the full
+    # pane->window->session->global chain. Concretely: a user's
+    # `~/.agentmux/user.agent.tmux.conf` (this repo's CLAUDE.md advertises that
+    # file as "user settings win over our defaults", sourced last by every
+    # agent socket) setting `set -g @amux_notes 1` puts the renderer in notes
+    # mode on every tab, but the old `show-options -p` test read that pane as
+    # OFF — so toggle-on set the pane to 1 (still on) and toggle-off UNSET it,
+    # falling back to the same global 1 (still on): `prefix N` could never turn
+    # it off, and since `_nt_render` never ran either, all three rows went
+    # blank. Fix: use `display-message` + `#{?…}` to read the SAME resolved
+    # value the renderer uses, and always WRITE an explicit pane-level value —
+    # never `-up` unset — since a pane-level 0 correctly SHADOWS a wider-scope
+    # 1 in tmux's format-option lookup chain (verified).
+    if [ "$(tmux display-message -p -t "$_tp" '#{?@amux_notes,1,}' 2>/dev/null)" = 1 ]; then
+      tmux set-option -p -t "$_tp" @amux_notes 0 2>/dev/null
     else
       tmux set-option -p -t "$_tp" @amux_notes 1 2>/dev/null
     fi
@@ -131,8 +149,11 @@ case "${1:-}" in
     _self_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || exit 0
     [ -n "$_self_dir" ] || exit 0
     NT_SELF=$_self_dir/$(basename "$0")
-    # Clicking a SUMMARY row is the discovery path into notes mode.
-    [ -n "$(tmux show-options -p -v -t "$_cp" @amux_notes 2>/dev/null)" ] || \
+    # Clicking a SUMMARY row is the discovery path into notes mode. Same
+    # tmux-format-semantics test as `toggle` above, and for the identical
+    # reason — never `show-options -p -v` + `[ -n … ]` here either; see the
+    # long comment on the `toggle` case for the truthiness/scope trap it hides.
+    [ "$(tmux display-message -p -t "$_cp" '#{?@amux_notes,1,}' 2>/dev/null)" = 1 ] || \
       tmux set-option -p -t "$_cp" @amux_notes 1 2>/dev/null
     _nt_render "$_cp"
     # %%% (see below) escapes quotation marks (and `\ $ ; ~`) in the typed
@@ -148,9 +169,18 @@ case "${1:-}" in
     # stores the expanded path), and permit tmux command/shell injection
     # through a crafted `"` in the note text riding a second `set-option`/
     # `run-shell` in on the same click.
+    # Minimum tmux is 3.6 (README Prerequisites) — `-l` above doesn't exist
+    # before it. On an older tmux the mode flip and `_nt_render` above already
+    # ran, so a silent failure here would leave the tab stuck showing the
+    # empty-state hint with no way to tell WHY the prompt never opened. The
+    # `||` fires only on that parse-time rejection (an unrecognised `-l`
+    # errors immediately, before the prompt ever blocks on user input — this
+    # is not reachable on a supported tmux), so it can't fire from the user
+    # merely dismissing the prompt.
     tmux command-prompt -t "$_ct" -l -I "$(_nt_raw "$_cp" "$_cr")" -p "note $_cr>" \
       "set-option -p -t '$_cg' @amux_note_raw$_cr \"%%%\" ; run-shell \"sh '$NT_SELF' render '$_cg'\"" \
-      2>/dev/null
+      2>/dev/null || \
+      tmux display-message -t "$_ct" "notes: click-to-edit needs tmux 3.6+" 2>/dev/null
     exit 0
     ;;
   *)
@@ -233,8 +263,13 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     # Coverage is shell-dependent and deliberately NOT total: /bin/sh (bash
     # in POSIX mode) runs an EXIT trap when it dies from an untrapped SIGINT,
     # but dash does NOT — so under CI's dash, a Ctrl-C here strands one
-    # /tmp/nt$$. That is accepted: it is non-destructive, and it matches the
-    # repo precedent at bin/amux (EXIT-only, same property).
+    # /tmp/nt$$. That is accepted: it is non-destructive, and it is specific
+    # to POSIX-sh scripts run under dash. It does NOT match bin/amux's
+    # behaviour — bin/amux is bash, and bash DOES fire its EXIT trap on an
+    # untrapped SIGINT, so it never strands anything this way. The shared
+    # precedent with bin/amux is only the trap-LIST shape (EXIT only, no
+    # INT/TERM); see the next paragraph for why that shape, not this
+    # dash-specific stranding, is what's being followed.
     #
     # Do NOT "fix" it by adding INT TERM to the trap list. That is the
     # tempting move and it caused a Critical: a handler that does not itself
@@ -326,7 +361,34 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     # (from the line above) happening to already read as unset.
     _set @amux_notes stale
     env -u NOTES_SELFTEST sh "$0" toggle "$_pane" 2>/dev/null
-    ck tm-off  "$(_get @amux_notes)" ''
+    # Toggle-off must write an EXPLICIT pane-level "0", never `-up` unset —
+    # see the toggle-case comment in notes.sh for why an unset falls through
+    # to a wider-scope value the renderer can still see as on.
+    ck tm-off  "$(_get @amux_notes)" '0'
+
+    # BLOCKING regression: a GLOBAL @amux_notes 1 (the shape a user's
+    # ~/.agentmux/user.agent.tmux.conf overlay would set — CLAUDE.md documents
+    # that file as overriding our defaults) must not defeat toggle-off. Clear
+    # the pane-level value first so the pane starts genuinely unset, then set
+    # the global directly (not via `toggle`, which only ever writes
+    # pane-level) so the pane's effective state is "on" via the global alone.
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
+    tmux -L "$_sk" set-option -g @amux_notes 1 2>/dev/null
+    # Confirm the renderer's own test (#{?@amux_notes,…}) reads this pane as
+    # ON before toggling — otherwise the assertions below would pass for the
+    # wrong reason.
+    ck tm-global-on-before \
+      "$(tmux -L "$_sk" display-message -p -t "$_pane" '#{?@amux_notes,1,0}' 2>/dev/null)" '1'
+    env -u NOTES_SELFTEST sh "$0" toggle "$_pane" 2>/dev/null
+    # toggle wrote an explicit pane-level 0 …
+    ck tm-global-off-pane "$(_get @amux_notes)" '0'
+    # … and that pane-level 0 SHADOWS the still-set global 1 in the exact
+    # format expression the renderer uses — this is the fix: the pane really
+    # is off, not just "unset and inheriting on" again.
+    ck tm-global-off-render \
+      "$(tmux -L "$_sk" display-message -p -t "$_pane" '#{?@amux_notes,1,0}' 2>/dev/null)" '0'
+    tmux -L "$_sk" set-option -ug @amux_notes 2>/dev/null
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
 
     # A click on a NON-note range must not enter notes mode. On its own this
     # passes identically whether click does anything at all — see tm-click
