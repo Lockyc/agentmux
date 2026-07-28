@@ -230,14 +230,16 @@ says a CLI-invoked helper must take the resolved socket because it has no ambien
 `$TMUX`; this one says a *test* of a hook-path helper must fake the ambient `$TMUX`
 precisely because the helper trusts it.
 
-**A selftest's cleanup trap must be `EXIT`-only and idempotent.** Adding `INT TERM`
+**Fourth invariant — a selftest's cleanup trap must be `EXIT`-only and idempotent.** Adding `INT TERM`
 alongside `EXIT` looks like better signal coverage, but a POSIX-sh handler that
 doesn't itself `exit` lets the shell *resume* after it — so an `INT TERM EXIT` trap
 list runs cleanup once from the signal and again from the normal fall-through, and a
 cleanup that `rm -rf`s a variable it then reassigns will, on that second run, delete
 the **user's real** directory once the first run has already restored it to its real
-value. Caught in review before shipping. `bin/amux`'s selftest is the precedent:
-`EXIT` only, plus a done-guard so a repeat call is a no-op regardless. Accepted cost
+value. `bin/amux`'s selftest is the precedent for the trap list — `EXIT` only. The
+done-guard is the second half and is `notes.sh`'s own: `bin/amux` needs none because
+nothing calls its cleanup a second time, whereas a block that also cleans up on its
+normal fall-through must be safe to run twice. Accepted cost
 of `EXIT`-only: under `dash` (CI's `/bin/sh`) an untrapped `SIGINT` doesn't fire the
 `EXIT` trap either, so one throwaway dir is stranded — non-destructive, and it matches
 `bin/amux`'s existing behaviour.
@@ -258,7 +260,7 @@ AGENTMUX_STYLE_SELFTEST=1    bash scripts/agent_window_style.sh
 SESSION_LOG_SELFTEST=1       sh scripts/session_log.sh
 FORK_SESSION_SELFTEST=1      bash scripts/fork_session.sh
 RELAUNCH_SELFTEST=1          bash scripts/relaunch.sh
-NOTES_SELFTEST=1              sh scripts/notes.sh
+NOTES_SELFTEST=1             sh scripts/notes.sh
 AMUX_SELFTEST=1              bash bin/amux
 CLEAR_ICON_SELFTEST=1        sh scripts/clear_icon.sh
 VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
