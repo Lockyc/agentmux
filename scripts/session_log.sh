@@ -2119,7 +2119,7 @@ rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live" "$AGENTMUX_STATE_DIR/seen"
 rm -f "$AGENTMUX_STATE_DIR/notified"
 _pr_reach() {
   { _pr_pair 100 /s/301 301 @1 /w/a r301
-    _pr_pair "${1:-200}" /s/302 302 @1 /w/a r302a
+    _pr_pair 200 /s/302 302 @1 /w/a r302a
     _pr_pair 250 /s/302 302 @2 /w/b r302b
     _pr_pair 300 /s/303 303 @1 /w/a r303
     _pr_pair 150 /s/304 304 @1 /w/b r304
