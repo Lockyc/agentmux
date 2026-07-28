@@ -8,9 +8,9 @@
 # shows a CURRENT summary rather than a stale one.
 #
 # Two options per row is deliberate: @amux_note_rawN holds what the user typed
-# (the command-prompt prefill source), @amux_noteN holds the escaped, padded
-# display value. Escaping in place would make every edit re-escape its own
-# output ("fix #42" -> "fix ##42" -> "fix ####42").
+# (the command-prompt prefill source), @amux_noteN holds the escaped display
+# value. Escaping in place would make every edit re-escape its own output
+# ("fix #42" -> "fix ##42" -> "fix ####42").
 #
 # HOOK-PATH helper: invoked from a key binding, so $TMUX is inherited and bare
 # `tmux` is correct. Do NOT use the CLI-path $(_amux_agent_sock) + `env -u TMUX`
@@ -64,6 +64,65 @@ _nt_display() {
   esac
 }
 
+# Absolute path to this script, for the command-prompt template below: the
+# template is executed by tmux, whose cwd is not ours.
+NT_SELF=$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")
+
+# _nt_raw <pane> <row> -> that row's raw (unescaped) note text.
+_nt_raw() {
+  tmux show-options -p -v -t "$1" "@amux_note_raw$2" 2>/dev/null
+}
+
+# _nt_render <pane> — recompose all three display options from the raws.
+# All three are rewritten every time because row 1's content depends on whether
+# ANY note exists (the empty-state hint).
+_nt_render() {
+  _rp=$1
+  _r1=$(_nt_raw "$_rp" 1); _r2=$(_nt_raw "$_rp" 2); _r3=$(_nt_raw "$_rp" 3)
+  for _i in 1 2 3; do
+    tmux set-option -p -t "$_rp" "@amux_note$_i" \
+      "$(_nt_display "$_i" "$_r1" "$_r2" "$_r3")" 2>/dev/null
+  done
+  tmux refresh-client -S 2>/dev/null
+}
+
+case "${1:-}" in
+  render)
+    [ -n "${2:-}" ] || exit 0
+    _nt_render "$2"
+    exit 0
+    ;;
+  toggle)
+    [ -n "${2:-}" ] || exit 0
+    _tp=$2
+    if [ -n "$(tmux show-options -p -v -t "$_tp" @amux_notes 2>/dev/null)" ]; then
+      tmux set-option -up -t "$_tp" @amux_notes 2>/dev/null
+    else
+      tmux set-option -p -t "$_tp" @amux_notes 1 2>/dev/null
+    fi
+    _nt_render "$_tp"
+    exit 0
+    ;;
+  click)
+    # click <pane> <mouse_status_range> <client_tty>
+    _cp=${2:-}; _cr=$(_nt_row "${3:-}"); _ct=${4:-}
+    # Not one of our ranges (window list, status-left): do nothing. The binding
+    # already routed the default behaviour elsewhere.
+    [ -n "$_cp" ] && [ -n "$_cr" ] || exit 0
+    # Clicking a SUMMARY row is the discovery path into notes mode.
+    [ -n "$(tmux show-options -p -v -t "$_cp" @amux_notes 2>/dev/null)" ] || \
+      tmux set-option -p -t "$_cp" @amux_notes 1 2>/dev/null
+    _nt_render "$_cp"
+    # A typed '"' terminates the set-option argument early and the command
+    # errors, leaving the note unchanged — it fails safe. Not worth an escaping
+    # layer for a scratchpad; see the spec's Known limitation.
+    tmux command-prompt -t "$_ct" -I "$(_nt_raw "$_cp" "$_cr")" -p "note $_cr>" \
+      "set-option -p -t $_cp @amux_note_raw$_cr \"%%\" ; run-shell \"sh $NT_SELF render $_cp\"" \
+      2>/dev/null
+    exit 0
+    ;;
+esac
+
 if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   fail=0
   ck() { # ck <label> <got> <want>
@@ -110,6 +169,74 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   # given raws. This asserts the hazard is real, so the two-option split can
   # never be "simplified" away without a red test.
   ck disp-reesc  "$(_nt_display 2 '' "$(_nt_display 2 '' 'fix #42' '')" '')" 'fix ####42'
+
+  # --- tmux-touching blocks ------------------------------------------------
+  # Isolated under a throwaway TMUX_TMPDIR, reaped on every exit path below —
+  # the user's shared /tmp/tmux-<uid>/ must never be used: kill-server ends the
+  # process but macOS leaves the socket FILE behind, so a selftest socket name
+  # would strand an orphan every run. Short literal dir: a mktemp -d path plus a
+  # socket name can exceed the 104-char AF_UNIX limit.
+  if command -v tmux >/dev/null 2>&1; then
+    _ot=${TMUX_TMPDIR-}; _ot_set=${TMUX_TMPDIR+set}
+    TMUX_TMPDIR=/tmp/nt$$; export TMUX_TMPDIR; mkdir -p "$TMUX_TMPDIR"
+    _sk=nt$$
+    tmux -L "$_sk" -f /dev/null new-session -d -s t 2>/dev/null
+    _pane=$(tmux -L "$_sk" display-message -p '#{pane_id}' 2>/dev/null)
+    _get() { tmux -L "$_sk" show-options -p -v -t "$_pane" "$1" 2>/dev/null; }
+    _set() { tmux -L "$_sk" set-option -p -t "$_pane" "$1" "$2" 2>/dev/null; }
+
+    # The subcommands under test are HOOK-PATH code: they call bare `tmux`
+    # (no -L) and rely on $TMUX to resolve the server, exactly as they would
+    # when tmux itself invokes them from a real key binding. This shell is not
+    # attached to our throwaway session, so $TMUX must be faked to match it —
+    # otherwise bare `tmux` falls back to resolving $TMUX (if this shell
+    # already has a real one, e.g. this very test running inside a live
+    # agentmux pane) or, failing that, socket name "default" (never "$_sk"),
+    # so it would silently write into a DIFFERENT server: either a real live
+    # session (verified: an early un-isolated run of this exact test wrote
+    # @amux_note1 onto this session's own pane %0) or nothing at all. `-L`
+    # always outranks $TMUX, so the `_get`/`_set` helpers above are unaffected
+    # by the fake value. Save/restore mirrors the TMUX_TMPDIR pattern above.
+    _otm=${TMUX-}; _otm_set=${TMUX+set}
+    TMUX="$TMUX_TMPDIR/tmux-$(id -u)/$_sk,0,0"; export TMUX
+
+    # render with no raws set -> hint on row 1, rows 2/3 emptied.
+    sh "$0" render "$_pane" 2>/dev/null
+    ck tm-hint1 "$(_get @amux_note1)" "$NT_HINT"
+    ck tm-hint2 "$(_get @amux_note2)" ''
+
+    # render escapes '#' from the raw into the display option.
+    _set @amux_note_raw2 'fix #42'
+    sh "$0" render "$_pane" 2>/dev/null
+    ck tm-esc  "$(_get @amux_note2)" 'fix ##42'
+    ck tm-mark "$(_get @amux_note1)" "$NT_MARK"
+    # The RAW option is never rewritten — it is the prefill source.
+    ck tm-raw  "$(_get @amux_note_raw2)" 'fix #42'
+
+    # render is idempotent: re-running must not double-escape.
+    sh "$0" render "$_pane" 2>/dev/null
+    ck tm-idem "$(_get @amux_note2)" 'fix ##42'
+
+    # toggle flips the mode flag on, then off.
+    sh "$0" toggle "$_pane" 2>/dev/null
+    ck tm-on   "$(_get @amux_notes)" '1'
+    sh "$0" toggle "$_pane" 2>/dev/null
+    ck tm-off  "$(_get @amux_notes)" ''
+
+    # A click on a NON-note range must not enter notes mode.
+    sh "$0" click "$_pane" 'window|@3' /dev/null 2>/dev/null
+    ck tm-noclick "$(_get @amux_notes)" ''
+
+    # The summary options are never touched by any of the above.
+    _set @amux_row1 'ai summary'
+    sh "$0" render "$_pane" 2>/dev/null
+    ck tm-rowsafe "$(_get @amux_row1)" 'ai summary'
+
+    tmux -L "$_sk" kill-server 2>/dev/null
+    rm -rf "$TMUX_TMPDIR"
+    if [ "$_otm_set" = set ]; then TMUX=$_otm; export TMUX; else unset TMUX; fi
+    if [ "$_ot_set" = set ]; then TMUX_TMPDIR=$_ot; export TMUX_TMPDIR; else unset TMUX_TMPDIR; fi
+  fi
 
   [ "$fail" = 0 ] && echo "selftest OK"
   exit "$fail"
