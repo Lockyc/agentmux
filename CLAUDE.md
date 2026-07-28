@@ -188,6 +188,18 @@ names embed `$$`, so a server on the shared dir strands a fresh orphan every run
 Keep each block's `kill-server` too: it ends the process, the `rm -rf` only reaps
 the files.
 
+**`kill-server` returns BEFORE its teardown hooks finish, so `kill-server; rm -rf`
+is not enough on its own.** Destroying the windows fires `window-unlinked` →
+`run-shell session_log.sh …`, and those children are forked by the *dying* server,
+so they outlive both the `kill-server` return and the `rm -rf` that follows it.
+Measured: the dir is gone, and ~0.3s later `state/live` is back — a run that
+reported a clean exit stranded one dir every time. Wait for the teardown children
+(then re-check) rather than trusting `kill-server`'s exit. This is also the sharper
+reason `AGENTMUX_STATE_DIR` must be scoped **before the server starts**, not merely
+around the test body: those writes land at *teardown*, after the assertions have
+passed, so an unscoped run pollutes the user's real `live/` at the moment it looks
+finished.
+
 *Which* throwaway dir is a per-block call, and both shapes are in use.
 `bin/amux`'s selftest sets one at the top with an `EXIT` trap that `rm -rf`s it,
 covering every block and every exit path — blocks there inherit it rather than
