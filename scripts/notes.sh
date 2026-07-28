@@ -213,8 +213,8 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   ck disp-reesc  "$(_nt_display 2 '' "$(_nt_display 2 '' 'fix #42' '')" '')" 'fix ####42'
 
   # --- tmux-touching blocks ------------------------------------------------
-  # Isolated under a throwaway TMUX_TMPDIR, reaped on every exit path via the
-  # trap below — the user's shared /tmp/tmux-<uid>/ must never be used:
+  # Isolated under a throwaway TMUX_TMPDIR, reaped by the EXIT trap below —
+  # the user's shared /tmp/tmux-<uid>/ must never be used:
   # kill-server ends the process but macOS leaves the socket FILE behind, so a
   # selftest socket name would strand an orphan every run. Short literal dir:
   # a mktemp -d path plus a socket name can exceed the 104-char AF_UNIX limit.
@@ -226,10 +226,24 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     _nt_st_dir=/tmp/nt$$
     TMUX_TMPDIR=$_nt_st_dir; export TMUX_TMPDIR; mkdir -p "$TMUX_TMPDIR"
     _sk=nt$$
-    # Reap the throwaway dir/server and restore TMUX*/TMUX_TMPDIR on EVERY
-    # exit path, not just the fall-through at the end of this block — a
-    # signal mid-block must not strand /tmp/nt$$ (exactly what leaked 1387
-    # dirs before this was a trap).
+    # Reap the throwaway dir/server and restore TMUX*/TMUX_TMPDIR, so the
+    # fall-through at the end of this block is not the only path that cleans
+    # up (1387 dirs leaked before this was a trap).
+    #
+    # Coverage is shell-dependent and deliberately NOT total: /bin/sh (bash
+    # in POSIX mode) runs an EXIT trap when it dies from an untrapped SIGINT,
+    # but dash does NOT — so under CI's dash, a Ctrl-C here strands one
+    # /tmp/nt$$. That is accepted: it is non-destructive, and it matches the
+    # repo precedent at bin/amux (EXIT-only, same property).
+    #
+    # Do NOT "fix" it by adding INT TERM to the trap list. That is the
+    # tempting move and it caused a Critical: a handler that does not itself
+    # exit lets POSIX sh RESUME after it, so cleanup ran twice — and the
+    # second run, operating on the already-restored values, rm -rf'd the
+    # USER'S real TMUX_TMPDIR and left $TMUX pointing at a live server while
+    # child processes were still writing. The idempotency guard below now
+    # makes a double call harmless, but EXIT-only is what keeps the resume
+    # from happening at all. A stranded temp dir is the cheaper failure.
     #
     # EXIT-only, and idempotent by construction — this function MUST be safe
     # to call twice. POSIX sh resumes execution after a trap handler that
