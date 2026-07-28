@@ -112,10 +112,15 @@ case "${1:-}" in
     # replaced by the typed response — so `-t %1` silently becomes
     # `-t <whatever the user typed>` on every pane but %0, and both the
     # set-option and the run-shell re-render break the same way.
-    # session:window.pane never collides with a %N token. Bail rather than
-    # proceed with a broken target if it can't be resolved (e.g. the pane
-    # vanished mid-click).
-    _cg=$(tmux display-message -p -t "$_cp" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+    # #{window_id}.#{pane_index} (e.g. "@0.0") is built from two tmux-internal
+    # identifiers, neither user-controlled: window_id is always `@<n>`, and
+    # pane_index is numeric. Do NOT use session_name here — tmux 3.7 permits
+    # `%`, `'`, `,`, spaces, `:` and `.` in a session name, so a session named
+    # e.g. "%1" would reintroduce the exact placeholder collision this target
+    # exists to avoid, just via the session name instead of the pane id. Bail
+    # rather than proceed with a broken target if it can't be resolved (e.g.
+    # the pane vanished mid-click).
+    _cg=$(tmux display-message -p -t "$_cp" '#{window_id}.#{pane_index}' 2>/dev/null)
     [ -n "$_cg" ] || exit 0
     # Absolute path to this script, for the command-prompt template below: the
     # template is executed by tmux, whose cwd is not ours. Guard the `cd`
@@ -130,9 +135,8 @@ case "${1:-}" in
     [ -n "$(tmux show-options -p -v -t "$_cp" @amux_notes 2>/dev/null)" ] || \
       tmux set-option -p -t "$_cp" @amux_notes 1 2>/dev/null
     _nt_render "$_cp"
-    # A typed '"' terminates the set-option argument early and the command
-    # errors, leaving the note unchanged — it fails safe. Not worth an escaping
-    # layer for a scratchpad; see the spec's Known limitation.
+    # %%% (see below) escapes quotation marks (and `\ $ ; ~`) in the typed
+    # response, so it is stored literally and cannot inject a tmux command.
     #
     # -l: -I's prefill is otherwise a COMMA-SPLIT list (per `man tmux`), so a
     # note like "ask sam, then deploy" would prefill only "ask sam" and a
@@ -217,19 +221,38 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   if command -v tmux >/dev/null 2>&1; then
     _ot=${TMUX_TMPDIR-}; _ot_set=${TMUX_TMPDIR+set}
     _otm=${TMUX-}; _otm_set=${TMUX+set}
-    TMUX_TMPDIR=/tmp/nt$$; export TMUX_TMPDIR; mkdir -p "$TMUX_TMPDIR"
+    # Captured ONCE and never reassigned — this, not the live TMUX_TMPDIR
+    # variable, is what _nt_st_cleanup removes. See the footgun below.
+    _nt_st_dir=/tmp/nt$$
+    TMUX_TMPDIR=$_nt_st_dir; export TMUX_TMPDIR; mkdir -p "$TMUX_TMPDIR"
     _sk=nt$$
     # Reap the throwaway dir/server and restore TMUX*/TMUX_TMPDIR on EVERY
     # exit path, not just the fall-through at the end of this block — a
     # signal mid-block must not strand /tmp/nt$$ (exactly what leaked 1387
     # dirs before this was a trap).
+    #
+    # EXIT-only, and idempotent by construction — this function MUST be safe
+    # to call twice. POSIX sh resumes execution after a trap handler that
+    # doesn't itself exit, so an `INT TERM` trap list here would run this
+    # function once from the signal and again from the explicit call near the
+    # end of this block. A prior version restored TMUX_TMPDIR to the user's
+    # real value on its first call and then `rm -rf`'d "$TMUX_TMPDIR" on its
+    # second call — deleting the user's REAL socket directory. Two
+    # independent fixes close that for good: `_nt_st_dir` is captured once and
+    # never touched by the restore lines, so the `rm -rf` target can never
+    # become the user's real dir even if this runs N times; and the
+    # `_nt_st_done` guard makes every call after the first a no-op, so it's
+    # safe even if a future edit reintroduces a signal trap.
+    _nt_st_done=0
     _nt_st_cleanup() {
+      [ "$_nt_st_done" = 1 ] && return 0
+      _nt_st_done=1
       tmux -L "$_sk" kill-server 2>/dev/null
-      rm -rf "$TMUX_TMPDIR"
+      rm -rf "$_nt_st_dir"
       if [ "$_otm_set" = set ]; then TMUX=$_otm; export TMUX; else unset TMUX; fi
       if [ "$_ot_set" = set ]; then TMUX_TMPDIR=$_ot; export TMUX_TMPDIR; else unset TMUX_TMPDIR; fi
     }
-    trap '_nt_st_cleanup' EXIT INT TERM
+    trap '_nt_st_cleanup' EXIT
 
     tmux -L "$_sk" -f /dev/null new-session -d -s t 2>/dev/null
     _pane=$(tmux -L "$_sk" display-message -p '#{pane_id}' 2>/dev/null)
@@ -313,7 +336,7 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     ck tm-rowsafe "$(_get @amux_row1)" 'ai summary'
 
     _nt_st_cleanup
-    trap - EXIT INT TERM
+    trap - EXIT
   fi
 
   [ "$fail" = 0 ] && echo "selftest OK"
