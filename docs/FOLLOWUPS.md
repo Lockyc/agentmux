@@ -247,19 +247,46 @@ the default `switch-client` didn't run either. It is fixed (the target is now
 `#{window_id}.#{pane_index}`, which contains no user-controlled text and no `%N`), but
 nothing would catch a regression of that class.
 
-**Why there is no queued fix.** Exercising a click needs a *real attached* terminal —
-`#{client_tty}` must resolve — and reading the result back means decoding a
-cursor-addressed screen region that tmux repaints with `CUP`+`EL`. A stream-matching tool
-like `expect` can prove a `note N>` prompt appeared *somewhere*; it cannot prove it appeared
-for the row that was clicked, which is most of what "clicking a status row" means. Doing it
-properly wants a pty driver plus a small VT emulator, and the only comfortable way to write
-that pulls in a language this repo deliberately doesn't have (`toml2json` + `jq` are the
-only dependencies, and the project is shell-only by design).
+**It is buildable, and has been built and run — the only open question is the dependency.**
+A working `expect`-driven suite covering all eight checks below was written and passed 9/9
+across repeated runs, including the framed case. What remains is a decision, not a design
+problem.
 
-**What would unlock it:** either a shell-callable way to drive a pty and read back a
-specific screen line, or an accepted test-only dependency — the `shellcheck` precedent is
-the closest existing case, with the caveat that a self-skipping *regression test* stops
-protecting you wherever it skips, unlike an advisory linter, so CI would have to fail on a
+**The technique**, recorded so it is reconstructible from this file alone:
+
+- Exercising a click needs a *genuinely attached* client, because `#{client_tty}` must
+  resolve. `expect`'s `spawn tmux attach` gives one, and the load-bearing step is setting
+  the pty's size — `stty rows 30 cols 120 < $spawn_out(slave,name)` — because every
+  assertion is positional. `script(1)` is **not** a substitute: it allocates a pty but
+  exposes no way to set its size or `TERM`, and no client comes up.
+- Inject a click as an SGR mouse press/release pair, 1-based, e.g. row 1 of a 30-line
+  client showing four status lines is line 28: `\033[<0;10;28M` then `\033[<0;10;28m`.
+- **Assert on `tmux show-options`, never on the rendered screen.** This is what removes the
+  need for a VT emulator. Positional claims are *stronger* this way, not weaker: typing
+  row-distinct text and reading back which `@amux_note_rawN` it landed in verifies the whole
+  click → prompt → commit chain terminated in the right row, which screen-scraping alone
+  never shows.
+- Derive geometry arithmetically — with the status bar at the bottom of an `H`-row client
+  showing `N` status lines, `status-format[0]` is line `H-N+1` and row `K` is `H-N+1+K`.
+  Note `#{status_lines}` **does not exist in tmux 3.7b**: it expands to empty, which is
+  indistinguishable from a real empty value, so derive `N` as `client_height -
+  window_height` instead.
+
+**Two traps that make a harness silently test nothing**, both of which must be hard aborts
+rather than comments. First, the binding hardcodes `~/.agentmux/scripts/notes.sh`; on a
+dev box that path is a symlink to the *install*, so a harness testing a working tree must
+rewrite it and then assert via `list-keys -T root` that the binding really points where it
+means to. Second, the `client-attached` hook reaches `update_colors.sh`, which resets
+`status 4` back to `status on` for any session lacking `@autoagent 1` — so assert the client
+actually renders four status lines *after* attaching, and note the hook is async, so a
+measurement taken too early reports the pre-hook value and every later click misses.
+
+**What would unlock landing it:** an accepted **test-only** dependency on `expect`. It ships
+at `/usr/bin/expect` on macOS and needs one install line on a Linux CI runner. The
+`shellcheck` precedent is the closest existing case — a tool the project requires for
+development without it becoming a runtime dependency — with one caveat that does not apply
+to a linter: a self-skipping *regression test* stops protecting you wherever it skips, so CI
+would have to fail on a
 skip rather than pass.
 
 Until then the click path is verified by hand. What to exercise, in priority order: a click
