@@ -231,3 +231,41 @@ since most of agentmux works fine on an older tmux) when it's under 3.6.
 **Trigger to revisit:** another feature raises the minimum further, or a user reports
 hitting the notes-feature silent-failure mode despite the README already stating the
 requirement.
+
+## The status-row click path has no automated guard
+
+`NOTES_SELFTEST` covers everything in `scripts/notes.sh` **except the click itself**. It
+invokes `click` with a `/dev/null` client tty on purpose, so `command-prompt` fails fast
+instead of hanging a headless run — which means the one path a real click takes is the one
+path no tracked test executes.
+
+That matters because the defects that path hides are silent. The worst found during
+development: `command-prompt` substitutes *all* occurrences of `%1`–`%9` in its template
+with the typed response, and the pane id is `%0`, `%1`, `%2`… so a literal pane id in the
+target made every tab except the first silently non-functional — no error, no prompt, and
+the default `switch-client` didn't run either. It is fixed (the target is now
+`#{window_id}.#{pane_index}`, which contains no user-controlled text and no `%N`), but
+nothing would catch a regression of that class.
+
+**Why there is no queued fix.** Exercising a click needs a *real attached* terminal —
+`#{client_tty}` must resolve — and reading the result back means decoding a
+cursor-addressed screen region that tmux repaints with `CUP`+`EL`. A stream-matching tool
+like `expect` can prove a `note N>` prompt appeared *somewhere*; it cannot prove it appeared
+for the row that was clicked, which is most of what "clicking a status row" means. Doing it
+properly wants a pty driver plus a small VT emulator, and the only comfortable way to write
+that pulls in a language this repo deliberately doesn't have (`toml2json` + `jq` are the
+only dependencies, and the project is shell-only by design).
+
+**What would unlock it:** either a shell-callable way to drive a pty and read back a
+specific screen line, or an accepted test-only dependency — the `shellcheck` precedent is
+the closest existing case, with the caveat that a self-skipping *regression test* stops
+protecting you wherever it skips, unlike an advisory linter, so CI would have to fail on a
+skip rather than pass.
+
+Until then the click path is verified by hand. What to exercise, in priority order: a click
+opens a prompt at all (the silent-failure gate); clicking row 2 lands in row 2; `fix #42`
+stores raw and re-prefills as `fix #42`, not `fix ##42`; a note containing a comma survives
+a click-then-Enter; a far-right click on an empty row still opens that row's prompt (proves
+the `#{p400:…}` padding); window-list clicks still switch windows; Escape cancels without a
+message. All seven, plus the framed (`amux --frame`) case, were verified passing against
+this implementation.
