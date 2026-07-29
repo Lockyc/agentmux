@@ -101,6 +101,7 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 | `config/user.tmux.conf.example` | Template for the optional **per-role** user tmux overlays — `~/.agentmux/user.{agent,frame,term}.tmux.conf`, each `source-file -q`'d last by its own socket so it overrides amux's defaults without a binding leaking across roles (a shared file would break the frame's C-f layout). The escape hatch for the deliberate `~/.tmux.conf` isolation |
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
+| `tests/mouse/` | The status-bar click suite — the only test that exercises the path a real mouse click takes (`NOTES_SELFTEST` stops short of it by design). `run.sh` is the entry point; `main.exp`/`frame.exp`/`lib.tcl` are the `expect` drivers. Its `README.md` carries the technique and the traps that make a harness of this shape silently test nothing |
 | `docs/ai-summary.md` | AI summary design rationale: invariants, ruled-out approaches, eval method — **start here when revisiting the summary feature** |
 | `docs/FOLLOWUPS.md` | Deferred, non-blocking work with pick-up-cold context (e.g. the restore picker's window-launch consistency item) |
 | `VERSION` | Semver version string |
@@ -162,11 +163,12 @@ by default (`[update] check`, or `AGENTMUX_VERSION_CHECK`).
 ## Selftests
 
 `bash test.sh` (repo root) is the aggregate "run everything" entry point: it runs
-shellcheck, the `fish -n` syntax check, and every selftest below, prints a
-per-check pass/fail line and a summary, and exits non-zero if anything fails.
-It's runnable from any cwd and is what CI runs (`.github/workflows/ci.yml`, on
-push to `dev`/`main` and every PR — the runner installs `tmux` so the
-tmux-gated selftests actually run rather than self-skip).
+shellcheck, the `fish -n` syntax check, every selftest below, and the
+`tests/mouse` click suite; it prints a per-check pass/fail line and a summary, and
+exits non-zero if anything fails. It's runnable from any cwd and is what CI runs
+(`.github/workflows/ci.yml`, on push to `dev`/`main` and every PR — the runner
+installs `tmux` and `expect` so the tmux-gated selftests and the click suite
+actually run rather than self-skip).
 
 **On a heavily-loaded machine, prefer the individual selftests below for local
 checks and let CI run the aggregate `bash test.sh`.** It's bounded — one
@@ -290,14 +292,48 @@ FRAME_REATTACH_SELFTEST=1    sh scripts/frame_reattach.sh
 SUMMARISE_SMOKE=1 scripts/summarise.sh
 ```
 
+### The mouse-click suite (`tests/mouse`)
+
+The one test that exercises a **real mouse click**. `NOTES_SELFTEST` covers
+`scripts/notes.sh` except the click itself — it invokes `click` with a `/dev/null`
+client tty on purpose, so `command-prompt` fails fast instead of hanging a headless
+run — which leaves the path a real click takes uncovered by every other test, and the
+defects it hides are silent (the worst found: `command-prompt` substitutes *all*
+`%1`–`%9` occurrences in its template with the typed response, and pane ids are
+`%0`, `%1`, `%2`…, so a literal pane id in the target made every tab but the first
+silently do nothing at all).
+
+```bash
+bash tests/mouse/run.sh                       # 9 checks; from any cwd
+AMUX_MOUSE_VERBOSE=1 bash tests/mouse/run.sh  # every assertion, not just failures
+```
+
+**`expect` is a test-only dependency**, exactly like `shellcheck` — needed to develop
+agentmux, never to run it, so the Stack section's "`toml2json` + `jq` are the only
+runtime dependencies" still holds. `test.sh` skips this check with a note when
+`expect` or `tmux` is missing, **except** under `AGENTMUX_REQUIRE_MOUSE_TESTS=1`
+(set by CI), where a missing dependency fails instead: a self-skipping *regression*
+test stops protecting you wherever it skips, unlike an advisory linter, so CI must
+not be able to pass by skipping it.
+
+It is **slower than the other selftests (~1 minute)** — it drives real pty clients
+and must settle between clicks — so run it directly while iterating and let `test.sh`
+sequence it last. `tests/mouse/README.md` carries the technique (why a genuinely
+attached, correctly *sized* pty is required; asserting on `show-options` rather than
+the rendered screen; the row→line arithmetic) and the traps that make a harness of
+this shape silently test nothing. Read it before changing the suite.
+
 ## Linting
 
 `shellcheck` is the linter (install with `brew install shellcheck`). It's lint-only, not a runtime dep, so it doesn't conflict with the toml2json + jq rule — but it's expected to be run before landing shell changes, not treated as optional:
 
 ```bash
-shellcheck scripts/*.sh scripts/claude/*.sh shell/agentmux.sh bin/amux install.sh
+shellcheck scripts/*.sh scripts/claude/*.sh shell/agentmux.sh bin/amux install.sh tests/mouse/run.sh
 fish -n shell/agentmux.fish   # fish can't be shellcheck'd; this is its syntax check
 ```
+
+`tests/mouse/`'s `.exp`/`.tcl` drivers are Tcl, not shell — shellcheck can't read
+them and shouldn't be pointed at them; only `run.sh` is a target.
 
 Known-benign findings (do **not** chase these to zero — they're inherent to the patterns, not regressions):
 
@@ -307,5 +343,5 @@ Known-benign findings (do **not** chase these to zero — they're inherent to th
 Real findings (anything else, especially error-level) must be fixed or, for a genuine false positive, suppressed with a commented `# shellcheck disable=<code>` on that line (see the zsh `(@f)` line in `shell/agentmux.sh`). A clean run filters to actionable severity:
 
 ```bash
-shellcheck --severity=warning scripts/*.sh scripts/claude/*.sh shell/agentmux.sh bin/amux install.sh
+shellcheck --severity=warning scripts/*.sh scripts/claude/*.sh shell/agentmux.sh bin/amux install.sh tests/mouse/run.sh
 ```

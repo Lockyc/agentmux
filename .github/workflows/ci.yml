@@ -11,10 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install apt deps (shellcheck, tmux, jq, fish)
+      - name: Install apt deps (shellcheck, tmux, jq, fish, expect)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck tmux jq fish
+          sudo apt-get install -y --no-install-recommends shellcheck tmux jq fish expect
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -35,5 +35,10 @@ jobs:
           printf 'a = 1\n' | toml2json | jq -e '.a == 1' >/dev/null
           echo "toml2json + jq round-trip OK"
 
+      # AGENTMUX_REQUIRE_MOUSE_TESTS=1: the tests/mouse click suite is a
+      # regression test, not an advisory linter — a missing `expect`/`tmux` must
+      # fail the build rather than let it pass by skipping.
       - name: Run test.sh
         run: bash test.sh
+        env:
+          AGENTMUX_REQUIRE_MOUSE_TESTS: "1"

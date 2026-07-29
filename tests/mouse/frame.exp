@@ -1,0 +1,106 @@
+#!/usr/bin/env expect
+# frame.exp — test 8, the framed / nested case.
+#
+#   expect frame.exp <root> <sockA> <sockB> <work> <out> <pane>
+#
+# Server B runs the worktree's frame.conf (path-rewritten) and its single pane
+# runs `tmux -L <sockA> attach`, i.e. the agent client is nested INSIDE the
+# frame. frame.conf carries NONE of the note bindings, so this asks whether a
+# click on the inner status row survives the outer layer at all. The outer sees
+# the click as a MouseDown1Pane (it lands in its pane region, not its own status
+# bar) and tmux's default for that is `select-pane -t = \; send-keys -M`, which
+# forwards the event inward.
+#
+# We attach OUR pty to the OUTER server only; the inner client is the one the
+# frame pane already runs. So every click here really does traverse both layers.
+
+source [file join [file dirname [info script]] lib.tcl]
+set mtpane [lindex $argv 5]
+
+chk 8 "framed / nested case"
+
+set nb [tmB list-keys -T root]
+set ncount 0
+foreach l [split $nb "\n"] { if {[string match "*amuxnote*" $l]} { incr ncount } }
+eq "outer (frame) server carries NO amuxnote binding" $ncount 0
+ok "outer forwards pane clicks (MouseDown1Pane -> send-keys -M)" \
+   [string match "*send-keys -M*" $nb]
+eq "outer mouse" [tmB show-options -g mouse] "mouse on"
+set na [tmA list-keys -T root]
+set nacount 0
+foreach l [split $na "\n"] { if {[string match "*amuxnote*" $l]} { incr nacount } }
+ok "inner (agent) server DOES carry the amuxnote binding" [expr {$nacount > 0}] $nacount
+
+# Deterministic starting state on the inner pane, so the prefill assertion below
+# has a known value to match.
+tmA set-option -p -t $mtpane @amux_notes 1
+tmA set-option -p -t $mtpane @amux_note_raw1 "fix #42"
+tmA set-option -up -t $mtpane @amux_note_raw2
+tmA set-option -p -t $mtpane @amux_note_raw3 "ask sam, then deploy"
+render
+
+spawn -noecho tmux -L $mtsockB attach -t frame
+set tty $spawn_out(slave,name)
+stty rows 30 cols 120 < $tty
+
+# Poll for the outer client to exist, then let the attach hooks land before
+# measuring anything (see main.exp for why measuring too early lies).
+set OH 0; set ON 0
+for {set i 0} {$i < 150} {incr i} {
+    set g [tmB display-message -c $tty -p {#{client_height}:#{window_height}}]
+    if {[regexp {^(\d+):(\d+)$} $g -> h w] && $h > 0 && $w > 0} { break }
+    after 100
+}
+settle 2
+set g [tmB display-message -c $tty -p {#{client_height}:#{window_height}}]
+if {[regexp {^(\d+):(\d+)$} $g -> h w]} { set OH $h; set ON [expr {$h - $w}] }
+set ptop [tmB display-message -p -t frame {#{pane_top}}]
+
+# The inner client is the frame pane's own attach. Server A must have exactly
+# one client here — main.exp's direct client has already detached.
+set clients [split [string trim [tmA list-clients -F {#{client_height}:#{window_height}}]] "\n"]
+eq "server A has exactly one (nested) client" [llength $clients] 1
+set IH 0; set IN 0
+if {[llength $clients] == 1} {
+    regexp {^(\d+):(\d+)$} [lindex $clients 0] -> ih iw
+    set IH $ih; set IN [expr {$ih - $iw}]
+}
+eq "the nested client still renders 4 status lines" $IN 4
+ok "outer status costs exactly one line (inner height = outer height - 1)" \
+   [expr {$IH == $OH - $ON}] "inner=$IH outer=$OH outer_status=$ON"
+
+# Same arithmetic as the unframed case, offset by the containing pane's top.
+set IL1 [rowline 1 $IH $IN $ptop]
+set IL2 [rowline 2 $IH $IN $ptop]
+set IL3 [rowline 3 $IH $IN $ptop]
+set outer_status_line [wlline $OH $ON]
+note "outer: h=$OH status=$ON pane_top=$ptop | inner: h=$IH status=$IN"
+note "derived inner rows: 1=$IL1 2=$IL2 3=$IL3; outer status bar on line $outer_status_line"
+ok "inner rows sit ABOVE the outer status bar (i.e. inside the outer's PANE)" \
+   [expr {$IL3 < $outer_status_line}] "row3=$IL3 outer_status=$outer_status_line"
+
+# Does the click reach the inner server at all? The prefill is the proof it is
+# the INNER server's prompt: only it knows @amux_note_raw1.
+click 5 $IL1
+ok "click on the inner row 1 reached the INNER server (prefill proves it)" \
+   [expr {[wp "note 1>fix #42"] eq "MATCH"}]
+esc
+settle 1
+
+# Full write path through the nest, on a different row — positional proof again.
+click 5 $IL2
+ok "click on inner row 2 opened \`note 2>\`" [expr {[wp "note 2>"] eq "MATCH"}]
+typed "nested-note-ok"
+enter
+waitopt @amux_note_raw2 "nested-note-ok"
+eq "note committed through the nest, into row 2" [opt @amux_note_raw2] "nested-note-ok"
+eq "row 1 untouched" [opt @amux_note_raw1] "fix #42"
+eq "row 3 untouched" [opt @amux_note_raw3] "ask sam, then deploy"
+ok "no `needs tmux 3.6+` message" [expr {![string match "*needs tmux 3.6*" [logtext]]}]
+chkend
+
+tmB detach-client -t $tty
+settle 1
+catch {close}
+catch {wait}
+exit [expr {$mtfail ? 1 : 0}]

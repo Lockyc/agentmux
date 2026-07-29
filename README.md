@@ -82,6 +82,8 @@ amux
 - `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in amux.toml)
 - A notification-aware host terminal (optional — for `--notify` alerts; the hook emits a standard OSC 777 desktop-notification escape, surfaced by hosts like [warden](https://github.com/lockyc/warden) or Ghostty)
 
+Working *on* agentmux additionally wants `shellcheck` (the linter) and `expect` (the pty driver for the status-bar click test suite, `bash tests/mouse/run.sh`). Both are development-only — neither is needed to use agentmux.
+
 ## Usage
 
 agentmux is driven two ways: **`amux …` shell commands** you type at a prompt to launch and manage sessions, and **tmux key bindings** you press once you're inside a session. Never used tmux? Read [Inside a session: tmux basics](#inside-a-session-tmux-basics) first — you don't need to know tmux going in.
