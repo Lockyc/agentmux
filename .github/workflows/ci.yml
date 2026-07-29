@@ -16,6 +16,42 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends shellcheck tmux jq fish expect
 
+      # The tests/mouse click suite needs tmux >= 3.6 (command-prompt -l —
+      # see scripts/tmux_version.sh, the single source of truth for that
+      # floor). Ubuntu's packaged tmux can lag behind it, and
+      # AGENTMUX_REQUIRE_MOUSE_TESTS=1 below turns "tmux too old" into a hard
+      # CI failure rather than a skip — so this step exists to make the
+      # runner actually capable instead of hoping apt's version is new
+      # enough. It only builds from source when the packaged tmux falls
+      # short, so a runner that's already fine costs nothing extra.
+      - name: Ensure tmux >= 3.6 (build from source if apt's is too old)
+        run: |
+          echo "packaged tmux: $(tmux -V 2>/dev/null || echo 'not found')"
+          . scripts/tmux_version.sh
+          raw="$(tmux -V 2>/dev/null)"
+          if _amux_tmux_capable "$raw"; then
+            echo "packaged tmux ($raw, parsed ${AMUX_TMUX_PARSED:-unparseable}) already satisfies >= ${_AMUX_TMUX_MIN_MAJOR}.${_AMUX_TMUX_MIN_MINOR} — skipping the source build"
+            exit 0
+          fi
+          echo "packaged tmux ($raw, parsed $AMUX_TMUX_PARSED) is below ${_AMUX_TMUX_MIN_MAJOR}.${_AMUX_TMUX_MIN_MINOR} — building a pinned release from source"
+
+          # Pinned, not a moving target: bump this deliberately, not via a
+          # "latest" fetch.
+          TMUX_BUILD_VERSION=3.6
+          sudo apt-get install -y --no-install-recommends \
+            libevent-dev libncurses-dev build-essential bison pkg-config wget
+
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          wget -q "https://github.com/tmux/tmux/releases/download/${TMUX_BUILD_VERSION}/tmux-${TMUX_BUILD_VERSION}.tar.gz"
+          tar xzf "tmux-${TMUX_BUILD_VERSION}.tar.gz"
+          cd "tmux-${TMUX_BUILD_VERSION}"
+          ./configure --prefix="$HOME/.local/tmux-build"
+          make -j"$(nproc)"
+          make install
+          echo "$HOME/.local/tmux-build/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/tmux-build/bin/tmux" -V
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

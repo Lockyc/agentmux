@@ -71,6 +71,17 @@ say() { printf '  %s\n' "$*"; }
 command -v tmux   >/dev/null 2>&1 || die "tmux not on PATH"
 command -v expect >/dev/null 2>&1 || die "expect not on PATH (the pty driver)"
 
+# The suite clicks through scripts/notes.sh's `command-prompt -l`, which does
+# not exist before tmux 3.6 (README Prerequisites) — an older tmux would fail
+# every click with a confusing "prompt never opened" symptom instead of this
+# one legible abort. The parse/compare is single-sourced in tmux_version.sh
+# (test.sh's tests/mouse block uses the same file) so the 3.6 floor lives in
+# exactly one place.
+. "$ROOT/scripts/tmux_version.sh"
+TMUX_RAW=$(tmux -V 2>/dev/null)
+_amux_tmux_capable "$TMUX_RAW" \
+  || die "needs tmux >= ${_AMUX_TMUX_MIN_MAJOR}.${_AMUX_TMUX_MIN_MINOR} for command-prompt -l, found ${AMUX_TMUX_PARSED} (raw: $TMUX_RAW)"
+
 # --- isolated world --------------------------------------------------------
 # Short path on purpose: a long dir plus a socket name can exceed the 104-char
 # AF_UNIX limit.

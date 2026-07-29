@@ -121,7 +121,14 @@ run_selftest notes               env NOTES_SELFTEST=1               sh scripts/n
 #
 # A self-skipping REGRESSION test stops protecting you wherever it skips, unlike
 # an advisory linter, so AGENTMUX_REQUIRE_MOUSE_TESTS=1 (set in CI) turns a
-# missing dependency into a failure rather than a skip.
+# missing dependency, OR an installed tmux too old for the suite's
+# `command-prompt -l` (needs >= 3.6 — see scripts/tmux_version.sh), into a
+# failure rather than a skip. The three outcomes are classified distinctly so a
+# CI failure explains itself instead of reading like a flaky test:
+#   dependency missing      -> skip (fail under AGENTMUX_REQUIRE_MOUSE_TESTS=1)
+#   tmux present, too old   -> skip (fail under AGENTMUX_REQUIRE_MOUSE_TESTS=1),
+#                               message names the version found
+#   capable                 -> run the suite
 mouse_missing=""
 command -v expect >/dev/null 2>&1 || mouse_missing="expect"
 command -v tmux   >/dev/null 2>&1 || mouse_missing="${mouse_missing:+$mouse_missing, }tmux"
@@ -133,8 +140,18 @@ if [ -n "$mouse_missing" ]; then
     skipped "tests/mouse (not installed: $mouse_missing)"
   fi
 else
+  # shellcheck source=scripts/tmux_version.sh
+  . "$SCRIPT_DIR/scripts/tmux_version.sh"
+  mouse_tmux_raw="$(tmux -V 2>/dev/null)"
+  if ! _amux_tmux_capable "$mouse_tmux_raw"; then
+    mouse_msg="tests/mouse (needs tmux >= ${_AMUX_TMUX_MIN_MAJOR}.${_AMUX_TMUX_MIN_MINOR} for command-prompt -l, found ${AMUX_TMUX_PARSED})"
+    if [ "${AGENTMUX_REQUIRE_MOUSE_TESTS:-}" = 1 ]; then
+      failed "$mouse_msg"
+    else
+      skipped "$mouse_msg"
+    fi
   # Captured, not re-run on failure: one run costs ~1 minute.
-  if mouse_out="$(bash tests/mouse/run.sh 2>&1)"; then
+  elif mouse_out="$(bash tests/mouse/run.sh 2>&1)"; then
     pass "tests/mouse (status-bar click suite)"
   else
     failed "tests/mouse (status-bar click suite)"

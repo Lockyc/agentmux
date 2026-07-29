@@ -167,8 +167,9 @@ shellcheck, the `fish -n` syntax check, every selftest below, and the
 `tests/mouse` click suite; it prints a per-check pass/fail line and a summary, and
 exits non-zero if anything fails. It's runnable from any cwd and is what CI runs
 (`.github/workflows/ci.yml`, on push to `dev`/`main` and every PR — the runner
-installs `tmux` and `expect` so the tmux-gated selftests and the click suite
-actually run rather than self-skip).
+installs `tmux` and `expect`, then a dedicated step builds tmux from source when
+the packaged version is below the click suite's 3.6 floor, so the tmux-gated
+selftests and the click suite actually run rather than self-skip).
 
 **On a heavily-loaded machine, prefer the individual selftests below for local
 checks and let CI run the aggregate `bash test.sh`.** It's bounded — one
@@ -310,11 +311,17 @@ AMUX_MOUSE_VERBOSE=1 bash tests/mouse/run.sh  # every assertion, not just failur
 
 **`expect` is a test-only dependency**, exactly like `shellcheck` — needed to develop
 agentmux, never to run it, so the Stack section's "`toml2json` + `jq` are the only
-runtime dependencies" still holds. `test.sh` skips this check with a note when
-`expect` or `tmux` is missing, **except** under `AGENTMUX_REQUIRE_MOUSE_TESTS=1`
-(set by CI), where a missing dependency fails instead: a self-skipping *regression*
-test stops protecting you wherever it skips, unlike an advisory linter, so CI must
-not be able to pass by skipping it.
+runtime dependencies" still holds. **tmux must also be >= 3.6** — the suite clicks
+through `command-prompt -l` (`scripts/notes.sh`), which doesn't exist before that
+release; the floor and the `tmux -V` parse are single-sourced in
+`scripts/tmux_version.sh`, consumed by both `tests/mouse/run.sh`'s preflight (hard
+abort) and `test.sh`'s classification below. `test.sh` skips this check with a note
+when `expect`/`tmux` is missing **or** an installed tmux is below 3.6 (the message
+names the version found), **except** under `AGENTMUX_REQUIRE_MOUSE_TESTS=1` (set by
+CI), where either condition fails instead: a self-skipping *regression* test stops
+protecting you wherever it skips, unlike an advisory linter, so CI must not be able
+to pass by skipping it — CI's workflow also builds tmux from source when the
+packaged version lags, so the runner is actually capable rather than hoped to be.
 
 It is **slower than the other selftests (~1 minute)** — it drives real pty clients
 and must settle between clicks — so run it directly while iterating and let `test.sh`

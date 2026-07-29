@@ -44,10 +44,23 @@ Full pty transcripts land in `tests/mouse/last-run/` (generated, gitignored).
 are still only `toml2json` + `jq`. `expect` ships at `/usr/bin/expect` on macOS and
 is one apt package on Linux.
 
-`test.sh` skips this check with a note when either is missing — **except** under
-`AGENTMUX_REQUIRE_MOUSE_TESTS=1` (set by CI), where a missing dependency fails
+**tmux must be >= 3.6.** The suite clicks through `scripts/notes.sh`'s `click` case,
+which uses `command-prompt -l` — added in tmux 3.6 (README Prerequisites; verified
+against tmux's own `CHANGES`, section "CHANGES FROM 3.5a TO 3.6") — so an older tmux
+can't run it at all. `run.sh`'s preflight and `test.sh`'s classification of this block
+both parse `tmux -V` and compare against that floor via the single shared
+`scripts/tmux_version.sh` (its header documents the parse: a letter suffix like
+`3.7b` is a patch release *above* that minor, and an unparseable version string is
+treated as capable rather than blocked, since it's far more likely a bleeding-edge
+build than an ancient one).
+
+`test.sh` skips this check with a note when `expect`/`tmux` is missing, **or** when an
+installed tmux is below 3.6 (the message names the version found) — **except** under
+`AGENTMUX_REQUIRE_MOUSE_TESTS=1` (set by CI), where either condition fails the build
 instead. A self-skipping *regression test* silently stops protecting you wherever it
-skips, unlike an advisory linter, so CI must not be able to pass by skipping it.
+skips, unlike an advisory linter, so CI must not be able to pass by skipping it — which
+is also why CI's workflow builds tmux from source when the packaged version lags,
+rather than relying on apt to already be new enough.
 
 ## What it covers
 
