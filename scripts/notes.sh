@@ -23,6 +23,12 @@ NT_MARK='✎ '
 # Shown on row 1 when notes mode is on and all three notes are empty. Carries a
 # style directive of OUR OWN — added after escaping, never escaped itself.
 NT_HINT='#[fg=colour240]✎ click a row to write a note'
+# Shown on row 4 (the always-on note line) when slot 4 is empty. Separate from
+# NT_HINT because the two empty-states are independent: NT_HINT is about slots
+# 1-3 and only ever appears in notes mode, while this one is on screen from
+# launch and is the discovery path into writing a note at all. Carries a style
+# directive of OUR OWN — added after escaping, never escaped itself.
+NT_HINT4='#[fg=colour240]✎ click to add a note'
 
 # _nt_row <mouse_status_range> -> 1|2|3 on stdout, or nothing.
 # tmux sets mouse_status_range to the bare `X` of range=user|X, but accept a
@@ -34,6 +40,7 @@ _nt_row() {
     amuxnote1|user\|amuxnote1) printf '1' ;;
     amuxnote2|user\|amuxnote2) printf '2' ;;
     amuxnote3|user\|amuxnote3) printf '3' ;;
+    amuxnote4|user\|amuxnote4) printf '4' ;;
     *) : ;;
   esac
 }
@@ -45,11 +52,26 @@ _nt_esc() {
   printf '%s' "$1" | sed 's/#/##/g'
 }
 
-# _nt_display <row> <raw1> <raw2> <raw3> -> the finished display string.
-# All three raws are passed because row 1's content depends on whether ANY note
-# exists (the empty-state hint replaces it when none do).
+# _nt_display <row> <raw1> <raw2> <raw3> <raw4> -> the finished display string.
+# Raws 1-3 are all passed because row 1's content depends on whether any of
+# THOSE THREE exists (the empty-state hint). Raw 4 is passed separately and is
+# read only by row 4.
 _nt_display() {
-  _d_r=$1; _d_1=$2; _d_2=$3; _d_3=$4
+  _d_r=$1; _d_1=$2; _d_2=$3; _d_3=$4; _d_4=$5
+  # Row 4 — the always-on note line. Answered FIRST and from slot 4 alone: it
+  # is not part of the rows-1-3 empty-state below, and it never reads
+  # @amux_notes, so its content is identical in summary and notes mode.
+  if [ "$_d_r" = 4 ]; then
+    if [ -z "$_d_4" ]; then
+      printf '%s' "$NT_HINT4"
+    else
+      # NT_MARK is prepended AFTER escaping: it is our directive, not user text.
+      # Row 4 always carries it, so the row reads as a note rather than as a
+      # fourth summary row.
+      printf '%s%s' "$NT_MARK" "$(_nt_esc "$_d_4")"
+    fi
+    return 0
+  fi
   if [ -z "$_d_1" ] && [ -z "$_d_2" ] && [ -z "$_d_3" ]; then
     # Nothing written yet: one dim hint on row 1 so notes mode never looks
     # broken and the rows advertise that they are clickable.
@@ -69,15 +91,18 @@ _nt_raw() {
   tmux show-options -p -v -t "$1" "@amux_note_raw$2" 2>/dev/null
 }
 
-# _nt_render <pane> — recompose all three display options from the raws.
-# All three are rewritten every time because row 1's content depends on whether
-# ANY note exists (the empty-state hint).
+# _nt_render <pane> — recompose all four display options from the raws.
+# Rows 1-3 are all rewritten every time because row 1's content depends on
+# whether any of them exists (the empty-state hint). Row 4 is rewritten
+# unconditionally too: it is cheap, and it means the value is already correct
+# if the fourth row is switched on later without a fresh edit.
 _nt_render() {
   _rp=$1
   _r1=$(_nt_raw "$_rp" 1); _r2=$(_nt_raw "$_rp" 2); _r3=$(_nt_raw "$_rp" 3)
-  for _i in 1 2 3; do
+  _r4=$(_nt_raw "$_rp" 4)
+  for _i in 1 2 3 4; do
     tmux set-option -p -t "$_rp" "@amux_note$_i" \
-      "$(_nt_display "$_i" "$_r1" "$_r2" "$_r3")" 2>/dev/null
+      "$(_nt_display "$_i" "$_r1" "$_r2" "$_r3" "$_r4")" 2>/dev/null
   done
   tmux refresh-client -S 2>/dev/null
 }
@@ -222,25 +247,41 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   ck esc-empty   "$(_nt_esc '')"             ''
 
   # --- _nt_display: all three empty -> hint on row 1, others blank ---------
-  ck disp-hint1  "$(_nt_display 1 '' '' '')" "$NT_HINT"
-  ck disp-hint2  "$(_nt_display 2 '' '' '')" ''
-  ck disp-hint3  "$(_nt_display 3 '' '' '')" ''
+  ck disp-hint1  "$(_nt_display 1 '' '' '' '')" "$NT_HINT"
+  ck disp-hint2  "$(_nt_display 2 '' '' '' '')" ''
+  ck disp-hint3  "$(_nt_display 3 '' '' '' '')" ''
 
   # --- _nt_display: any content -> hint gone, mark leads row 1 -------------
-  ck disp-r1     "$(_nt_display 1 'deploy blocked' 'ask sam' '')" "${NT_MARK}deploy blocked"
-  ck disp-r2     "$(_nt_display 2 'deploy blocked' 'ask sam' '')" 'ask sam'
-  ck disp-r3     "$(_nt_display 3 'deploy blocked' 'ask sam' '')" ''
+  ck disp-r1     "$(_nt_display 1 'deploy blocked' 'ask sam' '' '')" "${NT_MARK}deploy blocked"
+  ck disp-r2     "$(_nt_display 2 'deploy blocked' 'ask sam' '' '')" 'ask sam'
+  ck disp-r3     "$(_nt_display 3 'deploy blocked' 'ask sam' '' '')" ''
   # Row 1 empty but others filled: mark still shows, so the mode stays visible.
-  ck disp-mark   "$(_nt_display 1 '' 'ask sam' '')" "$NT_MARK"
+  ck disp-mark   "$(_nt_display 1 '' 'ask sam' '' '')" "$NT_MARK"
   # Escaping is applied by _nt_display, on user text only.
-  ck disp-esc    "$(_nt_display 2 '' 'fix #42' '')" 'fix ##42'
-  ck disp-esc1   "$(_nt_display 1 'PR #7' '' '')"   "${NT_MARK}PR ##7"
+  ck disp-esc    "$(_nt_display 2 '' 'fix #42' '' '')" 'fix ##42'
+  ck disp-esc1   "$(_nt_display 1 'PR #7' '' '' '')"   "${NT_MARK}PR ##7"
 
   # Feeding display output back in DOES double-escape — which is exactly why
   # the raw text is kept in a separate option and _nt_display is only ever
   # given raws. This asserts the hazard is real, so the two-option split can
   # never be "simplified" away without a red test.
-  ck disp-reesc  "$(_nt_display 2 '' "$(_nt_display 2 '' 'fix #42' '')" '')" 'fix ####42'
+  ck disp-reesc  "$(_nt_display 2 '' "$(_nt_display 2 '' 'fix #42' '' '')" '' '')" 'fix ####42'
+
+  # --- _nt_display row 4: the always-on note line --------------------------
+  # Row 4 reads ONLY slot 4. Both independence directions are asserted below,
+  # because the whole point of the row is that it does not participate in the
+  # rows-1-3 empty-state or the mode swap.
+  ck disp4-hint  "$(_nt_display 4 '' '' '' '')"          "$NT_HINT4"
+  ck disp4-text  "$(_nt_display 4 '' '' '' 'ship it')"   "${NT_MARK}ship it"
+  ck disp4-esc   "$(_nt_display 4 '' '' '' 'fix #42')"   "${NT_MARK}fix ##42"
+  # A note in slot 4 must NOT suppress row 1's own hint …
+  ck disp4-indep1 "$(_nt_display 1 '' '' '' 'ship it')"  "$NT_HINT"
+  # … and notes in slots 1-3 must NOT fill row 4.
+  ck disp4-indep2 "$(_nt_display 4 'deploy blocked' 'ask sam' 'x' '')" "$NT_HINT4"
+
+  # --- _nt_row: slot 4 -----------------------------------------------------
+  ck row-four    "$(_nt_row amuxnote4)"        "4"
+  ck row-four-p  "$(_nt_row 'user|amuxnote4')" "4"
 
   # --- tmux-touching blocks ------------------------------------------------
   # Isolated under a throwaway TMUX_TMPDIR, reaped by the EXIT trap below —
@@ -405,6 +446,23 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     ck tm-click "$(_get @amux_notes)" '1'
     # Reset so it doesn't leak into the rowsafe assertion below.
     tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
+
+    # Slot 4 renders from its own raw, and does so in SUMMARY mode (the mode
+    # flag was unset just above) — the row is mode-independent by design.
+    _set @amux_note_raw4 'ship it'
+    env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
+    ck tm-r4      "$(_get @amux_note4)" "${NT_MARK}ship it"
+    ck tm-r4raw   "$(_get @amux_note_raw4)" 'ship it'
+    # Independence: slot 4's content must not suppress row 1's own hint. Rows
+    # 1-3 are empty here except raw2, set earlier — clear it first so the
+    # rows-1-3 empty-state is the thing under test.
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw2 2>/dev/null
+    env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
+    ck tm-r4-indep "$(_get @amux_note1)" "$NT_HINT"
+    ck tm-r4-still "$(_get @amux_note4)" "${NT_MARK}ship it"
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw4 2>/dev/null
+    env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
+    ck tm-r4-hint "$(_get @amux_note4)" "$NT_HINT4"
 
     # The summary options are never touched by any of the above.
     _set @amux_row1 'ai summary'
