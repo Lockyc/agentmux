@@ -148,12 +148,31 @@ guard is seen to fire rather than merely to exist (`rewrite`, `binding`, `autoag
 2. **The no-status-rows trap.** The `client-attached` hook reaches
    `update_colors.sh`, which resets a multi-row `status N` to `status on` for any
    session lacking `@autoagent 1`, and drops it to `status 4` without
-   `@amux_note_row 1` (which is what selects five lines over four). With one status
-   line none of the note rows exist, every click lands on the window list, and the
-   suite passes nothing while looking busy. So the preflight asserts five status
-   lines actually *render* on the attached client — and the hook is **async**, so a
-   measurement taken the moment a client exists reads the pre-hook value and every
-   later click misses.
+   `@amux_note_row 1` (which is what selects five lines over four). The harness
+   also sets a third option alongside those two — the session-level `@amux_note4`
+   hint default, asked of `notes.sh hint 4` the same way `bin/amux` does at launch
+   (CLAUDE.md's row-4 footgun) — but that one doesn't affect the line count: skip
+   it and the five status lines still render fine, only check 2's hint assertion
+   fails. With one status line none of the note rows exist, every click lands on
+   the window list, and the suite passes nothing while looking busy. So the
+   preflight asserts five status lines actually *render* on the attached client —
+   and the hook is **async**, so a measurement taken the moment a client exists
+   reads the pre-hook value and every later click misses.
+
+**A fixture that renders before asserting can validate itself instead of the
+product.** `reset_to_summary` used to call `render`, invoking `scripts/notes.sh`'s
+`_nt_render` on the pane — the very write check 2 exists to prove `bin/amux`
+produces WITHOUT a render. `_nt_render` computes `@amux_note4` from scratch just
+like a real render would, so check 2 passed whether or not the product ever
+published the launch-time default itself — which is exactly how row 4 shipped
+blank (CLAUDE.md's row-4 footgun). `reset_to_summary` now deliberately skips the
+render (see its own comment in `lib.tcl`), leaving the pane in the genuinely
+un-rendered launch state. What stops this from re-forming is that check 2's
+assertion is paired, not single: pane-scope `@amux_note4` must be **unset**
+(nothing rendered this pane) *and* the format-chain lookup must still resolve to
+the hint (so it can only have come from the session-level default) — a fixture
+that renders again makes the first half false, so it fails loudly instead of
+quietly re-passing.
 
 **`tmux kill-server` returns before its teardown hooks finish.** Destroying the
 windows fires `agentmux.conf`'s `window-unlinked` hook, whose

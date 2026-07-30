@@ -169,13 +169,23 @@ notes_mode
 eq "rows 1-3 show their own empty-state hint" [opt @amux_note1] \
    "#\[fg=colour240\]✎ click a row to write a note"
 eq "row 4 is unaffected by the mode" [opt @amux_note4] "✎ row four note"
+# Seed a value the escape must leave INTACT. reset_to_summary already unset
+# @amux_note_raw1, so asserting "" below would be the pre-state and would pass
+# identically whether escape correctly discarded the prompt or the click never
+# reached notes.sh at all — check 9 already covers "typing then escaping loses
+# the draft"; this is about the assertion being self-sufficient, same
+# non-vacuity discipline as checks 1 and 2 above.
+tmA set-option -p -t $mtpane @amux_note_raw1 "keep me"
 click 5 $L1
 ok "a \`note 1>\` prompt opened" [expr {[wp "note 1>"] eq "MATCH"}]
 eq "@amux_notes still on" [opt @amux_notes] "1"
 eq "@amux_row1 untouched by notes.sh" [opt @amux_row1] $SUMMARY(1)
 esc
 settle 1
-eq "escape left the note unwritten" [opt @amux_note_raw1] ""
+eq "escape left the seeded note untouched" [opt @amux_note_raw1] "keep me"
+# Clear the seed — checks 4+ assume a clean @amux_note_raw1 and don't call
+# reset_to_summary themselves (this check didn't touch it before this seed).
+tmA set-option -up -t $mtpane @amux_note_raw1
 chkend
 
 # ---------------------------------------------------------------------------

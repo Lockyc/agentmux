@@ -336,8 +336,22 @@ _amux_note_row() {
 # launch_agent.sh, plus split panes) — and a real note, always written
 # pane-level, shadows it. One fork per launch, only when the row is enabled;
 # never one per window.
+#
+# Empty output here (missing/unreadable notes.sh, a mis-resolved AGENTMUX_SCRIPTS)
+# must NOT become an explicit @amux_note4 "" — that republishes, with no trace of
+# why, the exact blank-row bug this default exists to fix. So this returns
+# non-zero on empty and warns to stderr, same convention as the [amux] prefix
+# collision guard and the unknown-bar-colour guard above: degraded state is
+# surfaced, never swallowed. The caller (below) checks the exit status and skips
+# the publish on failure, leaving @amux_note4 unset rather than clobbered.
 _amux_note_hint4() {
-  sh "$AGENTMUX_SCRIPTS/notes.sh" hint 4 2>/dev/null
+  local h
+  h=$(sh "$AGENTMUX_SCRIPTS/notes.sh" hint 4 2>/dev/null)
+  if [ -z "$h" ]; then
+    echo "amux: could not read row 4's hint from notes.sh ($AGENTMUX_SCRIPTS/notes.sh missing or unreadable?) — row 4 will show blank until a note is written" >&2
+    return 1
+  fi
+  printf '%s' "$h"
 }
 
 # The effective frame prefix for $PWD: [frame] prefix, or frame.conf's built-in
@@ -1286,7 +1300,7 @@ _amux_ensure_agent_session() {
   # separate call is an exec + socket round-trip. ORDERING IS LOAD-BEARING:
   # @autoagent and @l1reserved must be set BEFORE the caller attaches (update_colors.sh
   # only paints @autoagent sessions; the reservation must be published pre-attach).
-  local _prefix _pin_slot _reserved _note_row
+  local _prefix _pin_slot _reserved _note_row _hint4
   _prefix=$(_amux_prefix)
   _pin_slot=$(_amux_bar_pin_slot "$PWD")
   _reserved=$(_amux_bar_reserved)
@@ -1305,10 +1319,13 @@ _amux_ensure_agent_session() {
   # that was never set exits 0 (verified, tmux 3.7b), so the else branch is safe on
   # a session that never carried either option and cannot abort the rest of the
   # ';'-chained batch. @amux_note4 is the launch-time hint default — see
-  # _amux_note_hint4 for why row 4 needs one at all.
+  # _amux_note_hint4 for why row 4 needs one at all, and why a failed lookup
+  # (empty output) must skip this set rather than publish an explicit "".
   if [ -n "$_note_row" ]; then
-    _opts+=(';' set-option -t "$name" @amux_note_row 1
-            ';' set-option -t "$name" @amux_note4 "$(_amux_note_hint4)")
+    _opts+=(';' set-option -t "$name" @amux_note_row 1)
+    if _hint4=$(_amux_note_hint4); then
+      _opts+=(';' set-option -t "$name" @amux_note4 "$_hint4")
+    fi
   else
     _opts+=(';' set-option -u -t "$name" @amux_note_row
             ';' set-option -u -t "$name" @amux_note4)
