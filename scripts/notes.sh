@@ -24,11 +24,29 @@
 #
 # Test: NOTES_SELFTEST=1 sh scripts/notes.sh
 
-# Mode indicator, leading row 1 whenever notes mode is on.
+# Note-row indicator. Leads EVERY row that is currently showing a note — rows 1-3
+# while notes mode is on, and row 4 always — so the mark reads as "this row is a
+# note row" rather than as a property of one particular row. A row whose note is
+# empty still carries it, which is what makes the set of note rows legible at a
+# glance instead of looking like blank filler.
 NT_MARK='✎ '
-# Shown on row 1 when notes mode is on and all three notes are empty. Carries a
-# style directive of OUR OWN — added after escaping, never escaped itself.
-NT_HINT='#[fg=colour240]✎ click a row to write a note'
+# Shown on row 1 when notes mode is on and all three notes are empty.
+#
+# STYLED WITH AN ATTRIBUTE, NEVER A COLOUR. A fixed `fg=colour240` was
+# unreadable on most of the bar palette: the row's background is a per-session
+# shade (@l2bg) spanning the whole 256-colour cube, so one hardcoded grey is
+# low-contrast against much of it. `#[dim]` instead inherits the fg that
+# status-format already resolved for the row (@l2fg — chosen as legible against
+# @l2bg by construction) and only dims it, so it is readable on every palette
+# entry and degrades to plain readable text where dim is unsupported.
+#
+# It cannot be made adaptive with a format instead: `#{?…}` inside a substituted
+# OPTION VALUE is not expanded (verified — only `#{E:…}` expands, and using that
+# on these rows would also expand format directives inside USER NOTE TEXT, which
+# is exactly what the `#`-doubling in _nt_esc exists to prevent).
+#
+# Carries a style directive of OUR OWN — added after escaping, never escaped.
+NT_HINT='#[dim]✎ click a row to write a note'
 # Shown on row 4 (the always-on note line) when slot 4 is empty. Separate from
 # NT_HINT because the two empty-states are independent: NT_HINT is about slots
 # 1-3 and only ever appears in notes mode, while this one is on screen from
@@ -43,7 +61,7 @@ NT_HINT='#[fg=colour240]✎ click a row to write a note'
 # subcommand below so the literal stays here alone. tmux resolves
 # pane->window->session->global, so a rendered pane shadows the default and the
 # two can never disagree.
-NT_HINT4='#[fg=colour240]✎ click to add a note'
+NT_HINT4='#[dim]✎ click to add a note'
 
 # _nt_row <mouse_status_range> -> 1|2|3 on stdout, or nothing.
 # tmux sets mouse_status_range to the bare `X` of range=user|X, but accept a
@@ -93,11 +111,14 @@ _nt_display() {
     [ "$_d_r" = 1 ] && printf '%s' "$NT_HINT"
     return 0
   fi
+  # NT_MARK is prepended AFTER escaping: it is our directive, not user text.
+  # EVERY row carries it, empty or not — the mark identifies a note row, so
+  # marking only the first one made rows 2 and 3 read as blank filler rather
+  # than as writable rows.
   case "$_d_r" in
-    # NT_MARK is prepended AFTER escaping: it is our directive, not user text.
     1) printf '%s%s' "$NT_MARK" "$(_nt_esc "$_d_1")" ;;
-    2) _nt_esc "$_d_2" ;;
-    3) _nt_esc "$_d_3" ;;
+    2) printf '%s%s' "$NT_MARK" "$(_nt_esc "$_d_2")" ;;
+    3) printf '%s%s' "$NT_MARK" "$(_nt_esc "$_d_3")" ;;
   esac
 }
 
@@ -221,6 +242,21 @@ case "${1:-}" in
     # Render before prompting so the display options exist even on a pane that
     # has never rendered (e.g. the first click of a session).
     _nt_render "$_cp"
+    # Open the prompt ON THE ROW BEING EDITED. `message-line` sets which status
+    # line carries messages and the command prompt; tmux's default is 0, which
+    # is our WINDOW LIST — so editing any note covered the tab bar while you
+    # typed, and the row you clicked sat untouched below it. Our rows sit at
+    # status-format[1..4] and message-line takes 0-4, so the row number IS the
+    # line number and no mapping is needed.
+    #
+    # Set, never restored: there is no hook for the prompt being dismissed with
+    # Escape (only the commit template runs), so a restore would only fire on
+    # some exits and leave the value inconsistent on others. Leaving it is
+    # harmless and self-correcting — every click sets it to the row it is about
+    # to edit, and the only other things drawn on that line are amux's own
+    # occasional one-line messages, which are transient and equally readable
+    # there. It is a SESSION option, so this never leaks between projects.
+    tmux set-option -t "$_cp" message-line "$_cr" 2>/dev/null
     # %%% (see below) escapes quotation marks (and `\ $ ; ~`) in the typed
     # response, so it is stored literally and cannot inject a tmux command.
     #
@@ -293,19 +329,19 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
 
   # --- _nt_display: any content -> hint gone, mark leads row 1 -------------
   ck disp-r1     "$(_nt_display 1 'deploy blocked' 'ask sam' '' '')" "${NT_MARK}deploy blocked"
-  ck disp-r2     "$(_nt_display 2 'deploy blocked' 'ask sam' '' '')" 'ask sam'
-  ck disp-r3     "$(_nt_display 3 'deploy blocked' 'ask sam' '' '')" ''
+  ck disp-r2     "$(_nt_display 2 'deploy blocked' 'ask sam' '' '')" "${NT_MARK}ask sam"
+  ck disp-r3     "$(_nt_display 3 'deploy blocked' 'ask sam' '' '')" "$NT_MARK"
   # Row 1 empty but others filled: mark still shows, so the mode stays visible.
   ck disp-mark   "$(_nt_display 1 '' 'ask sam' '' '')" "$NT_MARK"
   # Escaping is applied by _nt_display, on user text only.
-  ck disp-esc    "$(_nt_display 2 '' 'fix #42' '' '')" 'fix ##42'
+  ck disp-esc    "$(_nt_display 2 '' 'fix #42' '' '')" "${NT_MARK}fix ##42"
   ck disp-esc1   "$(_nt_display 1 'PR #7' '' '' '')"   "${NT_MARK}PR ##7"
 
   # Feeding display output back in DOES double-escape — which is exactly why
   # the raw text is kept in a separate option and _nt_display is only ever
   # given raws. This asserts the hazard is real, so the two-option split can
   # never be "simplified" away without a red test.
-  ck disp-reesc  "$(_nt_display 2 '' "$(_nt_display 2 '' 'fix #42' '' '')" '' '')" 'fix ####42'
+  ck disp-reesc  "$(_nt_display 2 '' "$(_nt_display 2 '' 'fix #42' '' '')" '' '')" "${NT_MARK}${NT_MARK}fix ####42"
 
   # --- _nt_display row 4: the always-on note line --------------------------
   # Row 4 reads ONLY slot 4. Both independence directions are asserted below,
@@ -436,14 +472,14 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     # render escapes '#' from the raw into the display option.
     _set @amux_note_raw2 'fix #42'
     env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
-    ck tm-esc  "$(_get @amux_note2)" 'fix ##42'
+    ck tm-esc  "$(_get @amux_note2)" "${NT_MARK}fix ##42"
     ck tm-mark "$(_get @amux_note1)" "$NT_MARK"
     # The RAW option is never rewritten — it is the prefill source.
     ck tm-raw  "$(_get @amux_note_raw2)" 'fix #42'
 
     # render is idempotent: re-running must not double-escape.
     env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
-    ck tm-idem "$(_get @amux_note2)" 'fix ##42'
+    ck tm-idem "$(_get @amux_note2)" "${NT_MARK}fix ##42"
 
     # toggle flips the mode flag on, then off.
     env -u NOTES_SELFTEST sh "$0" toggle "$_pane" 2>/dev/null

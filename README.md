@@ -464,7 +464,7 @@ row = true
 
 (`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) Apply a change to it with **`amux --reload`**, which pushes it to every live agent session at once — in both directions, without detaching. Running `amux` in the project again also works (a re-attach is enough; you don't have to kill the session), since the setting is published on every launch. Under `--frame` that launch-path publish rides the frame's build, so a relaunch reusing a healthy frame keeps the previous setting until the frame itself is rebuilt — `--reload` reaches it regardless.
 
-Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
+Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. The prompt opens **on the row you clicked**, so it never covers the tab bar while you type. Every row currently showing a note leads with `✎`, empty or not, so the note rows are identifiable at a glance. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
 
 Five is tmux's own maximum number of status lines, which is why there's no fifth agentmux row.
 
