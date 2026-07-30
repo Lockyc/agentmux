@@ -146,7 +146,7 @@ All of these are pressed **after the prefix** (`C-b` by default).
 | `prefix m` | Cycle `@agent-mode` through your defined agents (agentmux sessions only) |
 | `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched. agentmux already knows the session id and which wrapper to launch it with, so there is nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
 | `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
-| `prefix N` | Toggle this tab's three summary rows between the AI summary and your own notes. In notes mode, **click any row** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). Clicking a row while the AI summary is showing switches to notes and edits that row, so the keys are optional. Notes are per-tab and live in memory: they survive `prefix x`, but not a crash, `amux --kill`, or a reboot. The AI summary keeps updating underneath, so toggling back shows a current one |
+| `prefix N` | Toggle this tab's three summary rows between the AI summary and notes 1-3. In notes mode, **click any of those rows** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). While the AI summary is showing, rows 1-3 are click-inert (a click does nothing) — press `prefix N` first. The optional fourth row (see [AI summary status lines](#ai-summary-status-lines)) is unaffected by this toggle and clickable either way. Notes are per-tab and live in memory: they survive `prefix x`, but not a crash, `amux --kill`, or a reboot. The AI summary keeps updating underneath, so toggling back shows a current one |
 
 ### Customizing tmux (per-role overlays)
 
@@ -452,6 +452,21 @@ tmux refresh-client -S
 ```
 
 The format is a single line: `<subject>. done: <text>; now: <text>; next: <text>` — any of the `done`/`now`/`next` labels may be omitted.
+
+### The always-on note row
+
+An optional **fourth status row** is a note line that stays on screen all the time, independent of whichever content rows 1-3 are showing. It's opt-in per project:
+
+```toml
+[notes]
+row = true
+```
+
+(`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) It takes effect on the **next launch** of that project: the setting is published to the session once, at creation, so a session already running won't pick it up, and `amux --reload` won't add it either.
+
+Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
+
+Five is tmux's own maximum number of status lines, which is why there's no fifth agentmux row.
 
 ## Session colours
 

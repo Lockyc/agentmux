@@ -89,7 +89,7 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 | `scripts/clear_icon.sh` | `prefix v` binding target — one-shot strips the leading state emoji off the current window name (emoji-agnostic; relies on `tmux-status.sh`'s `"<emoji> <label>"` invariant). Hooks re-badge on the next event |
 | `scripts/claude/` | Claude Code adapter scripts (`status.sh`, `ctx.sh`, `digest.sh`, `goal.sh`) |
 | `scripts/fork_session.sh` | `prefix f` binding target — forks the current tab's agent session into a new tab, using the `fork_cmd` its adapter recorded in the session log. Passes the fork command as the new window's `pane_start_command`, which is what makes `launch_agent.sh` skip its auto-launch |
-| `scripts/notes.sh` | `prefix N` and status-row click target — per-tab notes in the three summary rows. Writes `@amux_note_rawN` (what you typed, the prefill source) and `@amux_noteN` (escaped for display); `@amux_notes` selects which the row shows. Never touches `@amux_rowN`, so the summary pipeline is untouched and toggling back shows a current summary |
+| `scripts/notes.sh` | `prefix N` and status-row click target — per-tab notes in the status rows. Slots 1-3 ride the summary/notes swap (`@amux_notes`); **slot 4 is the always-on note line** on `status-format[4]`, outside the swap entirely — it reads only its own raw, carries its own empty-state hint, and never touches the mode flag. Writes `@amux_note_rawN` (what you typed, the prefill source) and `@amux_noteN` (escaped for display). Never touches `@amux_rowN`, so the summary pipeline is untouched and toggling back shows a current summary. Rows 1-3 are click-INERT while the summaries show — clicking one no longer enters notes mode (row 4 is the summary-mode click target) |
 | `scripts/session_log.sh` | Durable open/close ledger of agent windows amux opens, for crash recovery. The `dropped [<cwd>\|--global\|--new <cwd>\|--pending <cwd>]` subcommand emits restorable dropped tabs (agent tab, dead server, open-at-death, resume-program-swapped from `[[agents]] resume`); `amux`'s launch picker (and `amux --restore`) consume it. `--new` gates the launch offer once per (dead-server, cwd) via the `notified` marker; `--pending` applies that gate **read-only** — it's what the CWD-derived `amux --probe` uses to exit 3 ("restorable"), and a marking read there would let warden's poll burn the offer. `--pending` is answered from the live-set sidecars and emits only the literal line `pending`; the row contract above is the **ledger fallback's** (see the presence-dot footgun). `migrate` is the one-shot backfill that brings a pre-existing `live/` up to that sidecar contract. The `forkcmd [target]` subcommand emits `agent<TAB>fork_cmd` for one LIVE window, program-swapped the same way; `scripts/fork_session.sh` consumes it. `prune` (run from every `sl_open`, self-gated on `AGENTMUX_LOG_MAX_LINES`) trims the ledger, the `notified` marker and the `live/` sidecars to that reachable set — see the footgun |
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
@@ -306,9 +306,13 @@ defects it hides are silent (the worst found: `command-prompt` substitutes *all*
 silently do nothing at all).
 
 ```bash
-bash tests/mouse/run.sh                       # 9 checks; from any cwd
+bash tests/mouse/run.sh                       # 11 checks; from any cwd
 AMUX_MOUSE_VERBOSE=1 bash tests/mouse/run.sh  # every assertion, not just failures
 ```
+
+The suite runs at five status lines and sets `@amux_note_row 1` itself, since
+`update_colors.sh` picks `status 4` without it — one fewer row than the suite's
+own checks need.
 
 **`expect` is a test-only dependency**, exactly like `shellcheck` — needed to develop
 agentmux, never to run it, so the Stack section's "`toml2json` + `jq` are the only

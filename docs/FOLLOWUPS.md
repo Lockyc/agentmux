@@ -231,3 +231,25 @@ since most of agentmux works fine on an older tmux) when it's under 3.6.
 **Trigger to revisit:** another feature raises the minimum further, or a user reports
 hitting the notes-feature silent-failure mode despite the README already stating the
 requirement.
+
+## A keyboard path to edit a note
+
+**Status:** deferred — clicking already covers writing/editing a note; nothing yet opens
+the prompt from the keyboard.
+
+**Where:** `scripts/notes.sh` → `click` subcommand; the binding lives in
+`tmux/agentmux.conf`.
+
+**What:** clicking is currently the *only* way to write or edit a note — `prefix N`
+toggles which rows are shown, but nothing opens the `note N>` prompt from the keyboard.
+Pre-existing since the notes feature shipped, but more noticeable now that the always-on
+fourth row puts a note line on screen from launch rather than only after `prefix N`.
+
+**Fix when acted on:** small, and needs no new state — a `bind-key` that runs `notes.sh
+click` for a chosen row with `#{client_tty}`, exactly as the mouse binding does. The
+prompt, prefill, escaping and render paths are already there and row-agnostic; only the
+binding is missing.
+
+**Trigger to revisit:** none identified yet. The open question when picked up is only
+which key, and whether it targets row 4 (the always-visible one) or prompts for a row
+number.
