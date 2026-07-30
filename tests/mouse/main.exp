@@ -370,6 +370,45 @@ ok "no `needs tmux 3.6+` message anywhere in the transcript" \
    [expr {![string match "*needs tmux 3.6*" [logtext]]}]
 chkend
 
+
+# ---------------------------------------------------------------------------
+# 10 — row 4's copy+clear button, and its undo. The button is a SECOND range on
+# the same status line as the note, so this is the check that the two do not
+# collide: a click at column 1 must hit the button, while the column-5 clicks
+# every other check uses must still reach the note.
+# ---------------------------------------------------------------------------
+chk 10 "row 4's copy+clear button and undo"
+reset_to_summary
+tmA set-option -p -t $mtpane @amux_note_raw4 "ship it"
+render
+eq "button offers copy while a note is held" [opt @amux_btn4] "⧉ "
+
+click 1 $L4
+# The button must NOT open a prompt — it acts immediately.
+ok "no note prompt opened by the button" [noprompt 3]
+waitopt @amux_note_raw4 ""
+eq "note cleared" [opt @amux_note_raw4] ""
+eq "cleared text kept for undo" [opt @amux_note_raw_prev4] "ship it"
+# The tmux buffer is the backstop that makes the destructive clear safe.
+eq "text landed on the tmux paste buffer" [string trim [tmA show-buffer]] "ship it"
+eq "button flipped to undo" [opt @amux_btn4] "↩ "
+eq "row 4 fell back to its hint" [opt @amux_note4] "#\[dim\]✎ click to add a note"
+
+click 1 $L4
+waitopt @amux_note_raw4 "ship it"
+eq "second press restored the note" [opt @amux_note_raw4] "ship it"
+eq "undo was spent (one level, not a toggle)" [opt @amux_note_raw_prev4] ""
+eq "button back to copy" [opt @amux_btn4] "⧉ "
+
+# The note range still works at the usual column — the button did not swallow
+# the row. Positional proof that the two ranges coexist.
+click 5 $L4
+ok "column 5 still opens the note prompt" [expr {[wp "note 4>ship it"] eq "MATCH"}]
+esc
+settle 1
+eq "escape left the restored note intact" [opt @amux_note_raw4] "ship it"
+chkend
+
 # ---------------------------------------------------------------------------
 tmA detach-client -t $tty
 settle 1

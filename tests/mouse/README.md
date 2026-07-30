@@ -82,9 +82,9 @@ rather than relying on apt to already be new enough.
 
 - **`run.sh`** builds the isolated world (both servers, the path-rewritten confs)
   and asserts the setup guards, then runs the two drivers and prints the table.
-- **`main.exp`** — preflight plus checks 1–9, on a pty attached *directly* to the
+- **`main.exp`** — preflight plus checks 1–10, on a pty attached *directly* to the
   agent server.
-- **`frame.exp`** — check 10, on a pty attached to the *frame* server, whose pane
+- **`frame.exp`** — check 11, on a pty attached to the *frame* server, whose pane
   runs the agent client, so every click really traverses both layers.
 - **`lib.tcl`** — shared driver: clicks, prompt waits, option polling, bookkeeping,
   plus the `reset_to_summary`/`notes_mode` fixtures that put the pane into a known

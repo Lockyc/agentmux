@@ -464,7 +464,9 @@ row = true
 
 (`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) Apply a change to it with **`amux --reload`**, which pushes it to every live agent session at once — in both directions, without detaching. Running `amux` in the project again also works (a re-attach is enough; you don't have to kill the session), since the setting is published on every launch. Under `--frame` that launch-path publish rides the frame's build, so a relaunch reusing a healthy frame keeps the previous setting until the frame itself is rebuilt — `--reload` reaches it regardless.
 
-Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. The prompt opens **on the row you clicked**, so it never covers the tab bar while you type. Every row currently showing a note leads with `✎`, empty or not, so the note rows are identifiable at a glance. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
+Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. The prompt opens **on the row you clicked**, so it never covers the tab bar while you type.
+
+The row starts with a small button. While the row holds a note it shows `⧉` — click it to **copy the note and clear the row** in one action; the text goes to your system clipboard *and* the tmux paste buffer (`prefix ]` to paste it into a pane), so it survives even where no clipboard tool is available. The button then becomes `↩`, and one more click **restores the note**. The undo is a single level, not a stack: once restored, the button goes back to `⧉`. Every row currently showing a note leads with `✎`, empty or not, so the note rows are identifiable at a glance. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
 
 Five is tmux's own maximum number of status lines, which is why there's no fifth agentmux row.
 

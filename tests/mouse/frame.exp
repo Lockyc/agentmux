@@ -17,7 +17,7 @@
 source [file join [file dirname [info script]] lib.tcl]
 set mtpane [lindex $argv 5]
 
-chk 10 "framed / nested case"
+chk 11 "framed / nested case"
 
 set nb [tmB list-keys -T root]
 set ncount 0

@@ -63,6 +63,29 @@ NT_HINT='#[dim]✎ click a row to write a note'
 # two can never disagree.
 NT_HINT4='#[dim]✎ click to add a note'
 
+# Row 4's button slot, at the START of the row. Left, not right, because the
+# #{p400:…} pad that makes an empty row clickable across the full width consumes
+# the line — a right-aligned control would be pushed off screen by it.
+#
+# The slot carries its OWN trailing space and is emitted at a constant width by
+# _nt_btn, so status-format[4] substitutes it with no `#{pN:…}` pad. That is
+# deliberate: a pad in the conf would be a second place the width lives, and the
+# two would drift. The width being constant is what stops the note text shifting
+# as the button changes state — with a note it offers copy+clear, after a clear
+# it offers undo, and with neither it is blank.
+#
+# Row 4 only. Rows 1-3 share their line with the AI summary, so a slot there
+# would either indent every summary permanently or appear and vanish on each
+# `prefix N` — a shifting layout for a control that applies in one mode only.
+# All three states are the SAME WIDTH, including the blank one — that is what
+# "constant" means above, and the blank state is two spaces rather than an empty
+# string on purpose: an empty slot would let the note text jump two columns left
+# the moment a row has nothing to copy, which is exactly the layout instability
+# the fixed slot exists to prevent. A click on the blank slot is a no-op.
+NT_COPY='⧉ '
+NT_UNDO='↩ '
+NT_BTN_NONE='  '
+
 # _nt_row <mouse_status_range> -> 1|2|3 on stdout, or nothing.
 # tmux sets mouse_status_range to the bare `X` of range=user|X, but accept a
 # `user|` prefix too so this cannot break if that ever changes. Anything that
@@ -74,6 +97,17 @@ _nt_row() {
     amuxnote2|user\|amuxnote2) printf '2' ;;
     amuxnote3|user\|amuxnote3) printf '3' ;;
     amuxnote4|user\|amuxnote4) printf '4' ;;
+    *) : ;;
+  esac
+}
+
+# _nt_btn_row <mouse_status_range> -> 4 for row 4's BUTTON range, else nothing.
+# Separate from _nt_row on purpose: the two ranges sit on the same status line
+# and mean different things, so a click must resolve to exactly one of them.
+# Only row 4 has a button (see NT_COPY).
+_nt_btn_row() {
+  case "$1" in
+    amuxcopy4|user\|amuxcopy4) printf '4' ;;
     *) : ;;
   esac
 }
@@ -122,6 +156,48 @@ _nt_display() {
   esac
 }
 
+# _nt_btn <raw> <prev> -> the button slot's display string.
+# Three states, one slot: something to copy, something to restore, or neither.
+# `raw` wins when both are set — a row holding a note offers copy+clear, and the
+# undo only surfaces once the clear has actually emptied it.
+_nt_btn() {
+  if   [ -n "$1" ]; then printf '%s' "$NT_COPY"
+  elif [ -n "$2" ]; then printf '%s' "$NT_UNDO"
+  else                   printf '%s' "$NT_BTN_NONE"
+  fi
+}
+
+# _nt_prev <pane> <row> -> that row's previous (cleared) note, for undo.
+_nt_prev() {
+  tmux show-options -p -v -t "$1" "@amux_note_raw_prev$2" 2>/dev/null
+}
+
+# _nt_copy <text> — put <text> on the tmux paste buffer AND, where one exists,
+# the system clipboard.
+#
+# BOTH, because the clear that follows is destructive and the two have different
+# failure modes. `load-buffer` is part of tmux itself, so it always succeeds and
+# is the backstop that makes the clear safe (paste with `prefix ]`). The system
+# clipboard is what the user actually means by "copy", but every route to it can
+# fail QUIETLY — a missing copier, or OSC 52 needing passthrough on each tmux
+# layer, which under `--frame` is two deep (the same nesting trap documented for
+# OSC 777 in tmux-status.sh). So the clipboard is best-effort on top, never the
+# only copy.
+#
+# Text arrives on STDIN, never argv: a note is user text and argv is world
+# readable via ps. The copier list is ordered macOS, Wayland, X11 — all of them
+# OS-provided rather than dependencies to install, so this adds none (the repo's
+# runtime deps stay toml2json + jq); where none exists the tmux buffer still has
+# it and the feature degrades rather than breaking.
+_nt_copy() {
+  printf '%s' "$1" | tmux load-buffer - 2>/dev/null
+  if   command -v pbcopy  >/dev/null 2>&1; then printf '%s' "$1" | pbcopy 2>/dev/null
+  elif command -v wl-copy >/dev/null 2>&1; then printf '%s' "$1" | wl-copy 2>/dev/null
+  elif command -v xclip   >/dev/null 2>&1; then printf '%s' "$1" | xclip -selection clipboard 2>/dev/null
+  fi
+  return 0
+}
+
 # _nt_raw <pane> <row> -> that row's raw (unescaped) note text.
 _nt_raw() {
   tmux show-options -p -v -t "$1" "@amux_note_raw$2" 2>/dev/null
@@ -140,6 +216,11 @@ _nt_render() {
     tmux set-option -p -t "$_rp" "@amux_note$_i" \
       "$(_nt_display "$_i" "$_r1" "$_r2" "$_r3" "$_r4")" 2>/dev/null
   done
+  # Row 4's button slot, recomputed from the same raws so it can never disagree
+  # with what the row is showing (a copy button beside an empty row, or an undo
+  # beside a note that was never cleared).
+  tmux set-option -p -t "$_rp" @amux_btn4 \
+    "$(_nt_btn "$_r4" "$(_nt_prev "$_rp" 4)")" 2>/dev/null
   tmux refresh-client -S 2>/dev/null
 }
 
@@ -194,9 +275,38 @@ case "${1:-}" in
   click)
     # click <pane> <mouse_status_range> <client_tty>
     _cp=${2:-}; _cr=$(_nt_row "${3:-}"); _ct=${4:-}
+    [ -n "$_cp" ] || exit 0
+
+    # THE BUTTON, resolved before the note ranges: it shares row 4's status line
+    # and a click belongs to exactly one of the two.
+    #
+    # One control, two actions, chosen by state — copy+clear when the row holds a
+    # note, undo when a previous one is waiting. That pairing is what makes the
+    # clear safe to offer at all: it is one click from destroying a note, so the
+    # text goes to the clipboard AND the tmux buffer AND @amux_note_raw_prev4
+    # before it is cleared, and the same button restores it. A blank slot (no
+    # note, nothing to restore) is a no-op.
+    _cb=$(_nt_btn_row "${3:-}")
+    if [ -n "$_cb" ]; then
+      _bcur=$(_nt_raw "$_cp" "$_cb"); _bprev=$(_nt_prev "$_cp" "$_cb")
+      if [ -n "$_bcur" ]; then
+        _nt_copy "$_bcur"
+        tmux set-option -p -t "$_cp" "@amux_note_raw_prev$_cb" "$_bcur" 2>/dev/null
+        tmux set-option -up -t "$_cp" "@amux_note_raw$_cb" 2>/dev/null
+      elif [ -n "$_bprev" ]; then
+        tmux set-option -p -t "$_cp" "@amux_note_raw$_cb" "$_bprev" 2>/dev/null
+        # The undo is spent — one level, not a stack. Leaving it would make the
+        # button flip-flop between copy and undo forever, which reads as a toggle
+        # and would let a stale note reappear long after it was cleared.
+        tmux set-option -up -t "$_cp" "@amux_note_raw_prev$_cb" 2>/dev/null
+      fi
+      _nt_render "$_cp"
+      exit 0
+    fi
+
     # Not one of our ranges (window list, status-left): do nothing. The binding
     # already routed the default behaviour elsewhere.
-    [ -n "$_cp" ] && [ -n "$_cr" ] || exit 0
+    [ -n "$_cr" ] || exit 0
     # THE RETIREMENT. Rows 1-3 are click-INERT while the summaries are showing:
     # row 4 (always a note) is the click target in summary mode, so a click on a
     # summary row must not swap the summaries away under the cursor. In notes
@@ -358,6 +468,24 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   # --- _nt_row: slot 4 -----------------------------------------------------
   ck row-four    "$(_nt_row amuxnote4)"        "4"
   ck row-four-p  "$(_nt_row 'user|amuxnote4')" "4"
+
+  # --- the row-4 button: three states, one slot ----------------------------
+  ck btn-copy    "$(_nt_btn 'ship it' '')"        "$NT_COPY"
+  ck btn-undo    "$(_nt_btn '' 'ship it')"        "$NT_UNDO"
+  ck btn-none    "$(_nt_btn '' '')"               "$NT_BTN_NONE"
+  # A note wins over a waiting undo: a row holding text offers copy+clear, and
+  # the undo only surfaces once the clear has actually emptied it.
+  ck btn-both    "$(_nt_btn 'new' 'old')"         "$NT_COPY"
+  # Every state is the SAME WIDTH — an empty slot would shift the note text two
+  # columns the moment a row has nothing to copy.
+  ck btn-width   "$(printf '%s%s%s' "$NT_COPY" "$NT_UNDO" "$NT_BTN_NONE" | wc -m | tr -d ' ')" "6"
+  # The button range must not resolve as a note range, or a click would edit the
+  # note instead of copying it (both sit on row 4's line).
+  ck btnrow-4    "$(_nt_btn_row amuxcopy4)"       "4"
+  ck btnrow-pfx  "$(_nt_btn_row 'user|amuxcopy4')" "4"
+  ck btnrow-note "$(_nt_btn_row amuxnote4)"       ""
+  ck row-notbtn  "$(_nt_row amuxcopy4)"           ""
+
 
   # --- `hint 4`: the single source bin/amux publishes at launch ------------
   # Run as a CHILD (not by calling the case arm in-process) so this covers the
@@ -612,6 +740,37 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw4 2>/dev/null
     env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
     ck tm-r4-hint "$(_get @amux_note4)" "$NT_HINT4"
+
+    # --- the button: copy+clear, then undo -----------------------------------
+    # Driven through the real `click` entry point, not by calling the helpers, so
+    # the range dispatch is exercised too.
+    _set @amux_note_raw4 'ship it'
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw_prev4 2>/dev/null
+    env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
+    ck tm-btn-copy-shown "$(_get @amux_btn4)" "$NT_COPY"
+    env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxcopy4' /dev/null 2>/dev/null
+    ck tm-btn-cleared "$(_get @amux_note_raw4)" ''
+    ck tm-btn-prev    "$(_get @amux_note_raw_prev4)" 'ship it'
+    # The tmux paste buffer is the backstop that makes the destructive clear
+    # safe, so assert the text actually landed there — not merely that the note
+    # went away.
+    ck tm-btn-buffer  "$(tmux -L "$_sk" show-buffer 2>/dev/null)" 'ship it'
+    ck tm-btn-row     "$(_get @amux_note4)" "$NT_HINT4"
+    ck tm-btn-undo-shown "$(_get @amux_btn4)" "$NT_UNDO"
+    # Second press restores it …
+    env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxcopy4' /dev/null 2>/dev/null
+    ck tm-btn-restored "$(_get @amux_note_raw4)" 'ship it'
+    # … and spends the undo, so the button cannot flip-flop forever.
+    ck tm-btn-prev-spent "$(_get @amux_note_raw_prev4)" ''
+    ck tm-btn-back-to-copy "$(_get @amux_btn4)" "$NT_COPY"
+    # A blank slot is a no-op, not a crash or a stray write.
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw4 2>/dev/null
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw_prev4 2>/dev/null
+    env -u NOTES_SELFTEST sh "$0" render "$_pane" 2>/dev/null
+    env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxcopy4' /dev/null 2>/dev/null
+    ck tm-btn-noop    "$(_get @amux_note_raw4)" ''
+    ck tm-btn-noop-b  "$(_get @amux_btn4)" "$NT_BTN_NONE"
+
 
     # The summary options are never touched by any of the above.
     _set @amux_row1 'ai summary'
