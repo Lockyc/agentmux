@@ -38,6 +38,27 @@ sessions = true
 # Off by default. AGENTMUX_VERSION_CHECK=1/0 overrides this.
 check = false
 
+[notes]
+# Optional FOURTH status row: an always-visible note line for the current tab,
+# independent of the AI summaries. Off by default.
+#
+# With `row = true` an agentmux session shows five status lines (tmux's maximum)
+# instead of four: the window list, the three AI-summary rows, and this note row.
+# Click it to write a note; click it again to edit. `prefix N` still swaps rows
+# 1-3 between the AI summaries and notes 1-3 — this row is unaffected by that
+# toggle and shows the same note in both modes.
+#
+# Takes effect on the NEXT LAUNCH of a project: the flag is published to tmux
+# when the session is created, so `amux --reload` alone will not add the row to
+# a session that is already running.
+#
+# Per-directory overrides work exactly like [frame]'s — a
+# [notes.dirs."<path>"] block wins for that directory and its subtree:
+#
+# [notes.dirs."~/Developer/github.com/lockyc/agentmux"]
+# row = false
+row = false
+
 [llm]
 # OpenAI-compatible endpoint used for AI session summaries (summarise.sh).
 # Works with LM Studio, Ollama, llama.cpp, etc. — any /v1/chat/completions server.

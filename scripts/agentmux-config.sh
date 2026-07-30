@@ -143,7 +143,7 @@ agentmux_llm_field() {
 # Usage: _agentmux_scoped_field <table> <field> [dir]
 #
 # Shared engine for tables that support a base block plus per-directory override
-# sub-blocks (currently [frame] and [amux]). With <dir>: per-field override
+# sub-blocks (currently [frame], [amux] and [notes]). With <dir>: per-field override
 # resolution. Each [<table>.dirs."<path>"] block whose path matches <dir> (same
 # rules as agentmux_agent_for_dir: ~→$HOME, trailing slash ignored, equal-or-
 # subtree match) is a candidate *for fields it actually sets*; the longest
@@ -178,6 +178,10 @@ agentmux_frame_field() { _agentmux_scoped_field frame "$1" "${2:-}"; }
 # Field value from the [amux] table, optionally directory-scoped (see
 # _agentmux_scoped_field). Usage: agentmux_amux_field <field> [dir]
 agentmux_amux_field() { _agentmux_scoped_field amux "$1" "${2:-}"; }
+
+# Field value from the [notes] table, optionally directory-scoped (see
+# _agentmux_scoped_field). Usage: agentmux_notes_field <field> [dir]
+agentmux_notes_field() { _agentmux_scoped_field notes "$1" "${2:-}"; }
 
 # Build the launch command for agent at index, applying keep_alive/reattach wrappers.
 # Warns to stderr if reattach=true without keep_alive=true.
@@ -264,6 +268,8 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "llm_field absent"    ""                                          "$(agentmux_llm_field nonexistent)"
   _assert "frame_field left"    "30"                                        "$(agentmux_frame_field left)"
   _assert "frame_field absent"  ""                                          "$(agentmux_frame_field nonexistent)"
+  _assert "notes_field row"     "false"                                     "$(agentmux_notes_field row)"
+  _assert "notes_field absent"  ""                                          "$(agentmux_notes_field nonexistent)"
 
   # Self-contained coverage for agentmux_build_cmd's keep_alive/reattach
   # wrapping — exercises every branch without depending on the example
@@ -379,6 +385,27 @@ TOML
   # ~ key expands to $HOME and matches a subdir.
   _assert "frame tilde key"         "45" "$(agentmux_frame_field left "$HOME/amux-fr-home/proj")"
   rm -f "$_frcfg"
+
+  # [notes] resolves through the same scoped engine as [frame]/[amux], so a
+  # per-directory override works without a second mechanism.
+  _ntcfg=$(mktemp "${TMPDIR:-/tmp}/amux-notes-XXXXXX.toml") || exit 1
+  cat > "$_ntcfg" <<'TOML'
+[[agents]]
+name = "a"
+cmd = "x"
+
+[notes]
+row = true
+
+[notes.dirs."/tmp/amux-notes/off"]
+row = false
+TOML
+  AGENTMUX_CONFIG="$_ntcfg"
+  _amux_json_cache=""
+  _assert "notes base row true"     "true"  "$(agentmux_notes_field row)"
+  _assert "notes dir override false" "false" "$(agentmux_notes_field row /tmp/amux-notes/off/x)"
+  _assert "notes unmatched dir"      "true"  "$(agentmux_notes_field row /tmp/elsewhere)"
+  rm -f "$_ntcfg"
 
   # [amux] shares the same dir-scoped engine as [frame]. Cover a base read, a
   # per-dir override (longest match), subtree fallback to base, and an unset field.

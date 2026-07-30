@@ -311,6 +311,15 @@ _amux_frame_default() {
   [ "$(agentmux_frame_field default "$PWD")" = "true" ] && echo 1 || echo ""
 }
 
+# [notes] row: 1 when this project's fourth status row (the always-on note line)
+# is enabled, else empty. Published to tmux as @amux_note_row at session
+# creation; update_colors.sh reads THAT to choose `status 5` over `status 4`.
+# Config-read, so it rides the launch-time memo like every other field helper
+# here — do not call it per-window.
+_amux_note_row() {
+  [ "$(agentmux_notes_field row "$PWD")" = "true" ] && echo 1 || echo ""
+}
+
 # The effective frame prefix for $PWD: [frame] prefix, or frame.conf's built-in
 # default when unset. Kept in sync with `set -g prefix` in tmux/frame.conf.
 _AMUX_FRAME_PREFIX_DEFAULT="C-f"
@@ -1257,14 +1266,18 @@ _amux_ensure_agent_session() {
   # separate call is an exec + socket round-trip. ORDERING IS LOAD-BEARING:
   # @autoagent and @l1reserved must be set BEFORE the caller attaches (update_colors.sh
   # only paints @autoagent sessions; the reservation must be published pre-attach).
-  local _prefix _pin_slot _reserved
+  local _prefix _pin_slot _reserved _note_row
   _prefix=$(_amux_prefix)
   _pin_slot=$(_amux_bar_pin_slot "$PWD")
   _reserved=$(_amux_bar_reserved)
+  _note_row=$(_amux_note_row)
   local -a _opts=(set-option -t "$name" "@autoagent" "1"
                   ';' set-option -t "$name" "@amux_dir" "$PWD")
   [ -n "$_prefix" ]   && _opts+=(';' set-option -t "$name" prefix "$_prefix")
   [ -n "$_pin_slot" ] && _opts+=(';' set-option -t "$name" @l1idx "$_pin_slot")
+  # Must be in THIS pre-attach batch: update_colors.sh reads it on the
+  # client-attached hook, so a later write would be one attach too late.
+  [ -n "$_note_row" ] && _opts+=(';' set-option -t "$name" @amux_note_row 1)
   _opts+=(';' set-option -g @l1reserved "$_reserved")
   _amux_atmux "${_opts[@]}"
 }
@@ -1882,6 +1895,19 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "frame_focus bad val"  "agent"  "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_focus)"
   _assert "frame_status bad val" "bottom" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_status_position)"
+
+  # [notes] row -> @amux_note_row (update_colors.sh reads it to pick status 5).
+  _nw=$(mktemp "${TMPDIR:-/tmp}/amux-notesw-XXXXXX.toml") || exit 1
+  printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "note_row absent"  ""  "$(AGENTMUX_CONFIG="$_nw" _amux_json_cache="" _amux_note_row)"
+  printf '[notes]\nrow = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "note_row true"    "1" "$(AGENTMUX_CONFIG="$_nw" _amux_json_cache="" _amux_note_row)"
+  printf '[notes]\nrow = false\n[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "note_row false"   ""  "$(AGENTMUX_CONFIG="$_nw" _amux_json_cache="" _amux_note_row)"
+  rm -f "$_nw"
 
   # _amux_frame_prefix: effective frame prefix = [frame] prefix or the C-f default.
   printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"

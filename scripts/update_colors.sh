@@ -150,7 +150,15 @@ _amux_apply_colour() {
 
   tmux set -t "$s" status-right-length 24
   tmux set -t "$s" status-right "#{?@agent-mode,[ #{@agent-mode} ] ,}#{?window_zoomed_flag,🔍 ,}"
-  tmux set -t "$s" status 4
+  # Four status lines (window list + the three summary rows), or five when this
+  # session carries @amux_note_row — the fourth agentmux row, the always-on note
+  # line, published by bin/amux from `[notes] row`. Five is tmux's maximum.
+  #
+  # Asked through the FORMAT CHAIN (display-message + #{?…}), never
+  # `show-options -v` + `[ -n … ]`: the literal string "0" is false to #{?…} and
+  # true to [ -n … ], and show-options reads one scope while #{?…} resolves
+  # pane->window->session->global. See the long comment in notes.sh's `toggle`.
+  tmux set -t "$s" status "$(tmux display-message -p -t "$s" '#{?@amux_note_row,5,4}')"
 }
 
 # Drop the bar overrides for session $1 (non-autoagent sessions).
