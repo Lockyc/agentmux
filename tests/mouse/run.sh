@@ -188,7 +188,7 @@ case "$KEYS" in
 esac
 say "binding asserted    : MouseDown1Status -> \$ROOT/scripts/notes.sh"
 
-# Two windows: test 6 needs an observable window switch.
+# Two windows: test 8 needs an observable window switch.
 tmux -L "$SOCK_A" new-window -t test -n second || die "could not create the second window"
 PANE=$(tmux -L "$SOCK_A" list-panes -t test:1 -F '#{pane_id}')
 [ -n "$PANE" ] || die "could not resolve the target pane"
@@ -214,10 +214,11 @@ say "status asserted     : $ST"
 
 # The `render` break passes 2a and then breaks what 2b watches. Note it must
 # UNSET @autoagent rather than just `set status on`: the client-attached hook
-# re-runs update_colors.sh when main.exp attaches, which would put `status 4`
-# straight back for an @autoagent session — so a plain `set status on` here is
-# silently undone and negative-tests nothing (verified). Unsetting @autoagent
-# makes that same hook choose `status on`, which is exactly the real-world trap.
+# re-runs update_colors.sh when main.exp attaches, which would put `status 5`
+# straight back for an @autoagent session (with @amux_note_row set above) — so
+# a plain `set status on` here is silently undone and negative-tests nothing
+# (verified). Unsetting @autoagent makes that same hook choose `status on`,
+# which is exactly the real-world trap.
 [ "$BREAK" = render ] && tmux -L "$SOCK_A" set -u -t test @autoagent
 
 # --- frame server: an outer tmux with the agent client nested inside it ----
@@ -238,7 +239,7 @@ printf '%s\n'   "  =============================================================
 
 expect "$HERE/main.exp"  "$ROOT" "$SOCK_A" "$SOCK_B" "$WORK" "$OUT" "$PANE"
 rc_main=$?
-# exit 2 from main.exp is the render-time half of GUARD 2 firing: four status
+# exit 2 from main.exp is the render-time half of GUARD 2 firing: five status
 # lines did not actually render, so the note rows do not exist and every later
 # result would be meaningless. Stop rather than report a table of nothing.
 if [ "$rc_main" -eq 2 ]; then

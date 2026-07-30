@@ -95,9 +95,13 @@ if {!$pre_ok} {
 
 # ---------------------------------------------------------------------------
 # 1 — THE RETIREMENT. A click on a summary row must be inert: no prompt, no
-# mode flip, no note. Asserted positively (pane_echo) as well as negatively,
-# because "no option changed" passes identically when the click never happened
-# at all — which is the failure mode this suite exists to see.
+# mode flip, no note. "No option changed" alone cannot tell "correctly
+# ignored" from "the click never arrived at all" — pane_echo below only proves
+# no command-prompt is open, which is equally true either way. The real
+# distinguisher is check 3 below: it clicks this SAME range ($L1) with notes
+# mode on and gets a prompt, proving the click plumbing (routing, pane/range
+# resolution) works and it is only the summary-mode guard making this one
+# inert.
 # ---------------------------------------------------------------------------
 chk 1 "summary-row clicks are inert (the retirement)"
 reset_to_summary

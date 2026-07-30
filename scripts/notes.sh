@@ -160,7 +160,7 @@ case "${1:-}" in
     # mode rows 1-3 edit exactly as before. Row 4 is always live and never
     # touches @amux_notes.
     #
-    # Same tmux-format-semantics test as `toggle` below, and for the identical
+    # Same tmux-format-semantics test as `toggle` above, and for the identical
     # reason — never `show-options -p -v` + `[ -n … ]` here; see the long comment
     # on the `toggle` case for the truthiness/scope trap it hides.
     #
@@ -470,6 +470,54 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxnote2' /dev/null 2>/dev/null
     ck tm-notes-mode-live "$(_get @amux_notes)" '1'
     tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
+
+    # GLOBAL-ON CASE: the click guard must read the SAME resolved value the
+    # renderer uses — pane->window->session->global — not `show-options -p` +
+    # `[ -n … ]`, which sees only the pane level (the scope half of the
+    # truthiness/scope trap documented on `toggle` above). The real case this
+    # guards against: a user's ~/.agentmux/user.agent.tmux.conf (sourced last
+    # by every agent socket, CLAUDE.md: "user settings win over our defaults")
+    # setting `set -g @amux_notes 1` must not leave rows 1-3 permanently inert.
+    # Pane-level @amux_notes is already unset from the block above; set the
+    # GLOBAL value directly — never via `click`/`toggle`, which only ever
+    # write pane-level.
+    tmux -L "$_sk" set-option -g @amux_notes 1 2>/dev/null
+    # Confirm the guard's own resolved-value expression reads this pane as ON
+    # before clicking — same non-vacuity discipline as tm-global-on-before
+    # above — otherwise the assertion below could pass for the wrong reason.
+    ck tm-click-global-on-before \
+      "$(tmux -L "$_sk" display-message -p -t "$_pane" '#{?@amux_notes,1,0}' 2>/dev/null)" '1'
+    # Seed a raw note and a STALE display value: only a click that actually
+    # passes the guard and runs _nt_render can turn "stale" back into the
+    # freshly-rendered value asserted below.
+    _set @amux_note_raw1 'global click lives'
+    _set @amux_note1 stale
+    env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxnote1' /dev/null 2>/dev/null
+    ck tm-click-global-live "$(_get @amux_note1)" "${NT_MARK}global click lives"
+    tmux -L "$_sk" set-option -ug @amux_notes 2>/dev/null
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw1 2>/dev/null
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note1 2>/dev/null
+
+    # LITERAL-"0" CASE: the other half of the same trap. `[ -n … ]` reads the
+    # literal string "0" as true (it is non-empty); `#{?…}` — what the guard
+    # and status-format both use — reads "0" as FALSE. Set @amux_notes to the
+    # literal "0" at the PANE level (the scope the guard resolves first),
+    # confirm the guard's own expression already reads it as off, then assert
+    # the click stays inert.
+    _set @amux_notes 0
+    ck tm-click-literal-zero-before \
+      "$(tmux -L "$_sk" display-message -p -t "$_pane" '#{?@amux_notes,1,0}' 2>/dev/null)" '0'
+    _set @amux_note_raw1 'literal-zero-check'
+    _set @amux_note1 stale
+    env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxnote1' /dev/null 2>/dev/null
+    # If it had run, _nt_render would have turned "stale" into the marked raw
+    # (as in tm-click-global-live above) — staying "stale" is what proves the
+    # guard exited before render ran.
+    ck tm-click-literal-zero-inert "$(_get @amux_note1)" stale
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw1 2>/dev/null
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note1 2>/dev/null
 
     # Row 4 is live in SUMMARY mode (that is the point) and must NOT flip the
     # mode flag. Safe on this clientless throwaway server: command-prompt's
