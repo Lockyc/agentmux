@@ -158,7 +158,15 @@ _amux_apply_colour() {
   # `show-options -v` + `[ -n … ]`: the literal string "0" is false to #{?…} and
   # true to [ -n … ], and show-options reads one scope while #{?…} resolves
   # pane->window->session->global. See the long comment in notes.sh's `toggle`.
-  tmux set -t "$s" status "$(tmux display-message -p -t "$s" '#{?@amux_note_row,5,4}')"
+  #
+  # Guarded because an EMPTY answer is silently destructive: `set status ""` is a
+  # bad value, so tmux keeps whatever `status` already was — possibly one line,
+  # with no summary or note rows at all. display-message returns empty when the
+  # session vanishes between the list-sessions above and this call (the only way
+  # in — the format itself always yields 4 or 5), a narrow race but a free fix.
+  lines=$(tmux display-message -p -t "$s" '#{?@amux_note_row,5,4}' 2>/dev/null)
+  case "$lines" in 4|5) ;; *) lines=4 ;; esac
+  tmux set -t "$s" status "$lines"
 }
 
 # Drop the bar overrides for session $1 (non-autoagent sessions).

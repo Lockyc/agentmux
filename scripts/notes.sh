@@ -34,6 +34,15 @@ NT_HINT='#[fg=colour240]✎ click a row to write a note'
 # 1-3 and only ever appears in notes mode, while this one is on screen from
 # launch and is the discovery path into writing a note at all. Carries a style
 # directive of OUR OWN — added after escaping, never escaped itself.
+#
+# ON SCREEN FROM LAUNCH IS NOT SOMETHING THIS SCRIPT ACHIEVES BY ITSELF.
+# _nt_render is reachable only from a click or `prefix N`, and neither is on the
+# launch path — so a freshly launched tab has no pane-level @amux_note4 and row 4
+# would draw as blank padding. bin/amux publishes THIS string as the SESSION-level
+# @amux_note4 default when `[notes] row` is on, asking for it via the `hint`
+# subcommand below so the literal stays here alone. tmux resolves
+# pane->window->session->global, so a rendered pane shadows the default and the
+# two can never disagree.
 NT_HINT4='#[fg=colour240]✎ click to add a note'
 
 # _nt_row <mouse_status_range> -> 1|2|3 on stdout, or nothing.
@@ -114,6 +123,19 @@ _nt_render() {
 }
 
 case "${1:-}" in
+  hint)
+    # `hint 4` prints row 4's empty-state hint on stdout. The ONE export of a
+    # display literal out of this file: bin/amux publishes it as the session-level
+    # @amux_note4 default at launch (see NT_HINT4 above), and needs the value
+    # without restating it. Touches no tmux — safe to call from the CLI path,
+    # which has no ambient $TMUX.
+    #
+    # Only row 4 is exported. Rows 1-3's hint (NT_HINT) is reachable only in notes
+    # mode, which is only ever entered through `toggle` — and `toggle` always
+    # renders, so those rows have no un-rendered launch state to cover.
+    [ "${2:-}" = 4 ] && printf '%s' "$NT_HINT4"
+    exit 0
+    ;;
   render)
     [ -n "${2:-}" ] || exit 0
     _nt_render "$2"
@@ -300,6 +322,17 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   # --- _nt_row: slot 4 -----------------------------------------------------
   ck row-four    "$(_nt_row amuxnote4)"        "4"
   ck row-four-p  "$(_nt_row 'user|amuxnote4')" "4"
+
+  # --- `hint 4`: the single source bin/amux publishes at launch ------------
+  # Run as a CHILD (not by calling the case arm in-process) so this covers the
+  # dispatch too — that is the surface bin/amux actually uses. Asserted against
+  # the same NT_HINT4 _nt_display returns, so the launch-time default and the
+  # rendered empty state can never drift apart silently.
+  ck hint4       "$(env -u NOTES_SELFTEST sh "$0" hint 4)"  "$NT_HINT4"
+  ck hint4-eq-disp "$(env -u NOTES_SELFTEST sh "$0" hint 4)" "$(_nt_display 4 '' '' '' '')"
+  # Only row 4 is exported; anything else prints nothing rather than guessing.
+  ck hint4-other "$(env -u NOTES_SELFTEST sh "$0" hint 1)"  ""
+  ck hint4-none  "$(env -u NOTES_SELFTEST sh "$0" hint)"    ""
 
   # --- tmux-touching blocks ------------------------------------------------
   # Isolated under a throwaway TMUX_TMPDIR, reaped by the EXIT trap below —

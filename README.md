@@ -146,7 +146,7 @@ All of these are pressed **after the prefix** (`C-b` by default).
 | `prefix m` | Cycle `@agent-mode` through your defined agents (agentmux sessions only) |
 | `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched. agentmux already knows the session id and which wrapper to launch it with, so there is nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
 | `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
-| `prefix N` | Toggle this tab's three summary rows between the AI summary and notes 1-3. In notes mode, **click any of those rows** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). While the AI summary is showing, rows 1-3 are click-inert (a click does nothing) — press `prefix N` first. The optional fourth row (see [AI summary status lines](#ai-summary-status-lines)) is unaffected by this toggle and clickable either way. Notes are per-tab and live in memory: they survive `prefix x`, but not a crash, `amux --kill`, or a reboot. The AI summary keeps updating underneath, so toggling back shows a current one |
+| `prefix N` | Toggle this tab's three summary rows between the AI summary and notes 1-3. In notes mode, **click any of those rows** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). While the AI summary is showing, rows 1-3 are click-inert (a click does nothing) — press `prefix N` first. The optional fourth row (see [The always-on note row](#the-always-on-note-row)) is unaffected by this toggle and clickable either way. Notes are per-tab and live in memory: they survive `prefix x`, but not a crash, `amux --kill`, or a reboot. The AI summary keeps updating underneath, so toggling back shows a current one |
 
 ### Customizing tmux (per-role overlays)
 
@@ -462,7 +462,7 @@ An optional **fourth status row** is a note line that stays on screen all the ti
 row = true
 ```
 
-(`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) It takes effect on the **next launch** of that project: the setting is published to the session once, at creation, so a session already running won't pick it up, and `amux --reload` won't add it either.
+(`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) It takes effect **the next time you run `amux` in that project** — a re-attach is enough, you don't have to kill the session — because the setting is published to the session on every launch. Turning it back off works the same way. `amux --reload` alone won't move it either direction: reload re-sources the tmux config, and the number of status lines is set on attach. Under `--frame`, the publish rides the frame's build, so a relaunch that reuses a healthy frame carries the previous setting until the frame itself is rebuilt.
 
 Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
 

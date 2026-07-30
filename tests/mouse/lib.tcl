@@ -192,13 +192,15 @@ proc reset_to_summary {} {
         tmA set-option -p  -t $::mtpane "@amux_row$i" $::SUMMARY($i)
     }
     tmA set-option -up -t $::mtpane @amux_notes
-    # Row 4 never depends on @amux_notes, so unlike rows 1-3 (which read
-    # @amux_rowN directly from status-format while notes mode is off) it has no
-    # display value at all until something renders it. Render here so every
-    # check starts from the SAME observable state a real session would show
-    # once notes.sh has ever run once — otherwise @amux_note4 reads empty
-    # rather than its hint immediately after a reset.
-    render
+    # DELIBERATELY DOES NOT RENDER. Unsetting the pane-level options leaves the
+    # pane in exactly the state a freshly launched tab is in: nothing has ever
+    # called notes.sh on it, so row 4's value comes from the SESSION-level
+    # @amux_note4 default run.sh publishes the way bin/amux does at launch.
+    # A render here would MASK the launch state — it writes a pane-level
+    # @amux_note4 and every "row 4 shows its hint" assertion would then pass
+    # whether or not the product puts the hint on screen by itself, which is
+    # precisely the bug that shipped. Any check that needs rows 1-3 rendered
+    # calls `notes_mode` (which renders) or `render` explicitly.
 }
 
 # Enter notes mode. Rows 1-3 are click-INERT while the summaries are up (the

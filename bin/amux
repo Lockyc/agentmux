@@ -312,12 +312,32 @@ _amux_frame_default() {
 }
 
 # [notes] row: 1 when this project's fourth status row (the always-on note line)
-# is enabled, else empty. Published to tmux as @amux_note_row at session
-# creation; update_colors.sh reads THAT to choose `status 5` over `status 4`.
+# is enabled, else empty. Published to tmux as @amux_note_row on every launch;
+# update_colors.sh reads THAT to choose `status 5` over `status 4`.
 # Config-read, so it rides the launch-time memo like every other field helper
 # here — do not call it per-window.
 _amux_note_row() {
   [ "$(agentmux_notes_field row "$PWD")" = "true" ] && echo 1 || echo ""
+}
+
+# Row 4's empty-state hint, asked of notes.sh (its NT_HINT4) so the literal lives
+# in exactly one place. Published as the SESSION-level @amux_note4 alongside
+# @amux_note_row, and that publish is what puts the hint on screen at launch:
+# status-format[4] substitutes @amux_note4, and the only thing that ever WRITES
+# that option — notes.sh's _nt_render — is reachable solely from a click or
+# `prefix N`, neither of which is on the launch path. Without the default, a
+# freshly launched tab draws row 4 as blank padding and the affordance that is
+# the whole point of the row never appears.
+#
+# A session-scope DEFAULT, not a per-window render, on purpose: tmux resolves
+# pane->window->session->global, so one write covers every window and pane of the
+# session — including ones amux never creates itself (restored/forked tabs, which
+# carry an explicit pane_start_command and are deliberately skipped by
+# launch_agent.sh, plus split panes) — and a real note, always written
+# pane-level, shadows it. One fork per launch, only when the row is enabled;
+# never one per window.
+_amux_note_hint4() {
+  sh "$AGENTMUX_SCRIPTS/notes.sh" hint 4 2>/dev/null
 }
 
 # The effective frame prefix for $PWD: [frame] prefix, or frame.conf's built-in
@@ -1275,9 +1295,24 @@ _amux_ensure_agent_session() {
                   ';' set-option -t "$name" "@amux_dir" "$PWD")
   [ -n "$_prefix" ]   && _opts+=(';' set-option -t "$name" prefix "$_prefix")
   [ -n "$_pin_slot" ] && _opts+=(';' set-option -t "$name" @l1idx "$_pin_slot")
-  # Must be in THIS pre-attach batch: update_colors.sh reads it on the
+  # Must be in THIS pre-attach batch: update_colors.sh reads @amux_note_row on the
   # client-attached hook, so a later write would be one attach too late.
-  [ -n "$_note_row" ] && _opts+=(';' set-option -t "$name" @amux_note_row 1)
+  #
+  # SYMMETRIC, and that is load-bearing. This whole function runs on EVERY `amux`
+  # for the project, not only at creation, so an add-only emit meant `row = true`
+  # took effect on a mere re-attach while `row = false` could never turn a running
+  # session's row back off — stuck until `amux --kill`. `-u` on a session option
+  # that was never set exits 0 (verified, tmux 3.7b), so the else branch is safe on
+  # a session that never carried either option and cannot abort the rest of the
+  # ';'-chained batch. @amux_note4 is the launch-time hint default — see
+  # _amux_note_hint4 for why row 4 needs one at all.
+  if [ -n "$_note_row" ]; then
+    _opts+=(';' set-option -t "$name" @amux_note_row 1
+            ';' set-option -t "$name" @amux_note4 "$(_amux_note_hint4)")
+  else
+    _opts+=(';' set-option -u -t "$name" @amux_note_row
+            ';' set-option -u -t "$name" @amux_note4)
+  fi
   _opts+=(';' set-option -g @l1reserved "$_reserved")
   _amux_atmux "${_opts[@]}"
 }
@@ -2248,6 +2283,40 @@ STUB
       "$(_amux_atmux show-options -qv -t ensureproj @amux_dir 2>/dev/null)"
     _assert "ensure names window 0" "work" \
       "$(_amux_atmux display-message -t '=ensureproj:0' -p '#{window_name}' 2>/dev/null)"
+    # The config above carries no [notes] block, so the fourth row is OFF and
+    # neither option may be published.
+    _assert "ensure: note_row absent when [notes] row is unset" "" \
+      "$(_amux_atmux show-options -qv -t ensureproj @amux_note_row 2>/dev/null)"
+
+    # ROW 4 AT LAUNCH. Re-run ensure on the SAME (now existing) session with the
+    # row enabled: this is the re-attach path, which must publish both options —
+    # and the hint must be readable on window 0's pane, which NOTHING has
+    # rendered (notes.sh's _nt_render is reachable only from a click or
+    # `prefix N`, neither of which has happened here). Read through the FORMAT
+    # chain, exactly as status-format[4] does — `show-options -p` would report
+    # the pane scope alone and miss the session-level default entirely.
+    printf '[notes]\nrow = true\n[[agents]]\nname = "work"\nlabel = "w"\ncolour = "teal"\ncmd = ":"\n' > "$_es_cfg"
+    _amux_json_cache=""; rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+    ( cd /tmp && _amux_ensure_agent_session work ensureproj </dev/null ) 2>/dev/null
+    _assert "ensure: note_row published on re-attach" "1" \
+      "$(_amux_atmux show-options -qv -t ensureproj @amux_note_row 2>/dev/null)"
+    _es_pane=$(_amux_atmux display-message -t '=ensureproj:0' -p '#{pane_id}' 2>/dev/null)
+    # Non-vacuity: the pane itself holds no @amux_note4 …
+    _assert "ensure: row 4 unrendered at pane scope" "" \
+      "$(_amux_atmux show-options -pqv -t "$_es_pane" @amux_note4 2>/dev/null)"
+    # … so a hint here can only have come from the session-level default.
+    _assert "ensure: row 4 shows its hint with no render" "$(sh "$AGENTMUX_SCRIPTS/notes.sh" hint 4)" \
+      "$(_amux_atmux display-message -t "$_es_pane" -p '#{@amux_note4}' 2>/dev/null)"
+
+    # …and the emit is SYMMETRIC: flipping the config back off must clear both,
+    # or a running session's row could never be turned off again.
+    printf '[notes]\nrow = false\n[[agents]]\nname = "work"\nlabel = "w"\ncolour = "teal"\ncmd = ":"\n' > "$_es_cfg"
+    _amux_json_cache=""; rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+    ( cd /tmp && _amux_ensure_agent_session work ensureproj </dev/null ) 2>/dev/null
+    _assert "ensure: note_row cleared when row goes false" "" \
+      "$(_amux_atmux show-options -qv -t ensureproj @amux_note_row 2>/dev/null)"
+    _assert "ensure: row 4 hint cleared when row goes false" "" \
+      "$(_amux_atmux display-message -t "$_es_pane" -p '#{@amux_note4}' 2>/dev/null)"
     _amux_atmux kill-server 2>/dev/null; rm -f "$_es_cfg"; rm -rf "$_es_state"
     AGENTMUX_AGENT_SOCKET="$_es_save"; AGENTMUX_CONFIG="$_es_cfgsave"; _amux_json_cache="$_es_cache"
     if [ -n "$_es_sdsave" ]; then export AGENTMUX_STATE_DIR="$_es_sdsave"; else unset AGENTMUX_STATE_DIR; fi

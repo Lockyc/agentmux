@@ -203,6 +203,15 @@ say "target pane         : $PANE (deliberately not %0)"
 # bin/amux publishes it from `[notes] row`; here we set it directly, since this
 # suite drives tmux, not amux.
 tmux -L "$SOCK_A" set -t test @amux_note_row 1
+# bin/amux publishes BOTH in the same pre-attach batch: the second is row 4's
+# empty-state default, without which a pane nothing has clicked renders the row
+# as blank padding (notes.sh's _nt_render is reachable only from a click or
+# `prefix N`, neither of which is on the launch path). Reproduce it here the same
+# way bin/amux does — by ASKING notes.sh for the string, never restating the
+# literal — so the value under test stays single-sourced in scripts/notes.sh.
+HINT4=$(sh "$ROOT/scripts/notes.sh" hint 4)
+[ -n "$HINT4" ] || die "scripts/notes.sh hint 4 printed nothing — row 4 would have no empty state to assert on"
+tmux -L "$SOCK_A" set -t test @amux_note4 "$HINT4"
 tmux -L "$SOCK_A" run-shell "$ROOT/scripts/update_colors.sh test"
 for _i in 1 2 3 4 5 6 7 8 9 10; do
   ST=$(tmux -L "$SOCK_A" show-options -t test status)

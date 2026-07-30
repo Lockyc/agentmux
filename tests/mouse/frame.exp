@@ -32,12 +32,14 @@ foreach l [split $na "\n"] { if {[string match "*amuxnote*" $l]} { incr nacount 
 ok "inner (agent) server DOES carry the amuxnote binding" [expr {$nacount > 0}] $nacount
 
 # Deterministic starting state on the inner pane, so the prefill assertion below
-# has a known value to match.
-tmA set-option -p -t $mtpane @amux_notes 1
+# has a known value to match. Rows 1-3 are click-INERT while the summaries are
+# showing, so the two clicks below need notes mode — set here through lib.tcl's
+# shared `notes_mode` (flag + render), never inherited from whatever state
+# main.exp happened to leave the pane in.
 tmA set-option -p -t $mtpane @amux_note_raw1 "fix #42"
 tmA set-option -up -t $mtpane @amux_note_raw2
 tmA set-option -p -t $mtpane @amux_note_raw3 "ask sam, then deploy"
-render
+notes_mode
 
 spawn -noecho tmux -L $mtsockB attach -t frame
 set tty $spawn_out(slave,name)

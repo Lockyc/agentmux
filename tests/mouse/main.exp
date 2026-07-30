@@ -105,12 +105,17 @@ if {!$pre_ok} {
 # ---------------------------------------------------------------------------
 chk 1 "summary-row clicks are inert (the retirement)"
 reset_to_summary
+# Seed a value the click would have to OVERWRITE. reset_to_summary unsets
+# @amux_note_raw1, so asserting "" below would be the pre-state and would pass
+# identically whether the guard held or the click never reached notes.sh at all.
+# Same non-vacuity discipline as notes.sh's own tm-inert-raw.
+tmA set-option -p -t $mtpane @amux_note_raw1 "keep me"
 eq "@amux_notes before (summary mode)" [opt @amux_notes] ""
 eq "row 1 is showing the SUMMARY, not a note" [opt @amux_row1] $SUMMARY(1)
 click 5 $L1
 ok "NO note prompt opened" [noprompt 3]
 eq "@amux_notes did NOT flip on" [opt @amux_notes] ""
-eq "no note was written" [opt @amux_note_raw1] ""
+eq "the seeded note was not overwritten" [opt @amux_note_raw1] "keep me"
 eq "@amux_row1 untouched" [opt @amux_row1] $SUMMARY(1)
 ok "typed text reached the pane's shell, not a prompt" [pane_echo "MT-INERT-TOKEN"]
 chkend
@@ -123,8 +128,21 @@ chkend
 # ---------------------------------------------------------------------------
 chk 2 "row 4 — the always-on note line, clickable in summary mode"
 reset_to_summary
-eq "row 4 shows its own empty-state hint" [opt @amux_note4] \
+# THE LAUNCH STATE, not a rendered one. reset_to_summary deliberately does not
+# render, so this pane is in exactly the state a freshly launched tab is in: the
+# two assertions together are what make the hint check mean something.
+#   1. the PANE holds no @amux_note4 — nothing has rendered it (-pqv reads the
+#      pane scope alone, and is quiet rather than erroring when it is unset);
+#   2. the format chain — the same lookup status-format[4] performs — still
+#      resolves to the hint, which can therefore only be the session-level
+#      default published at launch.
+# Before this, reset_to_summary rendered first, so (1) was false and (2) passed
+# whether or not the product ever puts the hint on screen by itself.
+eq "pane-level @amux_note4 is unset (nothing rendered this pane)" \
+   [tmA show-options -pqv -t $mtpane @amux_note4] ""
+eq "row 4 shows its own empty-state hint from the launch default" [opt @amux_note4] \
    "#\[fg=colour240\]✎ click to add a note"
+tmA set-option -p -t $mtpane @amux_note_raw1 "keep me"
 click 5 $L4
 ok "a \`note 4>\` prompt opened" [expr {[wp "note 4>"] eq "MATCH"}]
 typed "ship it"
@@ -135,7 +153,7 @@ eq "@amux_note_raw4" [opt @amux_note_raw4] "ship it"
 eq "row 4's display value carries the mark" [opt @amux_note4] "✎ ship it"
 eq "the mode flag was NOT touched" [opt @amux_notes] ""
 eq "@amux_row1 untouched — the summaries stayed put" [opt @amux_row1] $SUMMARY(1)
-eq "row 1 gained no note" [opt @amux_note_raw1] ""
+eq "row 1's own note is untouched by the row-4 write" [opt @amux_note_raw1] "keep me"
 ok "no `needs tmux 3.6+` message" [expr {![string match "*needs tmux 3.6*" [logtext]]}]
 chkend
 

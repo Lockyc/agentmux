@@ -48,9 +48,13 @@ check = false
 # 1-3 between the AI summaries and notes 1-3 — this row is unaffected by that
 # toggle and shows the same note in both modes.
 #
-# Takes effect on the NEXT LAUNCH of a project: the flag is published to tmux
-# when the session is created, so `amux --reload` alone will not add the row to
-# a session that is already running.
+# Takes effect the NEXT TIME YOU RUN `amux` in that project — a re-attach is
+# enough, the session need not be killed — because the flag is published to tmux
+# on every launch, not only at session creation. Turning it back off works the
+# same way. `amux --reload` alone moves it neither direction: reload re-sources
+# the tmux config, while the number of status lines is set on attach. Under
+# `--frame` the publish rides the frame's build, so a relaunch that reuses a
+# healthy frame keeps the previous setting until the frame is rebuilt.
 #
 # Per-directory overrides work exactly like [frame]'s — a
 # [notes.dirs."<path>"] block wins for that directory and its subtree:
