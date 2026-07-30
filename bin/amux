@@ -316,8 +316,11 @@ _amux_frame_default() {
 # update_colors.sh reads THAT to choose `status 5` over `status 4`.
 # Config-read, so it rides the launch-time memo like every other field helper
 # here — do not call it per-window.
+# Takes the directory to resolve against so `--reload` can answer for a session
+# other than the one the CLI is standing in ([notes.dirs."<path>"] makes the
+# answer per-project); defaults to $PWD for the launch path.
 _amux_note_row() {
-  [ "$(agentmux_notes_field row "$PWD")" = "true" ] && echo 1 || echo ""
+  [ "$(agentmux_notes_field row "${1:-$PWD}")" = "true" ] && echo 1 || echo ""
 }
 
 # Row 4's empty-state hint, asked of notes.sh (its NT_HINT4) so the literal lives
@@ -352,6 +355,34 @@ _amux_note_hint4() {
     return 1
   fi
   printf '%s' "$h"
+}
+
+# The [notes] row session options for <session>, resolved against <dir>, left in
+# the _AMUX_NOTE_OPTS array as tmux arguments ready to splice into a ';'-chained
+# batch. An array rather than a string because the hint carries spaces and `#[…]`
+# style directives that word-splitting would destroy, and a global because bash
+# 3.2 has no namerefs.
+#
+# ONE implementation, two callers: the launch path (_amux_ensure_agent_session)
+# and `--reload`. They must agree exactly — a reload that published a different
+# shape than a launch would make the row's state depend on which command you last
+# ran, which is precisely the confusion this feature already cost once.
+#
+# SYMMETRIC: the else branch UNSETS both options, so turning `row = false` back
+# off takes effect. See _amux_ensure_agent_session's call site for why an add-only
+# emit was wrong, and _amux_note_hint4 for why an empty hint skips its set.
+_amux_note_opts() {
+  local _nos=$1 _nod=$2 _norow _nohint
+  _norow=$(_amux_note_row "$_nod")
+  if [ -n "$_norow" ]; then
+    _AMUX_NOTE_OPTS=(set-option -t "$_nos" @amux_note_row 1)
+    if _nohint=$(_amux_note_hint4); then
+      _AMUX_NOTE_OPTS+=(';' set-option -t "$_nos" @amux_note4 "$_nohint")
+    fi
+  else
+    _AMUX_NOTE_OPTS=(set-option -u -t "$_nos" @amux_note_row
+                     ';' set-option -u -t "$_nos" @amux_note4)
+  fi
 }
 
 # The effective frame prefix for $PWD: [frame] prefix, or frame.conf's built-in
@@ -1226,6 +1257,52 @@ _amux_kill_all() {
 # not by --reload. terminal-features in agentmux.conf are computed at client
 # attach, so those (unchanged here) apply on the next reattach; the plain
 # `set -g` options this file adds take effect immediately.
+# Re-publish the LAUNCH-TIME config-derived session options on one live agent
+# shard, then let update_colors.sh act on them.
+#
+# `source-file agent.conf` alone reloads only what lives IN the tmux config. A
+# field like `[notes] row` is read from amux.toml by bin/amux and published as a
+# tmux OPTION, so a reload that skipped this step delivered half the feature: the
+# new status-format[4] line arrived, the option and the row count did not, and
+# `amux --reload` appeared to do nothing at all. Every future launch-time config
+# field belongs here too, for the same reason.
+#
+# The dir is each session's own @amux_dir (recorded at launch), NOT $PWD —
+# `--reload` reconciles every project's shard, and [notes.dirs."<path>"] can
+# answer differently per project. A session with no @amux_dir (created before
+# that option existed) is left alone rather than resolved against the wrong
+# directory: guessing would be worse than not touching it.
+#
+# update_colors.sh runs ONCE per shard, not once per session: it reconciles every
+# @autoagent session on the server it is pointed at, whatever session name it is
+# given. It is a HOOK-path script (bare `tmux`), so it is handed the shard through
+# $TMUX the same way the selftests fake hook context — an argv call, which avoids
+# building a shell string around a session name that may contain spaces.
+_amux_reload_config_opts() {
+  local _rs=$1 _sess _dir _sp _first=""
+  while IFS= read -r _sess; do
+    [ -n "$_sess" ] || continue
+    [ -n "$_first" ] || _first=$_sess
+    # BARE session name, never the `=<name>` exact-match form used by
+    # _amux_attach: `=` is attach/switch-client target syntax. show-options
+    # silently returns EMPTY for `-t '=name'` (with -q) and set-option fails
+    # outright ("no such session: =name"), so the `=` form here published
+    # nothing at all while looking correct. Verified on tmux 3.7b. Prefix
+    # ambiguity is not a risk: these names come from this server's own
+    # list-sessions, so an exact match always exists and tmux prefers it.
+    _dir=$(tmux -L "$_rs" show-options -qv -t "$_sess" @amux_dir 2>/dev/null)
+    [ -n "$_dir" ] || continue
+    _amux_note_opts "$_sess" "$_dir"
+    tmux -L "$_rs" "${_AMUX_NOTE_OPTS[@]}" 2>/dev/null
+  done <<EOF
+$(tmux -L "$_rs" list-sessions -F '#{?@autoagent,#{session_name},}' 2>/dev/null | grep .)
+EOF
+  [ -n "$_first" ] || return 0
+  _sp=$(tmux -L "$_rs" display-message -p '#{socket_path}' 2>/dev/null)
+  [ -n "$_sp" ] || return 0
+  TMUX="$_sp,0,0" sh "$AGENTMUX_SCRIPTS/update_colors.sh" "$_first" 2>/dev/null
+}
+
 _amux_reload() {
   local conf="$AGENTMUX_TMUX/agent.conf" _as ok=0 dead=0 fail=0
   if [ ! -f "$conf" ]; then
@@ -1237,6 +1314,7 @@ _amux_reload() {
     if ! tmux -L "$_as" list-sessions >/dev/null 2>&1; then dead=$((dead+1)); continue; fi
     if tmux -L "$_as" source-file "$conf" 2>/dev/null; then ok=$((ok+1))
     else fail=$((fail+1)); echo "amux: failed to reload $_as" >&2; fi
+    _amux_reload_config_opts "$_as"
   done
   if [ "$ok" -eq 0 ] && [ "$fail" -eq 0 ]; then
     echo "amux: no live agent servers to reload"; return 0
@@ -1300,11 +1378,10 @@ _amux_ensure_agent_session() {
   # separate call is an exec + socket round-trip. ORDERING IS LOAD-BEARING:
   # @autoagent and @l1reserved must be set BEFORE the caller attaches (update_colors.sh
   # only paints @autoagent sessions; the reservation must be published pre-attach).
-  local _prefix _pin_slot _reserved _note_row _hint4
+  local _prefix _pin_slot _reserved
   _prefix=$(_amux_prefix)
   _pin_slot=$(_amux_bar_pin_slot "$PWD")
   _reserved=$(_amux_bar_reserved)
-  _note_row=$(_amux_note_row)
   local -a _opts=(set-option -t "$name" "@autoagent" "1"
                   ';' set-option -t "$name" "@amux_dir" "$PWD")
   [ -n "$_prefix" ]   && _opts+=(';' set-option -t "$name" prefix "$_prefix")
@@ -1321,15 +1398,9 @@ _amux_ensure_agent_session() {
   # ';'-chained batch. @amux_note4 is the launch-time hint default — see
   # _amux_note_hint4 for why row 4 needs one at all, and why a failed lookup
   # (empty output) must skip this set rather than publish an explicit "".
-  if [ -n "$_note_row" ]; then
-    _opts+=(';' set-option -t "$name" @amux_note_row 1)
-    if _hint4=$(_amux_note_hint4); then
-      _opts+=(';' set-option -t "$name" @amux_note4 "$_hint4")
-    fi
-  else
-    _opts+=(';' set-option -u -t "$name" @amux_note_row
-            ';' set-option -u -t "$name" @amux_note4)
-  fi
+  # Shared with `--reload` — see _amux_note_opts.
+  _amux_note_opts "$name" "$PWD"
+  _opts+=(';' "${_AMUX_NOTE_OPTS[@]}")
   _opts+=(';' set-option -g @l1reserved "$_reserved")
   _amux_atmux "${_opts[@]}"
 }
@@ -1959,7 +2030,40 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   printf '[notes]\nrow = false\n[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "note_row false"   ""  "$(AGENTMUX_CONFIG="$_nw" _amux_json_cache="" _amux_note_row)"
-  rm -f "$_nw"
+  # The dir argument is what lets `--reload` answer for a session other than the
+  # one the CLI stands in — a [notes.dirs] block must beat the base for that dir.
+  printf '[notes]\nrow = false\n[notes.dirs."/tmp/amux-nr/on"]\nrow = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "note_row dir override" "1" \
+    "$(AGENTMUX_CONFIG="$_nw" _amux_json_cache="" _amux_note_row /tmp/amux-nr/on/deep)"
+  _assert "note_row dir unmatched" "" \
+    "$(AGENTMUX_CONFIG="$_nw" _amux_json_cache="" _amux_note_row /tmp/elsewhere)"
+
+  # _amux_note_opts: the ONE emitter both the launch path and --reload use. The
+  # shape is asserted as a single string so a silently-empty array (which would
+  # publish nothing while every other assertion still passed — the exact defect
+  # the `=<name>` target bug produced) cannot slip through.
+  printf '[notes]\nrow = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  ( AGENTMUX_CONFIG="$_nw"; _amux_json_cache=""; _amux_note_opts proj /tmp/x
+    printf '%s\n' "${_AMUX_NOTE_OPTS[*]}" ) > "$_nw.on"
+  _assert "note_opts on" \
+    "set-option -t proj @amux_note_row 1 ; set-option -t proj @amux_note4 $(sh "$_selftest_dir/../scripts/notes.sh" hint 4)" \
+    "$(cat "$_nw.on")"
+  printf '[notes]\nrow = false\n[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  ( AGENTMUX_CONFIG="$_nw"; _amux_json_cache=""; _amux_note_opts proj /tmp/x
+    printf '%s\n' "${_AMUX_NOTE_OPTS[*]}" ) > "$_nw.off"
+  _assert "note_opts off (symmetric unset)" \
+    "set-option -u -t proj @amux_note_row ; set-option -u -t proj @amux_note4" \
+    "$(cat "$_nw.off")"
+  # Never the `=<name>` form: show-options returns empty for it and set-option
+  # errors "no such session: =name", so a `=` here publishes nothing at all.
+  # BOTH directions are grepped on purpose — checking only the off-branch output
+  # passes while the on-branch carries the bug (measured, by reintroducing it).
+  _assert "note_opts uses a bare target" "0" \
+    "$(cat "$_nw.on" "$_nw.off" | grep -c -- '-t =proj')"
+  rm -f "$_nw" "$_nw.on" "$_nw.off"
 
   # _amux_frame_prefix: effective frame prefix = [frame] prefix or the C-f default.
   printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"

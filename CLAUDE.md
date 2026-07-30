@@ -143,6 +143,21 @@ you see blank/stale status rows). Run **`amux --reload`** (`_amux_reload`) to re
 `frame.conf` would reset the per-launch `[frame] prefix`); frame/term config changes are
 picked up by relaunching the frame, and `terminal-features` apply on the next reattach.
 
+**`--reload` also re-publishes the LAUNCH-TIME config-derived session options
+(`_amux_reload_config_opts`), and a new one of those belongs there too.** Re-sourcing
+`agent.conf` only reloads what lives *in* the tmux config; a field read from `amux.toml`
+by `bin/amux` and published as a tmux *option* (`[notes] row` → `@amux_note_row` →
+`update_colors.sh`'s row count) needs this second step, or `--reload` silently delivers
+half the change — the shipped bug that prompted it: the new `status-format[4]` arrived,
+the option and the fifth row did not, and the command appeared to do nothing at all.
+`_amux_note_opts` is the single emitter both this and the launch path use, so they cannot
+drift. Two traps it encodes: resolve each session against **its own `@amux_dir`**, never
+`$PWD` (reload spans every project, and `[notes.dirs]` answers per directory; a session
+with no `@amux_dir` is skipped rather than resolved against the wrong one), and target
+sessions by **bare name** — `show-options -t '=name'` silently returns empty and
+`set-option -t '=name'` errors `no such session`, so the `=` exact-match form used by
+`_amux_attach` publishes *nothing* here while looking right.
+
 Session-log state lives at `${XDG_STATE_HOME:-~/.local/state}/agentmux/sessions.jsonl` — **not** inside the `~/.agentmux` clone (that's repo content; the ledger is runtime state).
 
 ## Branches

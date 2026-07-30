@@ -462,7 +462,7 @@ An optional **fourth status row** is a note line that stays on screen all the ti
 row = true
 ```
 
-(`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) It takes effect **the next time you run `amux` in that project** — a re-attach is enough, you don't have to kill the session — because the setting is published to the session on every launch. Turning it back off works the same way. `amux --reload` alone won't move it either direction: reload re-sources the tmux config, and the number of status lines is set on attach. Under `--frame`, the publish rides the frame's build, so a relaunch that reuses a healthy frame carries the previous setting until the frame itself is rebuilt.
+(`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) Apply a change to it with **`amux --reload`**, which pushes it to every live agent session at once — in both directions, without detaching. Running `amux` in the project again also works (a re-attach is enough; you don't have to kill the session), since the setting is published on every launch. Under `--frame` that launch-path publish rides the frame's build, so a relaunch reusing a healthy frame keeps the previous setting until the frame itself is rebuilt — `--reload` reaches it regardless.
 
 Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
 
