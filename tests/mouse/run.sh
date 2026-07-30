@@ -2,7 +2,7 @@
 # run.sh — end-to-end verification that real mouse clicks on the tmux status bar
 # drive the notes feature. expect + shell only: no Python, Node, or other
 # runtime. Builds an isolated tmux world, drives a genuinely attached client
-# through a pty, runs all 8 tests, reaps everything.
+# through a pty, runs all 10 tests, reaps everything.
 #
 #   bash tests/mouse/run.sh                      # from anywhere; no arguments
 #   AMUX_MOUSE_VERBOSE=1 bash tests/mouse/run.sh # every assertion, not just failures
@@ -39,13 +39,14 @@
 #   $ROOT and the rewrite is ASSERTED against `list-keys -T root` before a
 #   single test runs.
 #
-# TRAP GUARD 2 — the no-status-rows trap. `set -g status 4` is silently reverted
-#   to `status on` by the client-attached hook -> scripts/update_colors.sh:167
-#   for any session without `@autoagent 1` (status 4 is set only by
-#   _amux_apply_colour, :153). With one status line the note rows do not exist
-#   and the whole suite would pass nothing while looking busy. Asserted twice:
-#   the session option here, and four status lines actually RENDERING on an
-#   attached client in main.exp's preflight.
+# TRAP GUARD 2 — the no-status-rows trap. `set -g status 5` is silently reverted
+#   to `status on` by the client-attached hook -> scripts/update_colors.sh for any
+#   session without `@autoagent 1` (the multi-row count is set only by
+#   _amux_apply_colour), and drops to 4 without `@amux_note_row 1` (which is what
+#   selects five lines over four). With one status line the note rows do not
+#   exist and the whole suite would pass nothing while looking busy. Asserted
+#   twice: the session option here, and five status lines actually RENDERING on
+#   an attached client in main.exp's preflight.
 #
 # NEGATIVE-TESTING THE GUARDS. AMUX_MOUSE_BREAK deliberately breaks one precondition so
 # the guard can be seen to FIRE rather than merely to exist. Four values:
@@ -158,7 +159,7 @@ esac
 [ -s "$WORK/base.conf" ] || die "conf rewrite failed"
 { printf '\n'
   printf 'set -g mouse on\n'
-  printf 'set -g status 4\n'
+  printf 'set -g status 5\n'
   printf 'set -g status-keys emacs\n'
 } >> "$WORK/base.conf"
 
@@ -194,16 +195,21 @@ PANE=$(tmux -L "$SOCK_A" list-panes -t test:1 -F '#{pane_id}')
 [ "$PANE" = "%0" ] && die "target pane resolved to %0; tests must run off %0"
 say "target pane         : $PANE (deliberately not %0)"
 
-# GUARD 2a — @autoagent 1 is what makes update_colors.sh choose `status 4`
-# over `status on`. Part 2 (the render-time assertion) is in main.exp.
+# GUARD 2a — @autoagent 1 is what makes update_colors.sh choose a multi-row
+# `status N` over `status on`; @amux_note_row (set below) then picks 5 over 4.
+# Part 2 (the render-time assertion) is in main.exp.
 [ "$BREAK" = autoagent ] || tmux -L "$SOCK_A" set -t test @autoagent 1
+# The fourth agentmux row exists only for a session carrying @amux_note_row —
+# bin/amux publishes it from `[notes] row`; here we set it directly, since this
+# suite drives tmux, not amux.
+tmux -L "$SOCK_A" set -t test @amux_note_row 1
 tmux -L "$SOCK_A" run-shell "$ROOT/scripts/update_colors.sh test"
 for _i in 1 2 3 4 5 6 7 8 9 10; do
   ST=$(tmux -L "$SOCK_A" show-options -t test status)
-  [ "$ST" = "status 4" ] && break
+  [ "$ST" = "status 5" ] && break
   sleep 0.2
 done
-[ "$ST" = "status 4" ] || die "session status is [$ST], not [status 4] — the note rows would not exist"
+[ "$ST" = "status 5" ] || die "session status is [$ST], not [status 5] — the note rows would not exist"
 say "status asserted     : $ST"
 
 # The `render` break passes 2a and then breaks what 2b watches. Note it must
@@ -236,7 +242,7 @@ rc_main=$?
 # lines did not actually render, so the note rows do not exist and every later
 # result would be meaningless. Stop rather than report a table of nothing.
 if [ "$rc_main" -eq 2 ]; then
-  die "preflight failed — four status lines did not render, or the derived geometry does not hold; the note rows do not exist"
+  die "preflight failed — five status lines did not render, or the derived geometry does not hold; the note rows do not exist"
 fi
 expect "$HERE/frame.exp" "$ROOT" "$SOCK_A" "$SOCK_B" "$WORK" "$OUT" "$PANE"
 rc_frame=$?
@@ -252,9 +258,9 @@ while IFS=$'\t' read -r n name tag; do
   printf '   [%s] %3s  %s\n' "$tag" "$label" "$name"
 done < "$OUT/results.tsv"
 printf '%s\n' "  ----------------------------------------------------------------------------"
-if [ "$total" -lt 9 ]; then
-  printf '   %s\n' "INCOMPLETE: only $total of 9 checks reported (a driver aborted early)"
-  failed=$((failed + 9 - total))
+if [ "$total" -lt 11 ]; then
+  printf '   %s\n' "INCOMPLETE: only $total of 11 checks reported (a driver aborted early)"
+  failed=$((failed + 11 - total))
 fi
 printf '   %s\n' "$((total - failed))/$total checks passed$([ "$failed" -eq 0 ] || echo "  —  $failed FAILED")"
 printf '   %s\n' "transcripts: $OUT/*.pty.log"

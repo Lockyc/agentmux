@@ -86,7 +86,7 @@ proc wp {s {secs 8}} { expect -timeout $secs -ex $s { return MATCH } timeout { r
 
 # noprompt — assert NO note prompt appears within <secs>. Returns 1 if none did.
 proc noprompt {{secs 3}} {
-    expect -timeout $secs -re {note [123]>} { return 0 } timeout { return 1 }
+    expect -timeout $secs -re {note [1-4]>} { return 0 } timeout { return 1 }
 }
 
 # waitopt — poll an option until it equals <want>. Returns polls used, or -1.
@@ -184,10 +184,29 @@ set SUMMARY(2) "ROWTWO-BBB"
 set SUMMARY(3) "ROWTHREE-CCC"
 
 proc reset_to_summary {} {
-    foreach i {1 2 3} {
+    foreach i {1 2 3 4} {
         tmA set-option -up -t $::mtpane "@amux_note_raw$i"
         tmA set-option -up -t $::mtpane "@amux_note$i"
+    }
+    foreach i {1 2 3} {
         tmA set-option -p  -t $::mtpane "@amux_row$i" $::SUMMARY($i)
     }
     tmA set-option -up -t $::mtpane @amux_notes
+    # Row 4 never depends on @amux_notes, so unlike rows 1-3 (which read
+    # @amux_rowN directly from status-format while notes mode is off) it has no
+    # display value at all until something renders it. Render here so every
+    # check starts from the SAME observable state a real session would show
+    # once notes.sh has ever run once — otherwise @amux_note4 reads empty
+    # rather than its hint immediately after a reset.
+    render
+}
+
+# Enter notes mode. Rows 1-3 are click-INERT while the summaries are up (the
+# click that used to enter this mode was retired), so any test that clicks rows
+# 1-3 must come through here first. Sets the flag directly rather than sending
+# `prefix N`: the key is a separate surface with its own test, and going through
+# it would make every note test depend on it.
+proc notes_mode {} {
+    tmA set-option -p -t $::mtpane @amux_notes 1
+    render
 }

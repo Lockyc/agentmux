@@ -17,7 +17,7 @@
 source [file join [file dirname [info script]] lib.tcl]
 set mtpane [lindex $argv 5]
 
-chk 8 "framed / nested case"
+chk 10 "framed / nested case"
 
 set nb [tmB list-keys -T root]
 set ncount 0
@@ -65,7 +65,7 @@ if {[llength $clients] == 1} {
     regexp {^(\d+):(\d+)$} [lindex $clients 0] -> ih iw
     set IH $ih; set IN [expr {$ih - $iw}]
 }
-eq "the nested client still renders 4 status lines" $IN 4
+eq "the nested client still renders 5 status lines" $IN 5
 ok "outer status costs exactly one line (inner height = outer height - 1)" \
    [expr {$IH == $OH - $ON}] "inner=$IH outer=$OH outer_status=$ON"
 
@@ -73,11 +73,12 @@ ok "outer status costs exactly one line (inner height = outer height - 1)" \
 set IL1 [rowline 1 $IH $IN $ptop]
 set IL2 [rowline 2 $IH $IN $ptop]
 set IL3 [rowline 3 $IH $IN $ptop]
+set IL4 [rowline 4 $IH $IN $ptop]
 set outer_status_line [wlline $OH $ON]
 note "outer: h=$OH status=$ON pane_top=$ptop | inner: h=$IH status=$IN"
-note "derived inner rows: 1=$IL1 2=$IL2 3=$IL3; outer status bar on line $outer_status_line"
+note "derived inner rows: 1=$IL1 2=$IL2 3=$IL3 4=$IL4; outer status bar on line $outer_status_line"
 ok "inner rows sit ABOVE the outer status bar (i.e. inside the outer's PANE)" \
-   [expr {$IL3 < $outer_status_line}] "row3=$IL3 outer_status=$outer_status_line"
+   [expr {$IL4 < $outer_status_line}] "row4=$IL4 outer_status=$outer_status_line"
 
 # Does the click reach the inner server at all? The prefill is the proof it is
 # the INNER server's prompt: only it knows @amux_note_raw1.
@@ -97,6 +98,22 @@ eq "note committed through the nest, into row 2" [opt @amux_note_raw2] "nested-n
 eq "row 1 untouched" [opt @amux_note_raw1] "fix #42"
 eq "row 3 untouched" [opt @amux_note_raw3] "ask sam, then deploy"
 ok "no `needs tmux 3.6+` message" [expr {![string match "*needs tmux 3.6*" [logtext]]}]
+
+# Row 4 through the nest, in SUMMARY mode — the framed case of the always-on
+# note line, which is the shape most agentmux sessions actually run in. Clear
+# any note4 carried over from main.exp first, so the prefill is empty and the
+# committed text below is exactly "nested-row-four", not that text appended to
+# a stale prefill.
+tmA set-option -up -t $mtpane @amux_note_raw4
+tmA set-option -up -t $mtpane @amux_notes
+render
+click 5 $IL4
+ok "click on inner row 4 opened \`note 4>\` in summary mode" [expr {[wp "note 4>"] eq "MATCH"}]
+typed "nested-row-four"
+enter
+waitopt @amux_note_raw4 "nested-row-four"
+eq "row 4 committed through the nest" [opt @amux_note_raw4] "nested-row-four"
+eq "the mode flag was not touched" [opt @amux_notes] ""
 chkend
 
 tmB detach-client -t $tty

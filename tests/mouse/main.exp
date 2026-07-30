@@ -39,30 +39,33 @@ set L0 [wlline $H $N]
 set L1 [rowline 1 $H $N]
 set L2 [rowline 2 $H $N]
 set L3 [rowline 3 $H $N]
+set L4 [rowline 4 $H $N]
 
 # ---------------------------------------------------------------------------
 # Preflight — TRAP GUARD 2, render-time half + the geometry verification.
 #
-# GUARD: `set -g status 4` is silently reverted to `status on` by the
-# client-attached hook -> scripts/update_colors.sh:167 for any session NOT
-# carrying `@autoagent 1` (status 4 is set only by _amux_apply_colour, :153).
-# run.sh asserts the session OPTION says 4; this asserts four status lines
-# actually RENDER on a genuinely attached client. Without it the three note
-# rows do not exist, every click lands on the window list, and the whole suite
-# passes nothing while looking busy.
+# GUARD: `set -g status 5` is silently reverted to `status on` by the
+# client-attached hook -> scripts/update_colors.sh for any session NOT carrying
+# `@autoagent 1`, and to `status 4` without `@amux_note_row 1`. run.sh asserts
+# the session OPTION says 5; this asserts five status lines actually RENDER on a
+# genuinely attached client. Without it the note rows do not exist, every click
+# lands on the window list, and the whole suite passes nothing while looking busy.
 # ---------------------------------------------------------------------------
 chk 0 "preflight: status lines, geometry derivation, geometry VERIFIED by click"
-eq "status lines rendered (client_height - window_height)" $N 4
-eq "session option \`status\`" [tmA show-options -t test status] "status 4"
+eq "status lines rendered (client_height - window_height)" $N 5
+eq "session option \`status\`" [tmA show-options -t test status] "status 5"
 eq "status-position (the arithmetic assumes bottom)" [tmA show-options -g status-position] "status-position bottom"
 eq "client height" $H 30
-note "derived: status-format\[0\]=line $L0  row1=$L1  row2=$L2  row3=$L3"
+note "derived: status-format\[0\]=line $L0  row1=$L1  row2=$L2  row3=$L3  row4=$L4"
 ok "no `needs tmux 3.6+` message so far" [expr {![string match "*needs tmux 3.6*" [logtext]]}]
 
 # Verify the arithmetic instead of trusting it: click each derived line and type
 # text that is distinct per row. If the mapping were off by one, the text would
-# land in the wrong option (or nowhere) and this fails loudly.
+# land in the wrong option (or nowhere) and this fails loudly. Rows 1-3 are
+# click-inert in summary mode, so they are probed in NOTES mode; row 4 is probed
+# in summary mode, which is where it is the live target.
 reset_to_summary
+notes_mode
 foreach {k line want} [list 1 $L1 geo-row-one 2 $L2 geo-row-two 3 $L3 geo-row-three] {
     click 5 $line
     ok "click line $line opened \`note $k>\`" [expr {[wp "note $k>"] eq "MATCH"}]
@@ -72,6 +75,14 @@ foreach {k line want} [list 1 $L1 geo-row-one 2 $L2 geo-row-two 3 $L3 geo-row-th
     eq "typed text landed in @amux_note_raw$k" [opt "@amux_note_raw$k"] $want
     ok "  (settled after $p polls)" 1
 }
+tmA set-option -up -t $mtpane @amux_notes
+render
+click 5 $L4
+ok "click line $L4 opened \`note 4>\` in SUMMARY mode" [expr {[wp "note 4>"] eq "MATCH"}]
+typed "geo-row-four"
+enter
+waitopt @amux_note_raw4 "geo-row-four"
+eq "typed text landed in @amux_note_raw4" [opt @amux_note_raw4] "geo-row-four"
 eq "row 1 got ONLY its own text" [opt @amux_note_raw1] "geo-row-one"
 eq "row 2 got ONLY its own text" [opt @amux_note_raw2] "geo-row-two"
 eq "row 3 got ONLY its own text" [opt @amux_note_raw3] "geo-row-three"
@@ -83,32 +94,74 @@ if {!$pre_ok} {
 }
 
 # ---------------------------------------------------------------------------
-# 1 — the silent-failure gate
-# Does #{mouse_status_range}/#{pane_id} survive into the run-shell inside the
-# `if -F` branch? If it does not, the click does nothing at all — no error, no
-# fallthrough. That is the failure mode this whole suite exists to see.
+# 1 — THE RETIREMENT. A click on a summary row must be inert: no prompt, no
+# mode flip, no note. Asserted positively (pane_echo) as well as negatively,
+# because "no option changed" passes identically when the click never happened
+# at all — which is the failure mode this suite exists to see.
 # ---------------------------------------------------------------------------
-chk 1 "silent-failure gate (click a summary row)"
+chk 1 "summary-row clicks are inert (the retirement)"
 reset_to_summary
 eq "@amux_notes before (summary mode)" [opt @amux_notes] ""
 eq "row 1 is showing the SUMMARY, not a note" [opt @amux_row1] $SUMMARY(1)
 click 5 $L1
-ok "a \`note 1>\` prompt opened" [expr {[wp "note 1>"] eq "MATCH"}]
-eq "@amux_notes flipped on" [opt @amux_notes] "1"
-eq "rows re-rendered to the empty-state hint" [opt @amux_note1] \
-   "#\[fg=colour240\]✎ click a row to write a note"
-eq "@amux_row1 untouched by notes.sh" [opt @amux_row1] $SUMMARY(1)
+ok "NO note prompt opened" [noprompt 3]
+eq "@amux_notes did NOT flip on" [opt @amux_notes] ""
+eq "no note was written" [opt @amux_note_raw1] ""
+eq "@amux_row1 untouched" [opt @amux_row1] $SUMMARY(1)
+ok "typed text reached the pane's shell, not a prompt" [pane_echo "MT-INERT-TOKEN"]
+chkend
+
+# ---------------------------------------------------------------------------
+# 2 — the silent-failure gate, on the row that is live in summary mode.
+# Does #{mouse_status_range}/#{pane_id} survive into the run-shell inside the
+# `if -F` branch? If it does not, the click does nothing at all — no error, no
+# fallthrough. Row 4 is where that is now observable without a mode change.
+# ---------------------------------------------------------------------------
+chk 2 "row 4 — the always-on note line, clickable in summary mode"
+reset_to_summary
+eq "row 4 shows its own empty-state hint" [opt @amux_note4] \
+   "#\[fg=colour240\]✎ click to add a note"
+click 5 $L4
+ok "a \`note 4>\` prompt opened" [expr {[wp "note 4>"] eq "MATCH"}]
+typed "ship it"
+enter
+waitopt @amux_note_raw4 "ship it"
+waitopt @amux_note4 "✎ ship it"
+eq "@amux_note_raw4" [opt @amux_note_raw4] "ship it"
+eq "row 4's display value carries the mark" [opt @amux_note4] "✎ ship it"
+eq "the mode flag was NOT touched" [opt @amux_notes] ""
+eq "@amux_row1 untouched — the summaries stayed put" [opt @amux_row1] $SUMMARY(1)
+eq "row 1 gained no note" [opt @amux_note_raw1] ""
 ok "no `needs tmux 3.6+` message" [expr {![string match "*needs tmux 3.6*" [logtext]]}]
+chkend
+
+# ---------------------------------------------------------------------------
+# 3 — rows 1-3 are live again once notes mode is on: the retirement removed the
+# mode-ENTERING side effect, not the editing. Also covers the rows-1-3
+# empty-state hint, which is independent of slot 4's.
+# ---------------------------------------------------------------------------
+chk 3 "notes-mode clicks on rows 1-3 still work"
+reset_to_summary
+tmA set-option -p -t $mtpane @amux_note_raw4 "row four note"
+notes_mode
+eq "rows 1-3 show their own empty-state hint" [opt @amux_note1] \
+   "#\[fg=colour240\]✎ click a row to write a note"
+eq "row 4 is unaffected by the mode" [opt @amux_note4] "✎ row four note"
+click 5 $L1
+ok "a \`note 1>\` prompt opened" [expr {[wp "note 1>"] eq "MATCH"}]
+eq "@amux_notes still on" [opt @amux_notes] "1"
+eq "@amux_row1 untouched by notes.sh" [opt @amux_row1] $SUMMARY(1)
 esc
 settle 1
 eq "escape left the note unwritten" [opt @amux_note_raw1] ""
 chkend
 
 # ---------------------------------------------------------------------------
-# 2 — row mapping. Distinct text, read back from the option: this is the
+# 4 — row mapping. Distinct text, read back from the option: this is the
 # positional proof, and it is stronger than reading the rendered line.
 # ---------------------------------------------------------------------------
-chk 2 "row mapping (click row 2 specifically)"
+chk 4 "row mapping (click row 2 specifically)"
+notes_mode
 click 5 $L2
 ok "a \`note 2>\` prompt opened (not 1 or 3)" [expr {[wp "note 2>"] eq "MATCH"}]
 typed "hello-row-two"
@@ -128,10 +181,10 @@ eq "row 2's display value" [opt @amux_note2] "hello-row-two"
 chkend
 
 # ---------------------------------------------------------------------------
-# 3 — '#' round-trip. Stored raw, doubled for display, and the PREFILL is the
+# 5 — '#' round-trip. Stored raw, doubled for display, and the PREFILL is the
 # raw (a prefill of the escaped value would grow a '#' on every edit).
 # ---------------------------------------------------------------------------
-chk 3 "'#' escaping round-trip + prefill"
+chk 5 "'#' escaping round-trip + prefill"
 click 5 $L1
 ok "prompt opened for row 1" [expr {[wp "note 1>"] eq "MATCH"}]
 typed "fix #42"
@@ -153,11 +206,11 @@ eq "bare-Enter re-commit did not double-escape" [opt @amux_note1] "✎ fix ##42"
 chkend
 
 # ---------------------------------------------------------------------------
-# 4 — comma survives. Without `-l`, -I's prefill is a COMMA-SPLIT list, so the
+# 6 — comma survives. Without `-l`, -I's prefill is a COMMA-SPLIT list, so the
 # prefill would truncate at the comma and a bare Enter would silently commit
 # the truncation.
 # ---------------------------------------------------------------------------
-chk 4 "comma survives the prefill round-trip (-l)"
+chk 6 "comma survives the prefill round-trip (-l)"
 click 5 $L3
 ok "prompt opened for row 3" [expr {[wp "note 3>"] eq "MATCH"}]
 typed "ask sam, then deploy"
@@ -175,11 +228,11 @@ eq "bare-Enter re-commit did not truncate at the comma" \
 chkend
 
 # ---------------------------------------------------------------------------
-# 5 — #{p400:...} must make an EMPTY row clickable across the full width. A
+# 7 — #{p400:...} must make an EMPTY row clickable across the full width. A
 # range covers only rendered characters, so without the pad a blank row has no
 # click target anywhere.
 # ---------------------------------------------------------------------------
-chk 5 "padding gives a full-width click target"
+chk 7 "padding gives a full-width click target"
 tmA set-option -up -t $mtpane @amux_note_raw2
 render
 eq "row 2 is genuinely empty (rows 1/3 filled, so the hint does not fire)" [opt @amux_note2] ""
@@ -213,11 +266,11 @@ eq "no stray write to row 3" [opt @amux_note_raw3] "ask sam, then deploy"
 chkend
 
 # ---------------------------------------------------------------------------
-# 6 — the `if -F` ELSE branch: a window-list click must still switch windows.
+# 8 — the `if -F` ELSE branch: a window-list click must still switch windows.
 # The click column is DERIVED from the expanded status-left + window entry
 # widths, never hardcoded.
 # ---------------------------------------------------------------------------
-chk 6 "window-list clicks still work"
+chk 8 "window-list clicks still work"
 tmA select-window -t test:1
 settle 1
 set sl   [string length [tmA display-message -p -t test:1 {#{E:status-left}}]]
@@ -255,9 +308,9 @@ eq "clicking \`1:second\` switched back (col $col1)" $w2 "1:second"
 chkend
 
 # ---------------------------------------------------------------------------
-# 7 — Escape must discard, leave the note intact, and not fire the 3.6 fallback.
+# 9 — Escape must discard, leave the note intact, and not fire the 3.6 fallback.
 # ---------------------------------------------------------------------------
-chk 7 "escape cancels cleanly"
+chk 9 "escape cancels cleanly"
 settle 1
 set raw_before  [opt @amux_note_raw1]
 set disp_before [opt @amux_note1]

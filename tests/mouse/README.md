@@ -20,7 +20,7 @@ of `%1`–`%9` in its template with the typed response, and pane ids are `%0`, `
 `%2`… so a literal pane id in the target made every tab except the first silently
 non-functional — no error, no prompt, and the default `switch-client` didn't run
 either. The fix (`#{window_id}.#{pane_index}`, which contains no `%N`) is what
-tests 1–7 running on `%1` rather than `%0` verify.
+tests 1–9 running on `%1` rather than `%0` verify.
 
 ## Running it
 
@@ -34,7 +34,7 @@ AMUX_MOUSE_BREAK=<guard> bash tests/mouse/run.sh   # negative-test a guard (belo
 selftests — ~1 minute** — because it drives real pty clients and must settle between
 clicks (see *Synchronisation*), so prefer running it directly while iterating.
 
-Output: a `[PASS]/[FAIL]` line per check plus a table; exit 0 only if all 9 pass.
+Output: a `[PASS]/[FAIL]` line per check plus a table; exit 0 only if all 11 pass.
 Full pty transcripts land in `tests/mouse/last-run/` (generated, gitignored).
 
 ## Dependencies
@@ -66,25 +66,30 @@ rather than relying on apt to already be new enough.
 
 | # | Check |
 | --- | --- |
-| pre | Four status lines actually render; the row→screen-line arithmetic, verified by clicking |
-| 1 | The silent-failure gate: a click on a summary row opens a prompt at all |
-| 2 | Row mapping — a click on row 2 lands in row 2 |
-| 3 | `#` round-trip: stored raw, doubled for display, re-prefilled raw (not `##`) |
-| 4 | A note containing a comma survives the prefill round-trip (`command-prompt -l`) |
-| 5 | `#{p400:…}` padding makes an empty row clickable across the full width |
-| 6 | The `if -F` else branch: window-list clicks still switch windows |
-| 7 | Escape cancels, leaving the note and the mode flag intact |
-| 8 | The framed (`amux --frame`) case: a click traverses the outer tmux to the inner server |
+| pre | Five status lines actually render; the row→screen-line arithmetic, verified by clicking (rows 1-3 in notes mode, row 4 in summary mode) |
+| 1 | THE RETIREMENT: a click on a summary row (1-3) while notes mode is off is inert — no prompt, no mode flip, no note written |
+| 2 | Row 4 — the always-on note line — is the live click target in summary mode, and never touches the mode flag |
+| 3 | Once notes mode is on, rows 1-3 click and edit exactly as before (the retirement removed only the mode-entering side effect) |
+| 4 | Row mapping — a click on row 2 lands in row 2 |
+| 5 | `#` round-trip: stored raw, doubled for display, re-prefilled raw (not `##`) |
+| 6 | A note containing a comma survives the prefill round-trip (`command-prompt -l`) |
+| 7 | `#{p400:…}` padding makes an empty row clickable across the full width |
+| 8 | The `if -F` else branch: window-list clicks still switch windows |
+| 9 | Escape cancels, leaving the note and the mode flag intact |
+| 10 | The framed (`amux --frame`) case: a click on rows 1, 2, and 4 traverses the outer tmux to the inner server |
 
 ## How it works
 
 - **`run.sh`** builds the isolated world (both servers, the path-rewritten confs)
   and asserts the setup guards, then runs the two drivers and prints the table.
-- **`main.exp`** — preflight plus checks 1–7, on a pty attached *directly* to the
+- **`main.exp`** — preflight plus checks 1–9, on a pty attached *directly* to the
   agent server.
-- **`frame.exp`** — check 8, on a pty attached to the *frame* server, whose pane
+- **`frame.exp`** — check 10, on a pty attached to the *frame* server, whose pane
   runs the agent client, so every click really traverses both layers.
-- **`lib.tcl`** — shared driver: clicks, prompt waits, option polling, bookkeeping.
+- **`lib.tcl`** — shared driver: clicks, prompt waits, option polling, bookkeeping,
+  plus the `reset_to_summary`/`notes_mode` fixtures that put the pane into a known
+  mode before a check clicks rows 1-3 (click-inert in summary mode since the
+  retirement).
 
 **A genuinely attached client is required** — the binding's `#{client_tty}` only
 resolves for one. `expect`'s `spawn tmux attach` provides it, and the load-bearing
@@ -141,12 +146,14 @@ guard is seen to fire rather than merely to exist (`rewrite`, `binding`, `autoag
    and the rewrite is asserted against `list-keys -T root`: a textual check on the
    file is not enough, because only the live binding says where a click actually goes.
 2. **The no-status-rows trap.** The `client-attached` hook reaches
-   `update_colors.sh`, which resets `status 4` to `status on` for any session lacking
-   `@autoagent 1`. With one status line the three note rows do not exist, every click
-   lands on the window list, and the suite passes nothing while looking busy. So the
-   preflight asserts four status lines actually *render* on the attached client —
-   and the hook is **async**, so a measurement taken the moment a client exists reads
-   the pre-hook value and every later click misses.
+   `update_colors.sh`, which resets a multi-row `status N` to `status on` for any
+   session lacking `@autoagent 1`, and drops it to `status 4` without
+   `@amux_note_row 1` (which is what selects five lines over four). With one status
+   line none of the note rows exist, every click lands on the window list, and the
+   suite passes nothing while looking busy. So the preflight asserts five status
+   lines actually *render* on the attached client — and the hook is **async**, so a
+   measurement taken the moment a client exists reads the pre-hook value and every
+   later click misses.
 
 **`tmux kill-server` returns before its teardown hooks finish.** Destroying the
 windows fires `agentmux.conf`'s `window-unlinked` hook, whose

@@ -1,11 +1,17 @@
 #!/bin/sh
-# notes.sh — per-tab notes in the three summary status rows.
+# notes.sh — per-tab notes across four status rows: three that swap with the
+# AI summary, plus one always-on note line.
 #
-# The three rows (status-format[1..3]) show either the LM summary (@amux_rowN,
+# Rows 1-3 (status-format[1..3]) show either the LM summary (@amux_rowN,
 # pushed by tmux-status.sh) or the user's notes (@amux_noteN), chosen by the
 # @amux_notes pane-option flag. This script owns the notes side only; it never
 # touches @amux_rowN, so the summary pipeline runs untouched and toggling back
-# shows a CURRENT summary rather than a stale one.
+# shows a CURRENT summary rather than a stale one. Row 4 (status-format[4]) is
+# a fourth, always-on note line outside that swap — it never reads @amux_notes
+# and is identical in summary and notes mode. Because row 4 is always visible,
+# rows 1-3 are click-INERT while the summaries are showing (a click there does
+# nothing rather than swapping the summaries away under the cursor); once
+# notes mode is on, rows 1-3 click and edit exactly as before.
 #
 # Two options per row is deliberate: @amux_note_rawN holds what the user typed
 # (the command-prompt prefill source), @amux_noteN holds the escaped display
@@ -148,6 +154,22 @@ case "${1:-}" in
     # Not one of our ranges (window list, status-left): do nothing. The binding
     # already routed the default behaviour elsewhere.
     [ -n "$_cp" ] && [ -n "$_cr" ] || exit 0
+    # THE RETIREMENT. Rows 1-3 are click-INERT while the summaries are showing:
+    # row 4 (always a note) is the click target in summary mode, so a click on a
+    # summary row must not swap the summaries away under the cursor. In notes
+    # mode rows 1-3 edit exactly as before. Row 4 is always live and never
+    # touches @amux_notes.
+    #
+    # Same tmux-format-semantics test as `toggle` below, and for the identical
+    # reason — never `show-options -p -v` + `[ -n … ]` here; see the long comment
+    # on the `toggle` case for the truthiness/scope trap it hides.
+    #
+    # Note this SWALLOWS the click rather than falling through to the default
+    # `switch-client -t =` — deliberate: an inert row should do nothing at all.
+    if [ "$_cr" != 4 ] && \
+       [ "$(tmux display-message -p -t "$_cp" '#{?@amux_notes,1,}' 2>/dev/null)" != 1 ]; then
+      exit 0
+    fi
     # Resolve the pane to a PLACEHOLDER-FREE target before any of it reaches
     # the command-prompt TEMPLATE below. The binding passes #{pane_id}
     # (%0, %1, %2, …), and per `man tmux`: "the first occurrence of the string
@@ -174,12 +196,8 @@ case "${1:-}" in
     _self_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || exit 0
     [ -n "$_self_dir" ] || exit 0
     NT_SELF=$_self_dir/$(basename "$0")
-    # Clicking a SUMMARY row is the discovery path into notes mode. Same
-    # tmux-format-semantics test as `toggle` above, and for the identical
-    # reason — never `show-options -p -v` + `[ -n … ]` here either; see the
-    # long comment on the `toggle` case for the truthiness/scope trap it hides.
-    [ "$(tmux display-message -p -t "$_cp" '#{?@amux_notes,1,}' 2>/dev/null)" = 1 ] || \
-      tmux set-option -p -t "$_cp" @amux_notes 1 2>/dev/null
+    # Render before prompting so the display options exist even on a pane that
+    # has never rendered (e.g. the first click of a session).
     _nt_render "$_cp"
     # %%% (see below) escapes quotation marks (and `\ $ ; ~`) in the typed
     # response, so it is stored literally and cannot inject a tmux command.
@@ -432,20 +450,34 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
 
     # A click on a NON-note range must not enter notes mode. On its own this
-    # passes identically whether click does anything at all — see tm-click
-    # below for the positive counterpart that actually exercises the happy
-    # path.
+    # passes identically whether click does anything at all — see the row-4
+    # assertion below for the positive counterpart.
     env -u NOTES_SELFTEST sh "$0" click "$_pane" 'window|@3' /dev/null 2>/dev/null
     ck tm-noclick "$(_get @amux_notes)" ''
 
-    # A click on an amuxnoteN range DOES enter notes mode. Safe on this
-    # clientless throwaway server: command-prompt's target client ("/dev/null")
-    # can't resolve, so it errors (suppressed) rather than hanging, and the
-    # mode-flag flip that precedes it in `click` still runs.
+    # THE RETIREMENT: a click on a SUMMARY row (1-3) while notes mode is OFF is
+    # inert. It must not flip the mode, and must not write a note. Seed a value
+    # the click would have to overwrite, so "unchanged" cannot pass by never
+    # having been set.
+    _set @amux_note_raw1 'keep me'
+    env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxnote1' /dev/null 2>/dev/null
+    ck tm-inert-mode "$(_get @amux_notes)" ''
+    ck tm-inert-raw  "$(_get @amux_note_raw1)" 'keep me'
+
+    # In notes mode the SAME click is live again — the retirement must not
+    # disable editing notes 1-3, only the mode-entering side effect.
+    _set @amux_notes 1
     env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxnote2' /dev/null 2>/dev/null
-    ck tm-click "$(_get @amux_notes)" '1'
-    # Reset so it doesn't leak into the rowsafe assertion below.
+    ck tm-notes-mode-live "$(_get @amux_notes)" '1'
     tmux -L "$_sk" set-option -up -t "$_pane" @amux_notes 2>/dev/null
+
+    # Row 4 is live in SUMMARY mode (that is the point) and must NOT flip the
+    # mode flag. Safe on this clientless throwaway server: command-prompt's
+    # target client ("/dev/null") can't resolve, so it errors (suppressed)
+    # rather than hanging, and everything before it in `click` still runs.
+    env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxnote4' /dev/null 2>/dev/null
+    ck tm-r4-click-mode "$(_get @amux_notes)" ''
+    tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw1 2>/dev/null
 
     # Slot 4 renders from its own raw, and does so in SUMMARY mode (the mode
     # flag was unset just above) — the row is mode-independent by design.
