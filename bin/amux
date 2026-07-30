@@ -917,9 +917,12 @@ _amux_restore_pick() {
 $rows
 EOF
   [ "$n" -gt 0 ] || return 0
-  # Group the rows by project dir for display + selection: keep dropped's
-  # most-recent-first order, but pull each project's tabs together so its windows
-  # list as one block (freshest project first, freshest tab first within it).
+  # Group the rows by project dir for display + selection: keep dropped's order —
+  # the ORIGINAL TAB ORDER, which is also the order _amux_restore_into recreates
+  # the windows in — but pull each project's tabs together so its windows list as
+  # one block (each project ordered by its first tab, tabs left-to-right within it).
+  # So the numbered list reads like the tab bar it is about to rebuild; each row's
+  # "(ago)" carries the recency the order no longer does.
   # Numbering stays 1..n contiguous, so _amux_parse_selection is unaffected — we
   # reindex the R_* arrays into grouped order, then render. gseen is a
   # newline-delimited membership set (bash 3.2: no `local -A`; newlines also

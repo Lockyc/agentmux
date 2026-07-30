@@ -378,7 +378,9 @@ _sl_mtime() {  # <file>
 # Fold ledger → TSV, one row per opened window (latest open + latest resume per
 # (socket,pid,window_id) tuple). Columns: socket pid window_id session
 # window_name cwd agent resume_cmd maxts fork_cmd. `maxts` (the newest event ts
-# for the window) drives sl_dropped's most-recent-first ordering. fork_cmd is
+# for the window) drives sl_dropped's recency work — which crash it recovers from
+# and which duplicate row survives — while `window_id` orders what it emits.
+# fork_cmd is
 # APPENDED last on purpose: sl_dropped reads these columns positionally, so a
 # new column may only go on the end. Whether a window is still open is decided
 # at read time by sl_dropped (live server → intersect with reality), not here.
@@ -799,7 +801,9 @@ _sl_pending_fast() {  # <cwd>
 # (agent != shell, resume_cmd non-empty) on a DEAD server (pid no longer answers on its
 # socket, or its records predate boot), that was OPEN AT DEATH (in the live-set sidecar;
 # a dead server with no sidecar counts all its windows). One TSV row per tab:
-# agent<TAB>cwd<TAB>resume_cmd<TAB>maxts, newest first. The resume program is swapped in
+# agent<TAB>cwd<TAB>resume_cmd<TAB>maxts, in the ORIGINAL TAB ORDER (window-id
+# ascending) — the consumer creates one window per row in order, so this order IS the
+# restored tab order; see the ordering comment on the final stage. The resume program is swapped in
 # from [[agents]] `resume` (work→claude-work) so the command targets the right profile.
 # LAST-CRASH SCOPING: the ledger accumulates every dead server between prunes; a
 # reboot-heavy machine would otherwise dump a whole backlog at once. So we keep only the
@@ -948,8 +952,14 @@ sl_dropped() {
         if (agent=="shell" || rcmd=="") next
         if (scope!="--global" && cwd!=scope) next
         rcmd=swap_prog(rcmd, prog[agent])
-        # Carry the server key + ts so the next stage can isolate ONE crash.
-        print socket "|" pid, ts, agent, cwd, rcmd
+        # Carry the server key + ts so the next stage can isolate ONE crash, and the
+        # window id so the LAST stage can restore the original tab order. The id goes
+        # on the END: `sort -k2,2nr` below breaks a ts tie on its whole-line
+        # comparison, so appending leaves every pre-existing tie unchanged (it can
+        # only decide between two rows identical in server, ts, agent, cwd AND resume
+        # command — the same-session-in-two-windows case, whose emitted row is the
+        # same either way).
+        print socket "|" pid, ts, agent, cwd, rcmd, wid
       }
     ' \
   | sort -t"$TAB" -k2,2nr \
@@ -959,14 +969,27 @@ sl_dropped() {
       # dead server in the ledger is history, not a recovery target. Then DEDUP by
       # the resume session id (last token of the resume command) so a session that
       # lived in >1 window of that server surfaces once. First-seen wins = newest
-      # (input already ts-desc), and the output stays ts-desc.
+      # (input already ts-desc).
+      #
+      # Then RE-ORDER to the original tab order, window-id ascending: the emitted
+      # rows ARE the restored tab order (_amux_restore_into makes one window per
+      # line, in order), so leaving them ts-desc restored a crashed session with
+      # its tabs reversed. Both orderings are needed and they are not the same
+      # ordering — recency selects WHICH rows survive, window id decides where each
+      # surviving tab lands. Emit the sort key as a leading numeric column (`@`
+      # stripped, so @10 sorts after @2 rather than between @1 and @2) and cut it
+      # off after. Every surviving row is from ONE server (best, above), so the ids
+      # are mutually comparable; a legacy row with no window id sorts to the front.
       NR==1 { best=$1 }
       $1 != best { next }
       { m=split($5, g, " "); uuid=g[m]
         if (uuid in seen) next
         seen[uuid]=1
-        print $3, $4, $5, $2 }
-    '
+        wn=$6; sub(/^@/, "", wn)
+        print wn+0, $3, $4, $5, $2 }
+    ' \
+  | sort -t"$TAB" -k1,1n \
+  | cut -f2-
 
   rm -f "$rows" "$state"
 }
@@ -1921,6 +1944,31 @@ cat > "$ledger" <<JSON
 JSON
 dd=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/dup")
 _assert "dedup: same uuid two windows → one row" "1" "$(printf '%s\n' "$dd" | grep -c .)"
+
+# --- ROW ORDER = ORIGINAL TAB ORDER (window-id ascending), NOT recency. The rows
+#     feed _amux_restore_into, which creates one window per line IN ORDER (first
+#     line replaces window 0), so the emitted order IS the restored tab order —
+#     emitting ts-desc restored a crashed session with its tabs reversed. The
+#     internal ts-desc sort is still required (last-crash scoping + dedup), so the
+#     ordering is re-applied after it. @10 is in the fixture on purpose: a
+#     lexicographic sort puts it between @1 and @2. ---
+rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
+cat > "$ledger" <<JSON
+{"ts":100,"event":"open","socket_path":"/s/o","server_pid":7009,"session":"p","window_id":"@1","window_name":"claude","cwd":"/w/ord","agent":"work"}
+{"ts":110,"event":"resume","socket_path":"/s/o","server_pid":7009,"window_id":"@1","label":"one","resume_cmd":"claude --resume one"}
+{"ts":200,"event":"open","socket_path":"/s/o","server_pid":7009,"session":"p","window_id":"@2","window_name":"claude","cwd":"/w/ord","agent":"work"}
+{"ts":210,"event":"resume","socket_path":"/s/o","server_pid":7009,"window_id":"@2","label":"two","resume_cmd":"claude --resume two"}
+{"ts":300,"event":"open","socket_path":"/s/o","server_pid":7009,"session":"p","window_id":"@10","window_name":"claude","cwd":"/w/ord","agent":"work"}
+{"ts":310,"event":"resume","socket_path":"/s/o","server_pid":7009,"window_id":"@10","label":"ten","resume_cmd":"claude --resume ten"}
+JSON
+od=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/ord")
+_assert "order: tabs emit in original (window-id) order" "one two ten" \
+  "$(printf '%s\n' "$od" | awk -F'\t' '{n=split($3,g," "); printf "%s%s", (NR>1?" ":""), g[n]} END{print ""}')"
+_assert "order: all three rows present" "3" "$(printf '%s\n' "$od" | grep -c .)"
+# The maxts column still carries each tab's own recency (the picker renders it as
+# an "(ago)" per row), so ordering by window id must not have rewritten it.
+_assert "order: maxts still per-row recency" "110 210 310" \
+  "$(printf '%s\n' "$od" | awk -F'\t' '{printf "%s%s", (NR>1?" ":""), $4} END{print ""}')"
 
 # --- --global honours last-crash-only too: newest dead server, across all its cwds ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
