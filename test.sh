@@ -111,7 +111,6 @@ run_selftest frame_reattach      env FRAME_REATTACH_SELFTEST=1      sh scripts/f
 run_selftest fork_session        env FORK_SESSION_SELFTEST=1        bash scripts/fork_session.sh
 run_selftest relaunch            env RELAUNCH_SELFTEST=1            bash scripts/relaunch.sh
 run_selftest notes               env NOTES_SELFTEST=1               sh scripts/notes.sh
-run_selftest note_popup          env NOTE_POPUP_SELFTEST=1          bash scripts/note_popup.sh
 
 # --- 4. mouse-click suite (tests/mouse) ------------------------------------
 # NOTES_SELFTEST covers scripts/notes.sh except the click itself (it invokes

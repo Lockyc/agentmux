@@ -17,7 +17,7 @@
 source [file join [file dirname [info script]] lib.tcl]
 set mtpane [lindex $argv 5]
 
-chk 12 "framed / nested case"
+chk 11 "framed / nested case"
 
 set nb [tmB list-keys -T root]
 set ncount 0
@@ -84,14 +84,14 @@ ok "inner rows sit ABOVE the outer status bar (i.e. inside the outer's PANE)" \
 
 # Does the click reach the inner server at all? The prefill is the proof it is
 # the INNER server's prompt: only it knows @amux_note_raw1.
-noteclick 5 $IL1
+click 5 $IL1
 ok "click on the inner row 1 reached the INNER server (prefill proves it)" \
    [expr {[wp "[promptstr 1]fix #42"] eq "MATCH"}]
 esc
 settle 1
 
 # Full write path through the nest, on a different row — positional proof again.
-noteclick 5 $IL2
+click 5 $IL2
 ok "click on inner row 2 opened the row-2 prompt" [expr {[wp [promptstr 2]] eq "MATCH"}]
 typed "nested-note-ok"
 enter
@@ -109,7 +109,7 @@ ok "no `needs tmux 3.6+` message" [expr {![string match "*needs tmux 3.6*" [logt
 tmA set-option -up -t $mtpane @amux_note_raw4
 tmA set-option -up -t $mtpane @amux_notes
 render
-noteclick 5 $IL4
+click 5 $IL4
 ok "click on inner row 4 opened the row-4 prompt in summary mode" [expr {[wp [promptstr 4]] eq "MATCH"}]
 typed "nested-row-four"
 enter

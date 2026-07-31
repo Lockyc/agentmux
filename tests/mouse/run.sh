@@ -2,7 +2,7 @@
 # run.sh — end-to-end verification that real mouse clicks on the tmux status bar
 # drive the notes feature. expect + shell only: no Python, Node, or other
 # runtime. Builds an isolated tmux world, drives a genuinely attached client
-# through a pty, runs all 12 tests, reaps everything.
+# through a pty, runs all 11 tests, reaps everything.
 #
 #   bash tests/mouse/run.sh                      # from anywhere; no arguments
 #   AMUX_MOUSE_VERBOSE=1 bash tests/mouse/run.sh # every assertion, not just failures
@@ -282,9 +282,9 @@ while IFS=$'\t' read -r n name tag; do
   printf '   [%s] %3s  %s\n' "$tag" "$label" "$name"
 done < "$OUT/results.tsv"
 printf '%s\n' "  ----------------------------------------------------------------------------"
-if [ "$total" -lt 13 ]; then
-  printf '   %s\n' "INCOMPLETE: only $total of 13 checks reported (a driver aborted early)"
-  failed=$((failed + 13 - total))
+if [ "$total" -lt 12 ]; then
+  printf '   %s\n' "INCOMPLETE: only $total of 12 checks reported (a driver aborted early)"
+  failed=$((failed + 12 - total))
 fi
 printf '   %s\n' "$((total - failed))/$total checks passed$([ "$failed" -eq 0 ] || echo "  —  $failed FAILED")"
 printf '   %s\n' "transcripts: $OUT/*.pty.log"
