@@ -86,6 +86,25 @@ NT_COPY='⧉ '
 NT_UNDO='↩ '
 NT_BTN_NONE='  '
 
+# The prompt shown on a row while it is being edited, e.g.
+#   note 4  esc=cancel  enter=save>
+#
+# IT NAMES ITS OWN EXITS, and that is the entire reason the string is not just
+# "note 4>". tmux SWALLOWS ALL MOUSE INPUT while a command-prompt is open (see
+# the footgun at the command-prompt call below), so a click into a note row that
+# the user does not notice reads as a LOCKED INTERFACE — keystrokes stop
+# reaching the pane and nothing on screen says how to get out. The prompt text
+# is the only channel tmux leaves open, so it has to carry the answer. Esc
+# cancels without writing; Enter commits.
+#
+# ASCII ONLY, and NO COMMA. The comma is load-bearing: `command-prompt -p` takes
+# a COMMA-SEPARATED LIST of prompts (man tmux), so a single comma here would
+# silently open a SECOND prompt after the first. ASCII because tests/mouse
+# matches these exact bytes on the pty.
+_nt_prompt() {
+  printf 'note %s  esc=cancel  enter=save>' "$1"
+}
+
 # _nt_row <mouse_status_range> -> 1|2|3 on stdout, or nothing.
 # tmux sets mouse_status_range to the bare `X` of range=user|X, but accept a
 # `user|` prefix too so this cannot break if that ever changes. Anything that
@@ -226,8 +245,9 @@ _nt_render() {
 
 case "${1:-}" in
   hint)
-    # `hint 4` prints row 4's empty-state hint on stdout. The ONE export of a
-    # display literal out of this file: bin/amux publishes it as the session-level
+    # `hint 4` prints row 4's empty-state hint on stdout. One of this file's two
+    # exports of a display literal (see `prompt` below): bin/amux publishes it as
+    # the session-level
     # @amux_note4 default at launch (see NT_HINT4 above), and needs the value
     # without restating it. Touches no tmux — safe to call from the CLI path,
     # which has no ambient $TMUX.
@@ -236,6 +256,15 @@ case "${1:-}" in
     # mode, which is only ever entered through `toggle` — and `toggle` always
     # renders, so those rows have no un-rendered launch state to cover.
     [ "${2:-}" = 4 ] && printf '%s' "$NT_HINT4"
+    exit 0
+    ;;
+  prompt)
+    # `prompt <row>` prints that row's edit prompt. tests/mouse asserts on the
+    # prompt's exact bytes — including PREFILL ADJACENCY ("<prompt>fix #42") —
+    # and asks for them here rather than restating them, so the suite cannot
+    # drift from what the product actually shows. Touches no tmux, so it is safe
+    # from the CLI path, which has no ambient $TMUX.
+    case "${2:-}" in 1|2|3|4) _nt_prompt "$2" ;; esac
     exit 0
     ;;
   render)
@@ -388,7 +417,19 @@ case "${1:-}" in
     # errors immediately, before the prompt ever blocks on user input — this
     # is not reachable on a supported tmux), so it can't fire from the user
     # merely dismissing the prompt.
-    tmux command-prompt -t "$_ct" -l -I "$(_nt_raw "$_cp" "$_cr")" -p "note $_cr>" \
+    # FOOTGUN: A CLICK CANNOT DISMISS THIS PROMPT, and the fix that looks right
+    # is inert. tmux swallows ALL mouse input while a command-prompt is open — a
+    # `bind -T root MouseDown1Status` to close it installs cleanly, appears in
+    # `list-keys`, and is NEVER invoked. Verified on tmux 3.7b driving a real pty
+    # client with SGR mouse sequences: the identical click fires the binding
+    # before the prompt opens and again after it closes, and not once while it is
+    # open. There is no prompt key table to bind into either — tmux has only
+    # root, prefix, copy-mode and copy-mode-vi. Esc cancels and the commit
+    # template never runs (verified), which is why _nt_prompt names it. Only a
+    # display-popup behaves the other way (an outside click DOES reach the
+    # bindings while the popup stays open), so click-to-dismiss would mean
+    # replacing this prompt outright — not adding a binding to it.
+    tmux command-prompt -t "$_ct" -l -I "$(_nt_raw "$_cp" "$_cr")" -p "$(_nt_prompt "$_cr")" \
       "set-option -p -t '$_cg' @amux_note_raw$_cr \"%%%\" ; run-shell \"sh '$NT_SELF' render '$_cg'\"" \
       2>/dev/null || \
       tmux display-message -t "$_ct" "notes: click-to-edit needs tmux 3.6+" 2>/dev/null
@@ -497,6 +538,23 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   # Only row 4 is exported; anything else prints nothing rather than guessing.
   ck hint4-other "$(env -u NOTES_SELFTEST sh "$0" hint 1)"  ""
   ck hint4-none  "$(env -u NOTES_SELFTEST sh "$0" hint)"    ""
+
+  # --- `prompt <row>`: the second export, and it must NAME ITS EXIT --------
+  # Run as CHILDREN (not by calling _nt_prompt in-process) so the dispatch is
+  # covered too — that is the surface tests/mouse actually uses.
+  ck prompt-1     "$(env -u NOTES_SELFTEST sh "$0" prompt 1)" "$(_nt_prompt 1)"
+  ck prompt-4     "$(env -u NOTES_SELFTEST sh "$0" prompt 4)" "$(_nt_prompt 4)"
+  # Rows are distinct, or a click on row 2 could not be told from row 4 on the pty.
+  ck prompt-distinct "$(_nt_prompt 1)" "$(printf 'note 1  esc=cancel  enter=save>')"
+  # Anything that is not one of the four rows prints nothing rather than
+  # guessing — same discipline as `hint`.
+  ck prompt-none  "$(env -u NOTES_SELFTEST sh "$0" prompt)"   ""
+  ck prompt-oob   "$(env -u NOTES_SELFTEST sh "$0" prompt 9)" ""
+  # THE POINT OF THE STRING: it advertises the way out. Without this the wording
+  # could drift back to a bare "note 4>" with every other check still green.
+  ck prompt-names-esc "$(_nt_prompt 4 | grep -c 'esc=cancel')" "1"
+  # A COMMA would split `command-prompt -p` into TWO prompts (man tmux).
+  ck prompt-no-comma  "$(_nt_prompt 4 | tr -cd ',' | wc -c | tr -d ' ')" "0"
 
   # --- tmux-touching blocks ------------------------------------------------
   # Isolated under a throwaway TMUX_TMPDIR, reaped by the EXIT trap below —
