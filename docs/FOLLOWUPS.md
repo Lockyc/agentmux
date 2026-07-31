@@ -253,3 +253,44 @@ binding is missing.
 **Trigger to revisit:** none identified yet. The open question when picked up is only
 which key, and whether it targets row 4 (the always-visible one) or prompts for a row
 number.
+
+## A popup to advertise note edit mode — ruled out by tmux, not deferred
+
+**Status:** attempted and reverted (the popup shipped briefly and was taken back out).
+Recorded because the idea is an obvious one to re-reach for, and the reason it cannot work
+is invisible until you measure it.
+
+**Where:** would live at the `command-prompt` call in `scripts/notes.sh`'s `click` case.
+
+**What:** clicking a note row opens a `command-prompt` on that row. An unnoticed click
+therefore reads as a locked interface, which is why the prompt names its exits (see
+`_nt_prompt`). The natural next step is a `display-popup` shown *alongside* the prompt as a
+passive "you are editing" indicator. **tmux does not permit it.** Measured on tmux 3.7b
+driving a real pty client:
+
+- **A live popup takes ALL of the client's input.** With one on screen the command-prompt
+  receives nothing, no root-table binding of any kind fires (pane click, status click and
+  plain keypress each failed to run their binding), and nothing reaches the pane. A popup
+  shown over an open prompt eats the note instead of advertising it — typing `abc` then
+  Enter with one up left the note option empty and the text reached neither prompt nor
+  shell.
+- **`tmux command-prompt` blocks its caller** until the prompt is dismissed, so opening the
+  popup on the following line runs only once editing is already over.
+- **`display-popup` also blocks its calling command client**, so it can only be opened
+  asynchronously (from a binding, or `run-shell -b`).
+
+That leaves popup-*first* as the only workable order, and it costs more than it buys: an
+extra keystroke on every note edit, and a lost first character when you type straight away
+(the dismissing key is consumed by the popup's `read`). A short auto-dismiss is not a
+softer version — it swallows whatever was typed during it instead of consuming one key.
+
+**A liveness proxy trap that cost three wrong answers:** `pgrep` on the popup's own `sleep`
+reports orphaned children as alive, and a popup body calling bare `tmux` may resolve a
+*different* server than the one under test. Both make a closed popup look open. Use an
+option the popup sets on entry and clears from an `EXIT` trap, sanity-check that the proxy
+reads "alive" immediately after opening, and drive it from `tests/mouse`'s attach sequence
+(the `stty` and settle are load-bearing) rather than a hand-rolled one.
+
+**Trigger to revisit:** tmux gaining a non-modal overlay — one that renders without taking
+the client's input. Nothing short of that changes the result; it is tmux's behaviour, not a
+shape we failed to find.
