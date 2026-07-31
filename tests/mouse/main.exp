@@ -1,5 +1,5 @@
 #!/usr/bin/env expect
-# main.exp — preflight + tests 1-7, driven through a real pty attached DIRECTLY
+# main.exp — preflight + tests 1-11, driven through a real pty attached DIRECTLY
 # to the agent server. Invoked by run.sh:
 #   expect main.exp <root> <sockA> <sockB> <work> <out> <pane>
 #
@@ -67,7 +67,7 @@ ok "no `needs tmux 3.6+` message so far" [expr {![string match "*needs tmux 3.6*
 reset_to_summary
 notes_mode
 foreach {k line want} [list 1 $L1 geo-row-one 2 $L2 geo-row-two 3 $L3 geo-row-three] {
-    click 5 $line
+    noteclick 5 $line
     ok "click line $line opened the row-$k prompt" [expr {[wp [promptstr $k]] eq "MATCH"}]
     typed $want
     enter
@@ -77,7 +77,7 @@ foreach {k line want} [list 1 $L1 geo-row-one 2 $L2 geo-row-two 3 $L3 geo-row-th
 }
 tmA set-option -up -t $mtpane @amux_notes
 render
-click 5 $L4
+noteclick 5 $L4
 ok "click line $L4 opened the row-4 prompt in SUMMARY mode" [expr {[wp [promptstr 4]] eq "MATCH"}]
 typed "geo-row-four"
 enter
@@ -114,6 +114,11 @@ eq "@amux_notes before (summary mode)" [opt @amux_notes] ""
 eq "row 1 is showing the SUMMARY, not a note" [opt @amux_row1] $SUMMARY(1)
 click 5 $L1
 ok "NO note prompt opened" [noprompt 3]
+# And no POPUP either: the retirement's guard exits before notes.sh reaches the
+# popup, so an inert click must leave the keyboard entirely alone. A popup here
+# would be the retirement failing in the most disruptive way available — it
+# takes all of the client's input for as long as it is up.
+eq "no edit popup opened either" [popupopt] ""
 eq "@amux_notes did NOT flip on" [opt @amux_notes] ""
 eq "the seeded note was not overwritten" [opt @amux_note_raw1] "keep me"
 eq "@amux_row1 untouched" [opt @amux_row1] $SUMMARY(1)
@@ -143,7 +148,7 @@ eq "pane-level @amux_note4 is unset (nothing rendered this pane)" \
 eq "row 4 shows its own empty-state hint from the launch default" [opt @amux_note4] \
    "#\[dim\]✎ click to add a note"
 tmA set-option -p -t $mtpane @amux_note_raw1 "keep me"
-click 5 $L4
+noteclick 5 $L4
 ok "a row-4 prompt opened" [expr {[wp [promptstr 4]] eq "MATCH"}]
 # The prompt must open ON THE ROW CLICKED, not over the window list. tmux's
 # `message-line` chooses which status line carries the prompt, and our rows sit
@@ -182,7 +187,7 @@ eq "row 4 is unaffected by the mode" [opt @amux_note4] "✎ row four note"
 # the draft"; this is about the assertion being self-sufficient, same
 # non-vacuity discipline as checks 1 and 2 above.
 tmA set-option -p -t $mtpane @amux_note_raw1 "keep me"
-click 5 $L1
+noteclick 5 $L1
 ok "a row-1 prompt opened" [expr {[wp [promptstr 1]] eq "MATCH"}]
 eq "@amux_notes still on" [opt @amux_notes] "1"
 eq "@amux_row1 untouched by notes.sh" [opt @amux_row1] $SUMMARY(1)
@@ -200,7 +205,7 @@ chkend
 # ---------------------------------------------------------------------------
 chk 4 "row mapping (click row 2 specifically)"
 notes_mode
-click 5 $L2
+noteclick 5 $L2
 ok "a row-2 prompt opened (not 1 or 3)" [expr {[wp [promptstr 2]] eq "MATCH"}]
 eq "prompt opens on row 2's own line (message-line)" \
    [tmA show-options -t test message-line] "message-line 2"
@@ -225,7 +230,7 @@ chkend
 # raw (a prefill of the escaped value would grow a '#' on every edit).
 # ---------------------------------------------------------------------------
 chk 5 "'#' escaping round-trip + prefill"
-click 5 $L1
+noteclick 5 $L1
 ok "prompt opened for row 1" [expr {[wp [promptstr 1]] eq "MATCH"}]
 typed "fix #42"
 enter
@@ -234,7 +239,7 @@ waitopt @amux_note1 "✎ fix ##42"
 eq "@amux_note_raw1 (what the user typed)" [opt @amux_note_raw1] "fix #42"
 eq "@amux_note1 (display, '#' doubled)" [opt @amux_note1] "✎ fix ##42"
 
-click 5 $L1
+noteclick 5 $L1
 # The exact byte match IS the assertion: the prompt followed immediately by
 # `fix #42`, NOT `fix ##42` — the prefill is the RAW note, never the escaped
 # display value. The prompt itself comes from promptstr, so only the prefill half
@@ -254,14 +259,14 @@ chkend
 # the truncation.
 # ---------------------------------------------------------------------------
 chk 6 "comma survives the prefill round-trip (-l)"
-click 5 $L3
+noteclick 5 $L3
 ok "prompt opened for row 3" [expr {[wp [promptstr 3]] eq "MATCH"}]
 typed "ask sam, then deploy"
 enter
 waitopt @amux_note_raw3 "ask sam, then deploy"
 eq "@amux_note_raw3" [opt @amux_note_raw3] "ask sam, then deploy"
 
-click 5 $L3
+noteclick 5 $L3
 ok "reopened prompt prefilled the WHOLE note, comma intact" \
    [expr {[wp "[promptstr 3]ask sam, then deploy"] eq "MATCH"}]
 enter
@@ -281,7 +286,7 @@ render
 eq "row 2 holds only the note-row mark (rows 1/3 filled, so the hint does not fire)" [opt @amux_note2] "✎ "
 eq "row 1 still holds its note" [opt @amux_note_raw1] "fix #42"
 
-click 110 $L2
+noteclick 110 $L2
 ok "col 110 on the EMPTY row 2 opened its prompt" [expr {[wp [promptstr 2]] eq "MATCH"}]
 # Row-distinct text: proves the far-right click hit row 2, not a neighbour.
 typed "wide-click-row-two"
@@ -293,13 +298,13 @@ eq "row 3 untouched by the far-right click" [opt @amux_note_raw3] "ask sam, then
 
 tmA set-option -up -t $mtpane @amux_note_raw2
 render
-click 120 $L2
+noteclick 120 $L2
 ok "col 120 (last column) on the empty row opened the row-2 prompt" [expr {[wp [promptstr 2]] eq "MATCH"}]
 esc
 settle 1
 
 # Past the end of a SHORT note: same pad, different row.
-click 110 $L3
+noteclick 110 $L3
 ok "col 110 past the short note on row 3 opened the row-3 prompt with its prefill" \
    [expr {[wp "[promptstr 3]ask sam, then deploy"] eq "MATCH"}]
 esc
@@ -333,6 +338,7 @@ for {set i 0} {$i < 80} {incr i} {
 eq "clicking \`0:bash\` switched window" $w "0:bash"
 eq "active pane followed" [tmA display-message -p -t test {#{pane_id}}] "%0"
 ok "NO note prompt opened" [noprompt 3]
+eq "no edit popup opened either" [popupopt] ""
 eq "clicked window's pane gained no @amux_notes" [opt @amux_notes %0] ""
 eq "clicked window's pane gained no note" [opt @amux_note_raw1 %0] ""
 # Positive proof that no prompt is open: the keystrokes reach the PANE.
@@ -359,7 +365,7 @@ set raw_before  [opt @amux_note_raw1]
 set disp_before [opt @amux_note1]
 set mode_before [opt @amux_notes]
 eq "precondition: row 1 holds a note" $raw_before "fix #42"
-click 5 $L1
+noteclick 5 $L1
 ok "prompt opened with the prefill" [expr {[wp "[promptstr 1]fix #42"] eq "MATCH"}]
 typed "DISCARD-ME"
 settle 1
@@ -415,11 +421,52 @@ eq "button back to copy" [opt @amux_btn4] "⧉ "
 
 # The note range still works at the usual column — the button did not swallow
 # the row. Positional proof that the two ranges coexist.
-click 5 $L4
+noteclick 5 $L4
 ok "column 5 still opens the note prompt" [expr {[wp "[promptstr 4]ship it"] eq "MATCH"}]
 esc
 settle 1
 eq "escape left the restored note intact" [opt @amux_note_raw4] "ship it"
+chkend
+
+# ---------------------------------------------------------------------------
+# 11 — the edit popup. It exists because the prompt only helps once you look at
+# the status bar; this makes the click itself unmissable. What it must NOT do is
+# strand the client: a live popup takes ALL of the client's input, so this
+# asserts the whole lifecycle — it opens on the click, it precedes the prompt
+# (rather than sitting over it, where it would eat the note text), ONE key
+# clears it, and only then does editing begin, unchanged.
+#
+# @amux_popup is the only observable there is: tmux has no format for popup
+# presence. See lib.tcl's `popupopt`.
+# ---------------------------------------------------------------------------
+chk 11 "the edit popup precedes the prompt and one key clears it"
+reset_to_summary
+# Seed @amux_btn4 with a value _nt_render must overwrite. reset_to_summary does
+# not render, so it leaves check 10's "⧉ " in place — and waiting on a value
+# that is already there is no barrier at all (see check 10 for why the wait has
+# to be on @amux_btn4, the LAST write of the commit's batch).
+#
+# TWO COLUMNS WIDE, like every real button state. The seed sits INSIDE the
+# amuxcopy4 range at the head of status-format[4], so a wider one pushes that
+# range past column 5 and the click below lands on the BUTTON instead of the
+# note — a no-op, with no prompt and no popup, which reads exactly like the
+# popup being broken. (Seeding a 7-character value did precisely that.)
+tmA set-option -p -t $mtpane @amux_btn4 "XX"
+click 5 $L4
+ok "the click opened the popup (@amux_popup -> 1)" [expr {[waitpopup 1] >= 0}]
+# The ORDERING is the point. If the popup came second it would sit over an open
+# prompt and swallow everything typed into it.
+ok "the prompt has NOT opened yet — the popup comes first" [noprompt 1]
+eq "the popup is still up, nothing having been typed" [popupopt] "1"
+send -- " "
+ok "one keystroke cleared @amux_popup" [expr {[waitpopup ""] >= 0}]
+ok "and THEN the row-4 prompt opened" [expr {[wp [promptstr 4]] eq "MATCH"}]
+typed "popup-check"
+enter
+waitopt @amux_btn4 "⧉ "
+eq "the note committed normally once the popup was gone" [opt @amux_note_raw4] "popup-check"
+eq "row 4's display value carries the mark" [opt @amux_note4] "✎ popup-check"
+eq "@amux_popup is clear after the commit" [popupopt] ""
 chkend
 
 # ---------------------------------------------------------------------------

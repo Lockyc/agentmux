@@ -134,6 +134,37 @@ proc waitopt {name want {pane ""} {tries 120}} {
     return -1
 }
 
+# --- the edit popup --------------------------------------------------------
+# @amux_popup IS THE ONLY OBSERVABLE. tmux has no format for popup presence —
+# there is no #{popup}, and #{command_prompt} does not mean "a prompt is open"
+# either (it is vi command-mode) — so notes.sh's popup announces itself by
+# setting a session option on entry and clearing it on exit, and this is what
+# reads it. Through the format chain, like every other assertion here.
+proc popupopt {} { return [opt @amux_popup] }
+proc waitpopup {want {tries 120}} { return [waitopt @amux_popup $want] }
+
+# dismisspopup — a note click is NOT finished when the click lands. The popup
+# notes.sh opens first takes ALL of the client's input while it is up: the
+# command-prompt does not exist yet, no binding fires, and nothing reaches the
+# pane. One keystroke is its exit (it is consumed there and reaches nothing
+# else), and only then does the prompt open. Returns 0 if no popup appeared —
+# and sends NOTHING in that case, since a stray key with no popup to eat it
+# would land in whatever opened instead.
+proc dismisspopup {} {
+    if {[waitpopup 1] < 0} { return 0 }
+    send -- " "
+    return [expr {[waitpopup ""] >= 0}]
+}
+
+# noteclick — click a NOTE range and clear the popup it opens. Every click that
+# is meant to reach notes.sh's edit path goes through here; a bare `click` is
+# for the ranges that open no popup (the window list, row 4's button, and a
+# summary-row click that the retirement makes inert).
+proc noteclick {col row} {
+    click $col $row
+    dismisspopup
+}
+
 # pane_echo — type <token> + Enter and poll the PANE's contents for it. Proves
 # the keystrokes reached the pane's shell, i.e. that no command-prompt is open
 # to swallow them. A positive, bounded check; the alternative ("the option did

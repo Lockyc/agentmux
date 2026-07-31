@@ -396,6 +396,35 @@ case "${1:-}" in
     # occasional one-line messages, which are transient and equally readable
     # there. It is a SESSION option, so this never leaks between projects.
     tmux set-option -t "$_cp" message-line "$_cr" 2>/dev/null
+    # THE POPUP, and it goes BEFORE the prompt — not after it, and not beside
+    # it. The prompt below already names its exits, but that only helps once you
+    # look at the status bar; this makes the click itself unmissable. Read
+    # note_popup.sh's header before moving this line: the ordering is forced by
+    # three measurements, not by taste.
+    #
+    #   * A live popup takes ALL of the client's input — the command-prompt gets
+    #     nothing while one is up, so a popup opened OVER the prompt eats the
+    #     note text (verified: "abc" + Enter landed nowhere at all).
+    #   * `tmux command-prompt` BLOCKS this script until the prompt is
+    #     dismissed, so a popup opened on the line after it would appear only
+    #     once editing was over.
+    #   * The prompt survives a popup, so opening the popup first costs nothing.
+    #
+    # SYNCHRONOUS on purpose: display-popup blocks its caller until the popup
+    # closes, and that is exactly the sequencing wanted here — the prompt opens
+    # as the popup goes away. Nothing is held up by it, because this whole
+    # script already runs under the binding's `run-shell -b`.
+    #
+    # Best-effort, and it must stay that way: a missing note_popup.sh, an
+    # unresolvable client (the selftest passes /dev/null) or a tmux that cannot
+    # open a popup must all fall through to the prompt below rather than losing
+    # the edit. Single-quoted where the path lands in the command string, for
+    # the same reason NT_SELF is: tmux hands the string to a shell.
+    NT_POPUP=$_self_dir/note_popup.sh
+    if [ -n "$_ct" ] && [ -r "$NT_POPUP" ]; then
+      tmux display-popup -c "$_ct" -E \
+        "bash '$NT_POPUP' '$_cr' '$_cg'" 2>/dev/null
+    fi
     # %%% (see below) escapes quotation marks (and `\ $ ; ~`) in the typed
     # response, so it is stored literally and cannot inject a tmux command.
     #
@@ -789,6 +818,18 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     # rather than hanging, and everything before it in `click` still runs.
     env -u NOTES_SELFTEST sh "$0" click "$_pane" 'user|amuxnote4' /dev/null 2>/dev/null
     ck tm-r4-click-mode "$(_get @amux_notes)" ''
+    # THE POPUP IS BEST-EFFORT. This click's target client is "/dev/null", so
+    # display-popup cannot open — and the click must still complete rather than
+    # hang or bail before the prompt. Two things prove it did: the mode flag
+    # above was reached and left alone, and no @amux_popup was left behind (a
+    # stale 1 would tell every reader a popup is on screen when none is).
+    # The real popup path — it opens, it takes the keyboard, one key closes it,
+    # the prompt then opens — is only reachable with a genuinely attached
+    # client, so it lives in tests/mouse (check 11).
+    ck tm-r4-nopopup "$(tmux -L "$_sk" show-options -qv @amux_popup 2>/dev/null)" ''
+    # The path `click` builds for the popup must actually exist next to this
+    # file; the guard above turns a missing one into a silent no-popup click.
+    ck tm-popup-file "$([ -r "$(dirname "$0")/note_popup.sh" ] && echo yes)" yes
     tmux -L "$_sk" set-option -up -t "$_pane" @amux_note_raw1 2>/dev/null
 
     # Slot 4 renders from its own raw, and does so in SUMMARY mode (the mode
