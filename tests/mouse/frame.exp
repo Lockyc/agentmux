@@ -86,13 +86,13 @@ ok "inner rows sit ABOVE the outer status bar (i.e. inside the outer's PANE)" \
 # the INNER server's prompt: only it knows @amux_note_raw1.
 click 5 $IL1
 ok "click on the inner row 1 reached the INNER server (prefill proves it)" \
-   [expr {[wp "note 1>fix #42"] eq "MATCH"}]
+   [expr {[wp "[promptstr 1]fix #42"] eq "MATCH"}]
 esc
 settle 1
 
 # Full write path through the nest, on a different row — positional proof again.
 click 5 $IL2
-ok "click on inner row 2 opened \`note 2>\`" [expr {[wp "note 2>"] eq "MATCH"}]
+ok "click on inner row 2 opened the row-2 prompt" [expr {[wp [promptstr 2]] eq "MATCH"}]
 typed "nested-note-ok"
 enter
 waitopt @amux_note_raw2 "nested-note-ok"
@@ -110,7 +110,7 @@ tmA set-option -up -t $mtpane @amux_note_raw4
 tmA set-option -up -t $mtpane @amux_notes
 render
 click 5 $IL4
-ok "click on inner row 4 opened \`note 4>\` in summary mode" [expr {[wp "note 4>"] eq "MATCH"}]
+ok "click on inner row 4 opened the row-4 prompt in summary mode" [expr {[wp [promptstr 4]] eq "MATCH"}]
 typed "nested-row-four"
 enter
 waitopt @amux_note_raw4 "nested-row-four"

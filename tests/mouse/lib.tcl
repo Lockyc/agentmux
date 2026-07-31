@@ -68,6 +68,25 @@ proc render {{pane ""}} {
     unset ::env(TMUX)
 }
 
+# --- the edit prompt -------------------------------------------------------
+# ASKED OF notes.sh, never restated here. Every prompt assertion below is an
+# exact BYTE match on the pty — including prefill adjacency
+# ("<prompt>fix #42", which is what proves -l's literal prefill is not
+# comma-split) — so a literal in this file would be a second home for the string
+# and would go stale the moment the product's wording changed, with the suite
+# still red for a reason that looks like a product bug. Same single-sourcing
+# run.sh already uses for `hint 4`. Resolved ONCE at load: four execs, not four
+# per assertion.
+foreach _r {1 2 3 4} {
+    set PROMPT($_r) [exec sh "$mtroot/scripts/notes.sh" prompt $_r]
+    if {$PROMPT($_r) eq ""} {
+        puts stderr "scripts/notes.sh prompt $_r printed nothing — every prompt assertion would match the empty string"
+        exit 2
+    }
+}
+unset _r
+proc promptstr {row} { return $::PROMPT($row) }
+
 # --- pty driving -----------------------------------------------------------
 proc settle {{secs 1}} { expect -timeout $secs -re {.+} {exp_continue} timeout {} }
 
@@ -85,8 +104,17 @@ proc typed {t} { send -- $t }
 proc wp {s {secs 8}} { expect -timeout $secs -ex $s { return MATCH } timeout { return TIMEOUT } }
 
 # noprompt — assert NO note prompt appears within <secs>. Returns 1 if none did.
+# All four rows are matched, from the product's own strings (see promptstr): a
+# hand-written regex here would stop matching the moment the wording changed and
+# this check would then pass VACUOUSLY, reporting "no prompt opened" for a prompt
+# that did open.
 proc noprompt {{secs 3}} {
-    expect -timeout $secs -re {note [1-4]>} { return 0 } timeout { return 1 }
+    expect -timeout $secs \
+        -ex [promptstr 1] { return 0 } \
+        -ex [promptstr 2] { return 0 } \
+        -ex [promptstr 3] { return 0 } \
+        -ex [promptstr 4] { return 0 } \
+        timeout { return 1 }
 }
 
 # waitopt — poll an option until it equals <want>. Returns polls used, or -1.
