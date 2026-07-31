@@ -389,7 +389,16 @@ eq "button offers copy while a note is held" [opt @amux_btn4] "⧉ "
 click 1 $L4
 # The button must NOT open a prompt — it acts immediately.
 ok "no note prompt opened by the button" [noprompt 3]
-waitopt @amux_note_raw4 ""
+# WAIT ON @amux_btn4, NOT on the raw this block's first assertion reads.
+# notes.sh's button branch writes the raws FIRST and reaches @amux_btn4 LAST
+# (it is the final set-option in _nt_render, after the four @amux_noteN), so
+# @amux_btn4 taking its new value is the barrier proving the WHOLE batch
+# landed. Polling a raw returns as soon as that ONE option flips — mid-batch —
+# and every later assertion then races the remaining writes. That is not
+# theoretical: waiting on the raw made this check fail roughly one run in
+# three with `button back to copy: got[↩ ] want[⧉ ]`, the stale value read
+# before _nt_render had rewritten it.
+waitopt @amux_btn4 "↩ "
 eq "note cleared" [opt @amux_note_raw4] ""
 eq "cleared text kept for undo" [opt @amux_note_raw_prev4] "ship it"
 # The tmux buffer is the backstop that makes the destructive clear safe.
@@ -398,7 +407,8 @@ eq "button flipped to undo" [opt @amux_btn4] "↩ "
 eq "row 4 fell back to its hint" [opt @amux_note4] "#\[dim\]✎ click to add a note"
 
 click 1 $L4
-waitopt @amux_note_raw4 "ship it"
+# Same barrier as above — @amux_btn4 is the last write of the batch.
+waitopt @amux_btn4 "⧉ "
 eq "second press restored the note" [opt @amux_note_raw4] "ship it"
 eq "undo was spent (one level, not a toggle)" [opt @amux_note_raw_prev4] ""
 eq "button back to copy" [opt @amux_btn4] "⧉ "
