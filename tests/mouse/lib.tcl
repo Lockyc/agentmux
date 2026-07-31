@@ -10,9 +10,11 @@
 # DISTINCT PER ROW and reading back which @amux_note_rawN it landed in — an
 # assertion on tmux's own state, not on a repaint we re-simulated. The pty
 # stream is still used, but only for what expect is actually good at: waiting
-# for a byte sequence to appear (the `note N>` prompt) with a timeout, and
-# grepping the whole transcript for a string that must never appear
-# ("needs tmux 3.6+"). Neither needs a cursor model.
+# for a byte sequence to appear (the edit prompt) with a timeout, and grepping
+# the whole transcript for a string that must never appear ("needs tmux
+# 3.6+"). Neither needs a cursor model. The prompt's exact bytes are ASKED OF
+# scripts/notes.sh (the `prompt <row>` subcommand, via the `promptstr` proc
+# below), never restated as a literal here — see that block's own comment.
 #
 # SYNCHRONISATION IS POLLED, NOT SLEPT, wherever the state is observable:
 #   waitopt   polls a tmux option until it takes an expected value
@@ -81,7 +83,13 @@ foreach _r {1 2 3 4} {
     set PROMPT($_r) [exec sh "$mtroot/scripts/notes.sh" prompt $_r]
     if {$PROMPT($_r) eq ""} {
         puts stderr "scripts/notes.sh prompt $_r printed nothing — every prompt assertion would match the empty string"
-        exit 2
+        # exit 3, deliberately NOT 2: main.exp's own preflight failure already
+        # means exit 2 ("status lines didn't render"), and run.sh's die() reuses
+        # 2 for its own aborts too — a collision would make this failure (the
+        # prompt export itself is broken) print as one of those unrelated
+        # diagnoses instead of its own. Both main.exp and frame.exp source this
+        # file, so both must exit 3 here; run.sh checks for it after EACH.
+        exit 3
     }
 }
 unset _r

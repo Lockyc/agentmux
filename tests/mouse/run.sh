@@ -248,6 +248,13 @@ printf '%s\n'   "  =============================================================
 
 expect "$HERE/main.exp"  "$ROOT" "$SOCK_A" "$SOCK_B" "$WORK" "$OUT" "$PANE"
 rc_main=$?
+# exit 3 is lib.tcl's own guard (sourced by BOTH drivers): scripts/notes.sh
+# prompt <row> printed nothing, so every prompt assertion in either driver
+# would silently match the empty string. Kept distinct from exit 2 below so
+# this diagnosis is never printed as "preflight failed" instead.
+if [ "$rc_main" -eq 3 ]; then
+  die "scripts/notes.sh prompt export is broken — see the stderr line above; no prompt assertion in main.exp or frame.exp can be trusted"
+fi
 # exit 2 from main.exp is the render-time half of GUARD 2 firing: five status
 # lines did not actually render, so the note rows do not exist and every later
 # result would be meaningless. Stop rather than report a table of nothing.
@@ -256,6 +263,13 @@ if [ "$rc_main" -eq 2 ]; then
 fi
 expect "$HERE/frame.exp" "$ROOT" "$SOCK_A" "$SOCK_B" "$WORK" "$OUT" "$PANE"
 rc_frame=$?
+# Same lib.tcl guard as above — frame.exp sources it too, and unlike main.exp it
+# has no exit-2 preflight step of its own, so without this check a broken prompt
+# export here would just fall through to the generic "$rc_frame -ne 0" failure
+# below and report as an ordinary check-11 failure instead of its real cause.
+if [ "$rc_frame" -eq 3 ]; then
+  die "scripts/notes.sh prompt export is broken — see the stderr line above; frame.exp's check 11 result cannot be trusted"
+fi
 
 # --- table -----------------------------------------------------------------
 printf '\n%s\n' "  ----------------------------------------------------------------------------"

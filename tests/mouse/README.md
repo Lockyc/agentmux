@@ -105,8 +105,11 @@ removes any need for a VT emulator, and it is a *stronger* positional check: typ
 row-distinct text and reading back which `@amux_note_rawN` it landed in proves the
 whole click → prompt → commit chain terminated in the right row, where a screen read
 only shows that some bytes appeared on some line. The pty stream is used only for
-what `expect` is actually good at — waiting for the `note N>` prompt's bytes, and
-grepping the transcript for a string that must never appear.
+what `expect` is actually good at — waiting for the edit prompt's bytes, and grepping
+the transcript for a string that must never appear. The prompt's exact bytes are
+**asked of `scripts/notes.sh`** (the `prompt <row>` subcommand) via `lib.tcl`'s
+`promptstr` proc, never restated as a literal in this suite — don't re-add a
+hardcoded prompt string here if the wording ever changes again.
 
 **Geometry is arithmetic, then verified by clicking.** With the status bar at the
 bottom of an `H`-row client showing `N` status lines, `status-format[0]` sits on line

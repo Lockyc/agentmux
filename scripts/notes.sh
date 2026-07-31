@@ -544,8 +544,17 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   # covered too — that is the surface tests/mouse actually uses.
   ck prompt-1     "$(env -u NOTES_SELFTEST sh "$0" prompt 1)" "$(_nt_prompt 1)"
   ck prompt-4     "$(env -u NOTES_SELFTEST sh "$0" prompt 4)" "$(_nt_prompt 4)"
-  # Rows are distinct, or a click on row 2 could not be told from row 4 on the pty.
-  ck prompt-distinct "$(_nt_prompt 1)" "$(printf 'note 1  esc=cancel  enter=save>')"
+  # Pins row 1's exact bytes against a hardcoded literal — a regression alarm on
+  # the wording itself, distinct from prompt-1/prompt-4 above (which only prove
+  # the CHILD dispatch matches an in-process _nt_prompt call with the SAME
+  # argument, so a _nt_prompt that ignored "$1" would still pass both of those).
+  ck prompt-bytes "$(_nt_prompt 1)" "$(printf 'note 1  esc=cancel  enter=save>')"
+  # Rows must actually DIFFER, or a click on row 2 could not be told from row 4
+  # on the pty — this is the missing cross-row check prompt-1/prompt-4/
+  # prompt-bytes above don't cover: each of those fixes $1 and never compares
+  # two rows against each other, so a _nt_prompt that ignored "$1" entirely
+  # would pass all three identically.
+  ck prompt-distinct "$([ "$(_nt_prompt 1)" != "$(_nt_prompt 2)" ] && echo distinct)" "distinct"
   # Anything that is not one of the four rows prints nothing rather than
   # guessing — same discipline as `hint`.
   ck prompt-none  "$(env -u NOTES_SELFTEST sh "$0" prompt)"   ""
