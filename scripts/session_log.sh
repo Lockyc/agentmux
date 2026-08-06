@@ -7,9 +7,13 @@
 #   open  <agent> [target] [socket]   append an open record (target defaults to current
 #                            pane; socket is only needed when invoked OUTSIDE the tmux
 #                            server the session lives on — see _sl_ctx)
-#   resume <label> <cmd> [fork_cmd]   append/refresh a generic resume hint (+ optional
+#   resume <label> <cmd> [fork_cmd] [target] [socket]
+#                            append/refresh a generic resume hint (+ optional
 #                            fork hint) for the current window. fork_cmd is owned by the
 #                            agent adapter, never composed here — this core stays agnostic.
+#                            target/socket serve the same CLI-path case as `open`: a
+#                            caller outside the tmux server (amux's restore) names the
+#                            window and shard it just created.
 #   forkcmd [target]         emit `agent<TAB>fork_cmd` for one LIVE window (or nothing)
 #   dropped <cwd>|--global|--new <cwd>
 #                            restorable dropped tabs (dead server, open-at-death),
@@ -1057,8 +1061,8 @@ _sl_mark_resumable() {  # <socket_path> <window_id> <resume_cmd>
   fi
 }
 
-sl_resume() {  # <label> <resume_cmd> [fork_cmd]
-  _label="$1"; _rcmd="$2"; _fcmd="${3:-}"
+sl_resume() {  # <label> <resume_cmd> [fork_cmd] [target] [socket]
+  _label="$1"; _rcmd="$2"; _fcmd="${3:-}"; _rtarget="${4:-}"; _rsock="${5:-}"
   [ -n "$_label" ] || return 0
   _dir=$(_sl_state_dir)
   # The marker stores the FULL record signature, not just the label: its job is
@@ -1070,8 +1074,16 @@ sl_resume() {  # <label> <resume_cmd> [fork_cmd]
   _sig="$_label|$_rcmd|$_fcmd"
 
   # Fast path: env-derived key, no subprocess. Trust $TMUX only if well-formed.
+  # SKIPPED ENTIRELY on the explicit-target path (a CLI caller such as bin/amux's
+  # restore, which names the window and shard it just created): $TMUX/$TMUX_PANE
+  # there describe whatever server the USER happens to be sitting in — commonly a
+  # different one — so the env key would namespace the marker under a foreign pane.
+  # Same CLI-vs-hook split _sl_ctx documents; the fallback (pid + window id) is
+  # derived from the resolved target below and is correct for both.
   _epid=""
-  case "$TMUX" in *,*,*) _epid=${TMUX#*,}; _epid=${_epid%%,*} ;; esac
+  if [ -z "$_rtarget" ] && [ -z "$_rsock" ]; then
+    case "$TMUX" in *,*,*) _epid=${TMUX#*,}; _epid=${_epid%%,*} ;; esac
+  fi
   _emark=""
   if [ -n "$_epid" ] && [ -n "${TMUX_PANE:-}" ]; then
     _emark="$_dir/seen/${_epid}-p$(printf '%s' "$TMUX_PANE" | tr -d '%')"
@@ -1082,9 +1094,14 @@ sl_resume() {  # <label> <resume_cmd> [fork_cmd]
 
   # Miss (new label) or no usable env: fetch full context once for the record.
   IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
-$(_sl_ctx)
+$(_sl_ctx "$_rtarget" "$_rsock")
 EOF
-  [ -n "$_pid" ] || return 0
+  # Require the window id too, not just the pid: a display-message against a
+  # target that doesn't resolve on the queried socket still reports the server's
+  # socket-level #{pid} while the target-scoped fields come back empty (the same
+  # trap sl_open guards). A windowless resume row belongs to no window, so the
+  # fold can never attach it to one — it would only ever be dead weight.
+  [ -n "$_pid" ] && [ -n "$_wid" ] || return 0
   _marker="${_emark:-$_dir/seen/${_pid}-$(printf '%s' "$_wid" | tr -d '@')}"
   # Fallback-path dedup: when no env key short-circuited above, re-check here.
   [ -z "$_emark" ] && [ -f "$_marker" ] && [ "$(cat "$_marker" 2>/dev/null)" = "$_sig" ] && return 0

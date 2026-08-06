@@ -955,6 +955,18 @@ _amux_restore_into() {
     # AGENTMUX_AGENT_SOCKET override set above, so this targets the SAME
     # shard the new-session/new-window calls above just used.
     "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "$win" "$(_amux_agent_sock)" 2>/dev/null || true
+    # RECORD THE HINT WE ARE REPLAYING. sl_dropped only offers a window whose
+    # ledger row carries a resume command, and the only other writer of one is the
+    # agent's working hook — which needs the user to actually submit a prompt in
+    # that tab. Without this, a restored tab is unrestorable until prompted in, so
+    # restore is not idempotent: restore N tabs, use one, crash, and the next
+    # picker offers one. $rcmd IS that tab's resume command (it is what we just
+    # launched), so the hint is authoritative here, not a guess. The label is the
+    # command's last token — the resume session id — matching the key sl_dropped
+    # dedups on. No fork_cmd: that is the adapter's to compose, and its working
+    # hook rewrites this record with one on the first prompt.
+    "$AGENTMUX_SCRIPTS/session_log.sh" resume "${rcmd##* }" "$rcmd" "" \
+      "$win" "$(_amux_agent_sock)" 2>/dev/null || true
   done
   if [ "$created" = 1 ]; then
     _amux_atmux set-option -t "$name" "@autoagent" "1"
@@ -2343,6 +2355,20 @@ STUB
       "$(_amux_atmux show-options -wqv -t "=$_rname:0" @window-agent 2>/dev/null)"
     _assert "restore: window 1 styled on the shard (@window-agent)" "personal" \
       "$(_amux_atmux show-options -wqv -t "=$_rname:1" @window-agent 2>/dev/null)"
+    # RESTORE MUST BE IDEMPOTENT. A restored tab's resume command is known HERE —
+    # it is the very thing being replayed — but sl_dropped only ever offers a
+    # window whose ledger row carries a resume hint, and the only other writer of
+    # that hint is the agent's working hook (which needs the user to submit a
+    # prompt). So without this the restored tab is unrestorable until prompted in:
+    # restore N tabs, use one, crash → the next picker offers one. Assert BOTH the
+    # window stamp the sidecar reads and the ledger row the fold reads.
+    _assert "restore: window 0 marked resumable on the shard" "1" \
+      "$(_amux_atmux show-options -wqv -t "=$_rname:0" @amux_resumable 2>/dev/null)"
+    _assert "restore: window 1 marked resumable on the shard" "1" \
+      "$(_amux_atmux show-options -wqv -t "=$_rname:1" @amux_resumable 2>/dev/null)"
+    _assert "restore: ledger holds a resume row per restored window" "2" \
+      "$(jq -r 'select(.event=="resume")|.window_id' "$_rstate/sessions.jsonl" 2>/dev/null \
+         | sort -u | grep -c . | tr -d ' ')"
     _amux_atmux kill-server 2>/dev/null
     rm -rf "$_rdir" "$_rstate"; AGENTMUX_AGENT_SOCKET="$_rsave"
     if [ -n "$_rsdsave" ]; then export AGENTMUX_STATE_DIR="$_rsdsave"; else unset AGENTMUX_STATE_DIR; fi
