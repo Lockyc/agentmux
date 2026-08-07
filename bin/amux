@@ -21,20 +21,25 @@ source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
 source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
 
 # tmux config dir (sibling of scripts/) and the dedicated sockets for --frame.
-# AGENTMUX_TERM_SOCKET is exported so the frame server inherits it: frame.conf's
-# C-f Q binding reads it back (via the shell, `${AGENTMUX_TERM_SOCKET:-…}`) to kill
-# the paired terminal on the right socket even when it's been overridden here.
 AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
 # Frame/term sockets are UNSET by default in production, so the resolvers below shard
 # them per project (cksum of $PWD) — each project gets its own single-threaded tmux
 # server, draining in parallel instead of serializing every project's output (and the
 # foreground pane's keystrokes) onto one core. An explicitly-set value (selftest
 # isolation) is honoured VERBATIM with no suffix, exactly like AGENTMUX_AGENT_SOCKET.
-# AGENTMUX_TERM_SOCKET keeps its export attribute so frame.conf's C-f Q and
-# frame_reattach.sh — which read it back INSIDE the frame server — see the derived
-# value that _amux_frame exports at launch. AGENTMUX_FRAME_SOCKET needs no export
-# (read only in-process, via the resolvers).
-export AGENTMUX_TERM_SOCKET
+#
+# NONE of the three is EXPORTED, deliberately — the environment is not a transport
+# for a per-project value. amux once exported AGENTMUX_TERM_SOCKET so the two
+# in-frame consumers (frame.conf's C-f Q, frame_reattach.sh) could read the derived
+# value back, and the export then rode down into EVERY descendant of the frame —
+# including a GUI app launched from the scratch terminal. That app relaunches amux
+# for other projects, each inheriting the var, and "explicit value honoured verbatim"
+# then pinned every project's left pane to the FIRST project's term server; two
+# projects sharing a basename (~/lachlan/substrate, ~/construct/substrate) both
+# resolve to `substrate-term` there and `new-session -A` silently attached the second
+# to the first one's scratch terminal. The sockets now travel as @amux_term_socket /
+# @amux_agent_socket tmux options on the frame SESSION (set in _amux_frame), which is
+# scoped to the frame and cannot leak. Don't re-add an export here.
 # Agent sessions live on the per-project shard `agentmux-agent-<cksum $PWD>` (see
 # _amux_agent_sock), like the frame/term sockets above. This override exists only so
 # selftests can isolate the session-management commands onto a throwaway socket instead
@@ -647,10 +652,9 @@ _amux_frame() {
   # frame blurs the two, and a stale frame is harder to tell apart from the real one.
   local sock; sock=$(_amux_frame_sock)
   local fsess="${session}-frame"
-  # Export the $PWD-derived term socket so the frame server (and its C-f Q binding /
-  # frame_reattach hook, which read $AGENTMUX_TERM_SOCKET back) pair to THIS project's
-  # term server. In the override/selftest case _amux_term_sock returns it verbatim.
-  export AGENTMUX_TERM_SOCKET; AGENTMUX_TERM_SOCKET=$(_amux_term_sock)
+  # This project's term socket, resolved once. Published to the frame's in-server
+  # consumers as a SESSION OPTION below, never exported — see the header comment.
+  local tsock; tsock=$(_amux_term_sock)
 
   # Optional left-column vertical split (empty = off) and its top-region pane count.
   # Resolved up front so the staleness check below knows the expected pane count.
@@ -684,7 +688,7 @@ _amux_frame() {
     status_pos=$(_amux_frame_status_position)
     left=$(_amux_frame_width)
     right=$((100 - left))
-    left_cmd=$(_amux_frame_left_cmd "$AGENTMUX_TERM_SOCKET" "$term_conf" "${session}-term")
+    left_cmd=$(_amux_frame_left_cmd "$tsock" "$term_conf" "${session}-term")
     # Right pane = a bare attach to the agent session the parent created below,
     # on this project's agent shard (cache-warmed).
     right_cmd=$(_amux_frame_right_cmd "$(_amux_agent_sock)" "$session")
@@ -810,6 +814,15 @@ _amux_frame() {
   # the default `0` = select-window 0 is inert here — overriding it shadows nothing.
   # The binding computes absolute -x cols in the shell, so it doesn't need
   # resize-pane's `-x N%` support.
+  # The two sockets the frame's OWN panes live on, published per-session so the
+  # in-server consumers (frame.conf's C-f Q, frame_reattach.sh's pane-died hook) can
+  # read them without amux exporting anything — see the header comment for why the
+  # environment is not a transport for these. Per-session, not -g: the frame socket
+  # is long-lived and can host several frame sessions, and asserting them on EVERY
+  # launch (not just the rebuild branch above) is what brings a pre-existing frame
+  # up to date — same long-lived-server reasoning as the hooks and bindings here.
+  tmux -L "$sock" set -t "$fsess" @amux_term_socket "$tsock"
+  tmux -L "$sock" set -t "$fsess" @amux_agent_socket "$(_amux_agent_sock)"
   local left_pct term_pane
   left_pct=$(_amux_frame_width)
   term_pane=$(tmux -L "$sock" list-panes -t "$fsess" -f '#{==:#{@amux_role},term}' -F '#{pane_id}' 2>/dev/null | head -1)
@@ -1662,6 +1675,16 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # Guard: no bash-4-only associative arrays — macOS ships bash 3.2 and amux is
   # `#!/usr/bin/env bash`, so `local -A`/`declare -A` would break on the stock shell.
   _assert "no bash-4 assoc arrays" "0" "$(grep -cE '^[[:space:]]*(local|declare) -A' "${BASH_SOURCE[0]}")"
+
+  # Guard: never EXPORT a per-project socket. An exported AGENTMUX_TERM_SOCKET rides
+  # down into every descendant of the frame (a GUI app launched from the scratch
+  # terminal included); that app's later `amux` launches inherit it, the "explicit
+  # value wins verbatim" rule pins them all to the FIRST project's term server, and
+  # two projects sharing a basename then silently share one `<base>-term` session.
+  # The sockets travel as @amux_{term,agent}_socket options instead — see the header.
+  # An `export` here is invisible at runtime, hence a source-level guard.
+  _assert "socket vars never exported" "0" \
+    "$(grep -cE '^[[:space:]]*export[[:space:]]+[A-Za-z_ ]*AGENTMUX_(TERM|FRAME|AGENT)_SOCKET' "${BASH_SOURCE[0]}")"
 
   # _amux_ago tests
   _now=$(date +%s)
