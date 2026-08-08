@@ -291,6 +291,20 @@ _rm_preflight_script() {
     'printf "RM_OK%s%s%s%s\n" "$TAB" "$dir" "$TAB" "$v"'
 }
 
+# _rm_last_err <file> — the last non-blank line of <file>; reaps the file.
+#
+# One home for "what did the transport actually say". Preflight is where every
+# unrecoverable remote error surfaces, and the holding screen shows the same
+# fact after a link drop — both read a captured stderr the same way, so the
+# mechanic lives HERE. remote_attach.sh sources this file; the dependency never
+# runs the other way, so a shared helper cannot live over there.
+_rm_last_err() {
+  local f="$1"
+  [ -n "$f" ] || return 0
+  grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -n 1
+  rm -f "$f"
+}
+
 # _rm_run <kind> <target> <cmd> — a NON-INTERACTIVE transport call.
 # Reuses the ControlMaster the interactive session will use, so it is nearly
 # free after the first call to a host. Returns the transport's exit status.
@@ -335,11 +349,34 @@ _rm_preflight() {
   roots="$(agentmux_host_roots "$hi")"
   prog="$(_rm_prog_for_host "$hi")"
   script="$(_rm_preflight_script "$project" "$path" "$roots" "$prog")"
-  out="$(_rm_run "$kind" "$target" "sh -c $(_rm_shquote "$script")" 2>/dev/null)"
-  st=$?
+  # The transport's stderr is TEED, never discarded. Preflight is by design the
+  # place every unrecoverable error surfaces, so throwing it away collapsed a
+  # refused key, an unknown host and a host-key prompt into one indistinguishable
+  # "transport exited 255" — the caller then has nothing to act on. Both halves
+  # of the tee matter: it stays on the terminal, because ssh may be prompting for
+  # a host key or a passphrase and a swallowed prompt reads as a hang, AND it is
+  # captured so the real message reaches RM_ERRMSG. Same process-substitution
+  # shape as _ra_run_once, for the same reason and with the same caveat noted
+  # there; stdout goes to a file so the capture is not nested inside a $().
+  local outf errf diag=""
+  outf="$(mktemp "${TMPDIR:-/tmp}/amux-preflight-out.XXXXXX" 2>/dev/null)" || outf=""
+  errf="$(mktemp "${TMPDIR:-/tmp}/amux-preflight-err.XXXXXX" 2>/dev/null)" || errf=""
+  if [ -n "$outf" ] && [ -n "$errf" ]; then
+    _rm_run "$kind" "$target" "sh -c $(_rm_shquote "$script")" \
+      >"$outf" 2> >(tee -a "$errf" >&2)
+    st=$?
+    out="$(cat "$outf" 2>/dev/null)"; rm -f "$outf"
+    diag="$(_rm_last_err "$errf")"
+  else
+    [ -n "$outf" ] && rm -f "$outf"
+    [ -n "$errf" ] && rm -f "$errf"
+    out="$(_rm_run "$kind" "$target" "sh -c $(_rm_shquote "$script")")"
+    st=$?
+  fi
   if [ "$st" -ne 0 ] || [ -z "$out" ]; then
     RM_ERRCODE="transport"
     RM_ERRMSG="could not reach $target (transport exited $st)"
+    [ -n "$diag" ] && RM_ERRMSG="$RM_ERRMSG: $diag"
     return 3
   fi
   out="$(printf '%s\n' "$out" | grep -E '^RM_(OK|ERR)' | tail -n1)"
@@ -356,6 +393,7 @@ _rm_preflight() {
       ;;
   esac
   RM_ERRCODE="transport"; RM_ERRMSG="unrecognised preflight reply"
+  [ -n "$diag" ] && RM_ERRMSG="$RM_ERRMSG: $diag"
   return 3
 }
 
@@ -429,6 +467,13 @@ _rm_roster_cache_file() {
 }
 
 # _rm_roster <host_index> <host> [--refresh] — one repo path per line.
+# Returns 1 only when the host could not be REACHED.
+#
+# An empty roster is a real, successful answer — a host whose roots exist but
+# hold no repos yet. Returning 1 for it made "no projects here" and "could not
+# reach this host" the same outcome to every caller: the picker reported
+# "could not list projects on <host>" for a perfectly healthy box, and its own
+# "no projects found under this host's roots" branch became unreachable code.
 #
 # The cache exists for TAB-COMPLETION ONLY, which must be instant and can be a
 # few minutes stale. Nothing that launches or resolves reads it: the picker and
@@ -446,9 +491,14 @@ _rm_roster() {
   roots="$(agentmux_host_roots "$hi")"
   out="$(_rm_run "$kind" "$target" \
         "sh -c $(_rm_shquote "$(_rm_roster_script "$roots")")" 2>/dev/null)" || return 1
-  [ -n "$out" ] || return 1
-  printf '%s\n' "$out" > "$cache" 2>/dev/null
-  printf '%s\n' "$out"
+  # An emptied cache is correct: the host really has nothing to complete now.
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out" > "$cache" 2>/dev/null
+    printf '%s\n' "$out"
+  else
+    : > "$cache" 2>/dev/null
+  fi
+  return 0
 }
 
 # _rm_roster_json <host_index> <host> — the roster joined with live sessions.
@@ -793,6 +843,31 @@ TOML
   AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_preflight 0 warden ""
   _assert "transport failure rc" "3" "$?"
 
+  # ...and it must carry WHAT the transport said. Preflight is where every
+  # unrecoverable error surfaces, so discarding stderr collapsed a refused key,
+  # an unknown host and a host-key prompt into one "transport exited 255" with
+  # nothing to act on.
+  cat > "$_rm_t/denystub" <<'STUB'
+#!/bin/sh
+echo "root@bench: Permission denied (publickey)." >&2
+exit 255
+STUB
+  chmod +x "$_rm_t/denystub"
+  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/denystub" _rm_preflight 0 warden "" 2>/dev/null
+  _assert "transport failure still rc 3 with a diagnostic" "3" "$?"
+  _assert "transport failure names the real error" "1" \
+    "$(printf '%s' "$RM_ERRMSG" | grep -c 'Permission denied (publickey)')"
+  _assert "transport failure still names the target" "1" \
+    "$(printf '%s' "$RM_ERRMSG" | grep -c 'could not reach')"
+  # The capture is a TEE, not a redirect: ssh may be prompting for a host key or
+  # a passphrase, and a swallowed prompt reads as a hang. So the same text must
+  # still reach the caller's stderr.
+  _assert "the diagnostic still reached the caller's stderr" "1" \
+    "$(AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/denystub" \
+       _rm_preflight 0 warden "" 2>&1 >/dev/null | grep -c 'Permission denied')"
+  _assert "the capture files leave no residue" "0" \
+    "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'amux-preflight-*' 2>/dev/null | wc -l | tr -d ' ')"
+
   unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG
 
   # ---- bootstrap ----
@@ -881,6 +956,26 @@ TRACKING
   _assert "roster serves the cache" "/only/from/cache" "$(_rm_roster 0 fake)"
   _assert "--refresh bypasses the cache" "2" "$(_rm_roster 0 fake --refresh | wc -l | tr -d ' ')"
 
+  # An EMPTY roster is a successful answer, not a failure. Collapsing it into
+  # rc 1 made "this host has no repos yet" indistinguishable from "this host is
+  # unreachable", so the picker reported "could not list projects" for a healthy
+  # box and its own no-projects branch became unreachable code. Only a transport
+  # failure may return 1 — asserted against both, on the same fixture.
+  mkdir -p "$_rm_t/roots/empty"
+  cat >> "$_rm_t/hosts.toml" <<TOML
+
+[[hosts]]
+name  = "emptyhost"
+ssh   = "e"
+roots = ["$_rm_t/roots/empty"]
+TOML
+  _amux_json_cache=""
+  _rm_roster_empty="$(_rm_roster 4 emptyhost --refresh)"; _rm_roster_empty_rc=$?
+  _assert "empty roster succeeds" "0" "$_rm_roster_empty_rc"
+  _assert "empty roster is empty" "" "$_rm_roster_empty"
+  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_roster 4 emptyhost --refresh >/dev/null 2>&1
+  _assert "an unreachable host still fails" "1" "$?"
+
   # ---- roster json + liveness join ----
   # Liveness comes from ONE remote --sessions-json call covering every project,
   # never one probe per project: a per-project round trip is a network call
@@ -910,6 +1005,12 @@ SESS
     "$(printf '%s' "$_rm_j" | jq -r '.[] | select(.name=="warden") | .tabs')"
   _assert "roster json marks the idle project" "false" \
     "$(printf '%s' "$_rm_j" | jq -r '.[] | select(.name=="lector") | .live')"
+  # A host with no repos must reach the picker as a valid EMPTY array, which is
+  # what makes its "no projects found under this host's roots" branch reachable
+  # at all — rather than a failed call reported as "could not list projects".
+  _rm_ej="$(_rm_roster_json 4 emptyhost)"; _rm_ej_rc=$?
+  _assert "empty roster json succeeds" "0" "$_rm_ej_rc"
+  _assert "empty roster json is []" "0" "$(printf '%s' "$_rm_ej" | jq -r 'length')"
   unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG AGENTMUX_STATE_DIR
 
   echo "---- $pass passed, $fail failed"

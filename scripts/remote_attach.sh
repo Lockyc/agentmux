@@ -75,11 +75,13 @@ _ra_run_once() {
 # (no `local`): _ra_render stays pure and only ever receives it as its 5th
 # positional argument — see that function's own header. This is the one
 # writer; _ra_hold is the one reader that turns it into that argument.
+#
+# The reading-and-reaping itself is _rm_last_err's, shared with preflight's
+# transport diagnostic — this function owns only which global it lands in.
 _ra_capture_err() {
   local f="$1"
   [ -n "$f" ] || return 0
-  RA_LAST_ERR="$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -n 1)"
-  rm -f "$f"
+  RA_LAST_ERR="$(_rm_last_err "$f")"
 }
 
 # _ra_supervise <kind> <target> <cmd> <host> <dir>
@@ -481,6 +483,18 @@ TOML
     "$(printf '2\n' | _ra_pick 0 dup 2>/dev/null)"
   _assert "cancelling picks nothing" "" \
     "$(printf 'q\n' | _ra_pick 0 dup 2>/dev/null)"
+
+  # A host whose roots hold no repos must reach the empty-state message ABOVE,
+  # through _ra_pick itself. Asserting it by calling _ra_pick_render directly
+  # proves only that the branch renders — it passed the whole time the product
+  # could not take that path, because _rm_roster returned 1 on empty output and
+  # _ra_pick bailed with "could not list projects on <host>" instead, the same
+  # thing it says for an unreachable box.
+  _ra_bare="$(printf 'q\n' | _ra_pick 1 bare 2>&1)"
+  _assert "an empty host reaches the no-projects message" "1" \
+    "$(printf '%s' "$_ra_bare" | grep -ci 'no projects found')"
+  _assert "an empty host is NOT reported as unreachable" "0" \
+    "$(printf '%s' "$_ra_bare" | grep -ci 'could not list projects')"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG \
         AGENTMUX_STATE_DIR AGENTMUX_USER_DIR AGENTMUX_CONFIG
