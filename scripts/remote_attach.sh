@@ -32,15 +32,54 @@ _ra_sleep() {
 
 # _ra_run_once <kind> <target> <cmd> — one interactive transport attempt.
 # Returns the transport's exit status.
+#
+# Captures the transport's stderr as it streams — via a `tee` fork that still
+# lets it reach the real terminal, since ssh diagnostics (and, if the
+# multiplexed master has expired, an auth prompt) must stay visible — and sets
+# RA_LAST_ERR to its last non-blank line for the holding screen to show. The
+# process-substitution capture (`2> >(tee -a … >&2)`) was stress-tested under
+# the real /bin/bash (bash 3.2, macOS) for the read-before-tee-flushes race
+# process substitution is known for; none observed across 500 iterations, incl.
+# under artificial CPU load — small, synchronous stderr writes ahead of process
+# exit are the case here, not a long-lived stream.
 _ra_run_once() {
   local kind="$1" target="$2" cmd="$3"
+  local errfile st
+  errfile="$(mktemp "${TMPDIR:-/tmp}/amux-remote-err.XXXXXX" 2>/dev/null)" || errfile=""
   if [ -n "${AGENTMUX_REMOTE_TRANSPORT_CMD:-}" ]; then
-    "$AGENTMUX_REMOTE_TRANSPORT_CMD" "$target" "$cmd"
-    return $?
+    if [ -n "$errfile" ]; then
+      "$AGENTMUX_REMOTE_TRANSPORT_CMD" "$target" "$cmd" 2> >(tee -a "$errfile" >&2)
+    else
+      "$AGENTMUX_REMOTE_TRANSPORT_CMD" "$target" "$cmd"
+    fi
+    st=$?
+    _ra_capture_err "$errfile"
+    return "$st"
   fi
-  _rm_transport_argv "$kind" "$target" "$cmd" || return 2
-  "${RM_ARGV[@]}"
-  return $?
+  if ! _rm_transport_argv "$kind" "$target" "$cmd"; then
+    [ -n "$errfile" ] && rm -f "$errfile"
+    return 2
+  fi
+  if [ -n "$errfile" ]; then
+    "${RM_ARGV[@]}" 2> >(tee -a "$errfile" >&2)
+  else
+    "${RM_ARGV[@]}"
+  fi
+  st=$?
+  _ra_capture_err "$errfile"
+  return "$st"
+}
+
+# _ra_capture_err <errfile> — set RA_LAST_ERR to its last non-blank line and
+# reap the file (no residue past this call). RA_LAST_ERR is a genuine global
+# (no `local`): _ra_render stays pure and only ever receives it as its 5th
+# positional argument — see that function's own header. This is the one
+# writer; _ra_hold is the one reader that turns it into that argument.
+_ra_capture_err() {
+  local f="$1"
+  [ -n "$f" ] || return 0
+  RA_LAST_ERR="$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -n 1)"
+  rm -f "$f"
 }
 
 # _ra_supervise <kind> <target> <cmd> <host> <dir>
@@ -102,9 +141,8 @@ _ra_render() {
   printf '    %-20s %s\n\n' "$host" "$(_ra_elide "$dir" 48)"
   printf '    ⟳  reconnecting — attempt %s, %s:%s elapsed\n' "$attempt" "$mm" "$ss"
   [ -n "$err" ] && printf '       %s\n' "$(_ra_elide "$err" 66)"
-  printf '\n       your session is still running there; nothing is lost\n\n'
-  printf '    r  retry now\n'
-  printf '    q  give up (session keeps running)\n'
+  printf '\n       your session is still running on %s; nothing is lost\n\n' "$host"
+  printf '    r  retry now        q  give up (session keeps running)\n'
 }
 
 # _ra_hold <host> <dir> <attempt> <started-epoch> <wait-seconds>
@@ -202,11 +240,50 @@ STUB
   _assert "backoff 4" "8"  "$(_ra_backoff 4)"
   _assert "backoff caps at 15" "15" "$(_ra_backoff 9)"
 
+  # ---- stderr capture reaches RA_LAST_ERR and the rendered screen ----
+  # The transport is interactive and owns the terminal, so the capture must be
+  # a tee that keeps stderr visible to the caller — never a plain redirect,
+  # which would swallow ssh diagnostics or an auth prompt. Isolated under its
+  # own TMPDIR (reaped by the outer EXIT trap) so the capture file — and proof
+  # that it leaves no residue — stay inside a throwaway directory.
+  _ra_prev_tmpdir="${TMPDIR:-}"
+  export TMPDIR="$_ra_t"
+  cat > "$_ra_t/errstub" <<'STUB'
+#!/bin/sh
+echo "boom: connection refused" >&2
+exit 255
+STUB
+  chmod +x "$_ra_t/errstub"
+  : > "$_ra_t/livestderr"
+  AGENTMUX_REMOTE_TRANSPORT_CMD="$_ra_t/errstub" \
+    _ra_run_once ssh t "sh -c true" >/dev/null 2>"$_ra_t/livestderr"
+  _ra_rc=$?
+  _assert "run_once returns the transport's exit status" "255" "$_ra_rc"
+  # Proves the tee didn't swallow it: the text still reached the real fd we
+  # redirected stderr to, exactly as a terminal would have received it.
+  _assert "stderr still reached the caller (not swallowed)" "1" \
+    "$(grep -c 'boom: connection refused' "$_ra_t/livestderr")"
+  _assert "RA_LAST_ERR captured the same text" "1" \
+    "$(printf '%s' "$RA_LAST_ERR" | grep -c 'boom: connection refused')"
+  # Closing the loop end to end: the captured text is what the holding screen
+  # actually renders, not just a variable nothing reads.
+  _ra_render_out="$(_ra_render buildbox /srv/p 1 5 "$RA_LAST_ERR")"
+  _assert "the captured error reaches the rendered screen" "1" \
+    "$(printf '%s' "$_ra_render_out" | grep -c 'boom: connection refused')"
+  _assert "the capture file leaves no residue" "0" \
+    "$(find "$_ra_t" -maxdepth 1 -name 'amux-remote-err.*' | wc -l | tr -d ' ')"
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD
+  if [ -n "$_ra_prev_tmpdir" ]; then export TMPDIR="$_ra_prev_tmpdir"; else unset TMPDIR; fi
+
   # ---- holding screen ----
   # _ra_render is pure so it can be asserted on directly — no pty, no alternate
   # screen, no timing. The terminal control lives in _ra_hold around it.
   _ra_out="$(_ra_render buildbox /srv/projects/warden 3 84 'ssh: connect: Host is down')"
-  _assert "render names the host" "1" "$(printf '%s' "$_ra_out" | grep -c 'buildbox')"
+  # grep -c counts matching LINES, not occurrences — the host appears on two
+  # lines (header + reassurance line), so occurrences must be counted with
+  # grep -o | wc -l instead, or this undercounts a real regression to "1".
+  _assert "render names the host (header + reassurance)" "2" \
+    "$(printf '%s' "$_ra_out" | grep -o 'buildbox' | wc -l | tr -d ' ')"
   _assert "render names the project dir" "1" \
     "$(printf '%s' "$_ra_out" | grep -c 'warden')"
   _assert "render shows the attempt" "1" "$(printf '%s' "$_ra_out" | grep -c 'attempt 3')"
@@ -218,8 +295,10 @@ STUB
   # place rather than left to be inferred.
   _assert "render reassures about the session" "1" \
     "$(printf '%s' "$_ra_out" | grep -ci 'still running')"
+  # Same grep -c pitfall: both hints sit on ONE line by design, so -c would
+  # (and did) undercount to "1" — occurrences, not lines, is what this checks.
   _assert "render names both keys" "2" \
-    "$(printf '%s' "$_ra_out" | grep -Eco '(^|[^a-z])(r|q)  ')"
+    "$(printf '%s' "$_ra_out" | grep -Eo '(^|[^a-z])(r|q)  ' | wc -l | tr -d ' ')"
   # Long dirs must not wrap the layout — the middle is elided, never truncated
   # at the front, because the tail is the identifying part.
   _ra_long="$(_ra_render h /a/very/long/path/that/keeps/going/and/going/and/going/warden 1 5 x)"
