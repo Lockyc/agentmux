@@ -800,23 +800,30 @@ TOML
     "$(_rm_bootstrap_cmd | grep -c 'install.sh')"
   _assert "bootstrap pipes to bash" "1" "$(_rm_bootstrap_cmd | grep -c 'bash')"
   # Declining must NOT install: the offer is a question, and answering no is a
-  # supported outcome, not an error to route around. A fake transport that records
-  # invocations verifies the decline branch is actually taken (not fallen through
-  # to _rm_run). The stub writes a marker when invoked; the test asserts that
-  # declining leaves no marker and accepting creates one (positive control).
+  # supported outcome, not an error to route around. A fake transport that RECORDS
+  # the command it was handed — and never runs it — is what verifies which branch
+  # was taken.
+  #
+  # It must not `exec sh -c "$last"` the way the preflight/roster stubs above do.
+  # Everywhere else that is exactly right: the "remote command" is a self-contained
+  # sh program against a local temp tree. The bootstrap command is not — it is the
+  # real `curl … | bash` one-liner, so exec'ing it makes every selftest run a live
+  # download-and-execute from the internet, and on a machine with no ~/.agentmux
+  # (every CI runner) it clones agentmux into the REAL $HOME. Offline, and leaving
+  # nothing in the user's home, are both invariants of this suite (see CLAUDE.md).
+  # Recording the command also carries strictly more information than a bare
+  # marker: it pins WHAT the transport was asked to run.
   export AGENTMUX_CONFIG="$_rm_t/hosts.toml"; _amux_json_cache=""
   _rm_marker="$_rm_t/invoked"
 
-  # Wrapper stub that records when it's invoked by creating a marker file.
-  # Reads _RM_BOOTSTRAP_MARKER from the environment (passed by the test).
   cat > "$_rm_t/stub-tracking" <<'TRACKING'
 #!/bin/sh
-# Mark that the transport was invoked, then run the command.
-if [ -n "$_RM_BOOTSTRAP_MARKER" ]; then
-  touch "$_RM_BOOTSTRAP_MARKER"
-fi
+# Record the remote command (the last argument) and exit WITHOUT running it.
 for a in "$@"; do last="$a"; done
-exec sh -c "$last"
+if [ -n "$_RM_BOOTSTRAP_MARKER" ]; then
+  printf '%s\n' "$last" > "$_RM_BOOTSTRAP_MARKER"
+fi
+exit "${_RM_BOOTSTRAP_RC:-0}"
 TRACKING
   chmod +x "$_rm_t/stub-tracking"
 
@@ -829,14 +836,29 @@ TRACKING
   _assert "declining left no marker (transport not invoked)" "0" \
     "$([ -f "$_rm_marker" ] && echo 1 || echo 0)"
 
-  # Test 2: Accepting must invoke the transport (positive control).
+  # Test 2: Accepting must hand the transport the documented bootstrap command.
+  # Asserting on the RECORDED command, not on the return code: the old rc check
+  # could not fail, because `curl … | bash` exits with BASH's status — 0 whether
+  # or not the download succeeded. What the transport was asked to run is the
+  # thing worth pinning, and _rm_bootstrap_cmd is its one home.
   rm -f "$_rm_marker"
-  _assert "accepting does install (rc)" "0" \
-    "$(printf 'y\n' | _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
-  _assert "accepting created marker (transport was invoked)" "1" \
+  printf 'y\n' | _rm_offer_bootstrap 0 fake >/dev/null 2>&1
+  _assert "accepting invoked the transport" "1" \
     "$([ -f "$_rm_marker" ] && echo 1 || echo 0)"
+  _assert "accepting ran the documented bootstrap command" "1" \
+    "$(grep -Fc "$(_rm_bootstrap_cmd)" "$_rm_marker" 2>/dev/null || echo 0)"
 
-  # Test 3: EOF (no input at all) must decline, like explicit 'n'.
+  # Test 3: a FAILING install must report failure, not silent success. This is
+  # what the old rc assertion was reaching for and could not test — with the
+  # stub's status now under the test's control, rc 0 and rc 1 genuinely differ.
+  rm -f "$_rm_marker"
+  _assert "a failed install returns 1" "1" \
+    "$(printf 'y\n' | _RM_BOOTSTRAP_RC=7 _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
+  rm -f "$_rm_marker"
+  _assert "a successful install returns 0" "0" \
+    "$(printf 'y\n' | _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
+
+  # Test 4: EOF (no input at all) must decline, like explicit 'n'.
   rm -f "$_rm_marker"
   _assert "EOF declines (rc)" "1" \
     "$(< /dev/null _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
