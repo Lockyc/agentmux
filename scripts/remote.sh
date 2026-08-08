@@ -398,6 +398,94 @@ _rm_offer_bootstrap() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Roster
+# ---------------------------------------------------------------------------
+
+# _rm_roster_script <roots-newline> — remote sh printing one repo path per line.
+#
+# Finds directories NAMED .git and prunes there, so each repo is reported once
+# and nothing descends into object stores. -maxdepth 4 on .git means a repo up
+# to three levels below a root — enough for ~/Developer/<host>/<owner>/<repo>.
+_rm_roster_script() {
+  local roots="$1"
+  printf '%s\n' \
+    "roots=$(_rm_shquote "$roots")" \
+    'IFS="' \
+    '"' \
+    'for r in $roots; do' \
+    '  r=$(eval printf %s "$r")' \
+    '  [ -d "$r" ] || continue' \
+    '  find "$r" -maxdepth 4 -type d -name .git -prune -print 2>/dev/null' \
+    'done | sed "s#/\.git\$##" | sort -u'
+}
+
+# Where a host's completion cache lives. Under AGENTMUX_STATE_DIR so a test run
+# redirects it exactly like the session log's state.
+_rm_roster_cache_file() {
+  local d="${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}/remote"
+  mkdir -p "$d" 2>/dev/null
+  printf '%s/%s.roster' "$d" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_')"
+}
+
+# _rm_roster <host_index> <host> [--refresh] — one repo path per line.
+#
+# The cache exists for TAB-COMPLETION ONLY, which must be instant and can be a
+# few minutes stale. Nothing that launches or resolves reads it: the picker and
+# project resolution both go live over the warm master, so a repo cloned a
+# minute ago is always reachable even when completion has not noticed it yet.
+_rm_roster() {
+  local hi="$1" host="$2" refresh="${3:-}" cache out
+  cache="$(_rm_roster_cache_file "$host")"
+  if [ "$refresh" != "--refresh" ] && [ -s "$cache" ]; then
+    cat "$cache"; return 0
+  fi
+  local target kind roots
+  target="$(agentmux_host_field "$hi" ssh)"
+  kind="$(_rm_transport_for_host "$hi")"
+  roots="$(agentmux_host_roots "$hi")"
+  out="$(_rm_run "$kind" "$target" \
+        "sh -c $(_rm_shquote "$(_rm_roster_script "$roots")")" 2>/dev/null)" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" > "$cache" 2>/dev/null
+  printf '%s\n' "$out"
+}
+
+# _rm_roster_json <host_index> <host> — the roster joined with live sessions.
+# [{"name","path","live","tabs","agent"}]
+#
+# ONE remote --sessions-json call answers liveness for every project on the
+# host. Never probe per project: that is a network round trip inside what
+# becomes a poll loop, the exact cost the local presence dot was rebuilt to
+# eliminate. Host-scoped here is the remote analogue of the live-set sidecar.
+#
+# The join key is the DIRECTORY. Session names are sanitized basenames and
+# collide between same-basename projects, so a name join would light the dot on
+# the wrong repo.
+_rm_roster_json() {
+  local hi="$1" host="$2" target kind prog paths sess
+  target="$(agentmux_host_field "$hi" ssh)"
+  kind="$(_rm_transport_for_host "$hi")"
+  prog="$(_rm_prog_for_host "$hi")"
+  paths="$(_rm_roster "$hi" "$host" --refresh)" || return 1
+  sess="$(_rm_run "$kind" "$target" \
+         "sh -c $(_rm_shquote "$prog --sessions-json")" 2>/dev/null)"
+  case "$sess" in
+    '['*) : ;;
+    # A remote amux predating --sessions-json (Task 1) simply has no liveness to
+    # report. Degrade to dots-off rather than failing the whole roster.
+    *) sess='[]' ;;
+  esac
+  printf '%s\n' "$paths" | jq -R -s --argjson s "$sess" '
+    split("\n") | map(select(length > 0)) | map({
+      name: (split("/") | last),
+      path: .,
+    } + ( . as $p | ($s | map(select(.dir == $p)) | first) as $m
+          | { live:  ($m != null),
+              tabs:  ($m.windows // 0),
+              agent: ($m.agent // "") } ))'
+}
+
 # ============================ selftest ============================
 # REMOTE_SELFTEST=1 bash scripts/remote.sh
 if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
@@ -756,6 +844,51 @@ TRACKING
     "$([ -f "$_rm_marker" ] && echo 1 || echo 0)"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD _RM_BOOTSTRAP_MARKER
+
+  # ---- roster ----
+  export AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/stub"
+  export AGENTMUX_CONFIG="$_rm_t/hosts.toml"; _amux_json_cache=""
+  export AGENTMUX_STATE_DIR="$_rm_t/state"
+  _assert "roster finds both repos" "lector warden" \
+    "$(_rm_roster 0 fake --refresh | xargs -n1 basename | sort | tr '\n' ' ' | sed 's/ $//')"
+  _assert "roster wrote a cache" "1" \
+    "$([ -s "$(_rm_roster_cache_file fake)" ] && echo 1 || echo 0)"
+  # The cache serves completion only. A stale entry must still be served
+  # (instant completion beats correct completion), but --refresh must bypass it.
+  printf '/only/from/cache\n' > "$(_rm_roster_cache_file fake)"
+  _assert "roster serves the cache" "/only/from/cache" "$(_rm_roster 0 fake)"
+  _assert "--refresh bypasses the cache" "2" "$(_rm_roster 0 fake --refresh | wc -l | tr -d ' ')"
+
+  # ---- roster json + liveness join ----
+  # Liveness comes from ONE remote --sessions-json call covering every project,
+  # never one probe per project: a per-project round trip is a network call
+  # inside a poll loop, which is the cost the local presence dot was redesigned
+  # to remove. The join is on DIR, not session name (names collide).
+  cat > "$_rm_t/amux" <<SESS
+#!/bin/sh
+case "\$1" in
+  --version) echo 9.9.9 ;;
+  --sessions-json) printf '%s\n' '[{"name":"warden","dir":"$_rm_t/roots/one/warden","agent":"work","windows":2,"attached":true}]' ;;
+esac
+SESS
+  chmod +x "$_rm_t/amux"
+  # Re-point the test-prog seam at the freshly rewritten stub above — it was
+  # unset after the preflight/bootstrap blocks, and without it _rm_prog_for_host
+  # would fall back to the DEFAULT remote prog template ('"$HOME"/.agentmux/bin/amux',
+  # unexpanded), which the local `stub` transport would then execute against
+  # THIS machine's real $HOME — exactly the "leaves nothing in the real
+  # $HOME/.agentmux" invariant these selftests exist to uphold.
+  export AGENTMUX_REMOTE_TEST_PROG="$_rm_t/amux"
+  _rm_j="$(_rm_roster_json 0 fake)"
+  _assert "roster json parses" "ok" \
+    "$(printf '%s' "$_rm_j" | jq -e 'type == "array"' >/dev/null 2>&1 && echo ok)"
+  _assert "roster json marks the live project" "true" \
+    "$(printf '%s' "$_rm_j" | jq -r '.[] | select(.name=="warden") | .live')"
+  _assert "roster json counts its tabs" "2" \
+    "$(printf '%s' "$_rm_j" | jq -r '.[] | select(.name=="warden") | .tabs')"
+  _assert "roster json marks the idle project" "false" \
+    "$(printf '%s' "$_rm_j" | jq -r '.[] | select(.name=="lector") | .live')"
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG AGENTMUX_STATE_DIR
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
