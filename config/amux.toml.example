@@ -180,6 +180,44 @@ left = 30
 # left_vertical_split = 30
 # focus = "terminal"
 
+# ---------------------------------------------------------------------------
+# [[hosts]] — remote machines you can launch into with `amux @<name>`.
+#
+# Everything runs on the REMOTE: tmux servers, agents, the session log, the AI
+# summaries. Your local machine is transport only, so closing the laptop costs
+# you a re-attach, never work.
+#
+#   amux @buildbox              pick a project on buildbox
+#   amux @buildbox warden       launch/attach warden on buildbox
+#   amux @buildbox:~/tmp/scrap  an explicit remote path (skips `roots`)
+#   amux @buildbox warden --kill    any other flag is forwarded to remote amux
+#
+# There is deliberately NO user/port/key/password field. `ssh` names an ssh
+# target or a ~/.ssh/config Host alias and ssh owns reaching it — if
+# `ssh buildbox` works, `amux @buildbox` works, and no credential lives here.
+#
+# [[hosts]]
+# name  = "buildbox"                        # what you type after @
+# ssh   = "root@buildbox"                   # ssh target or ~/.ssh/config alias
+# roots = ["~/Developer/work", "~/src"]     # searched for <project>; ~ is
+#                                            # expanded on the REMOTE, not here
+# transport = "ssh"      # ssh (default) | et | mosh
+#                        #   ssh  — stock, multiplexed (ControlMaster), full
+#                        #          escape transparency. The right default.
+#                        #   et   — Eternal Terminal: transparent byte stream
+#                        #          plus automatic reconnect/roaming. Needs
+#                        #          `et` locally and `etserver` remotely.
+#                        #   mosh — WARNS on use: mosh re-emulates the terminal
+#                        #          and drops escapes agentmux depends on, so
+#                        #          desktop notifications (OSC 777), OSC 52
+#                        #          clipboard and passthrough stop working.
+#                        #          Supported for bad links; not recommended.
+# agent = "work"         # optional: agent to pass to the remote amux
+# amux  = '"$HOME"/.agentmux/bin/amux'   # optional: remote amux program.
+#                        # Inserted UNQUOTED into a remote `sh -c`, so it may
+#                        # carry env or a wrapper; the default is the standalone
+#                        # script, which needs no remote shell integration.
+
 [[agents]]
 name = "personal"
 label = "pers"

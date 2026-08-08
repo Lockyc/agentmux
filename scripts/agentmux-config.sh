@@ -96,6 +96,50 @@ agentmux_find_by_flag() {
   echo "-1"
 }
 
+# ---------------------------------------------------------------------------
+# [[hosts]] — remote machines reachable with `amux @<name>`.
+#
+# Auth is deliberately absent from this schema: no user/port/key/password field
+# exists or may be added. `ssh` names an ssh target or a ~/.ssh/config Host
+# alias, and ssh owns everything about reaching it — one home for those facts,
+# and no credential ever lands in amux.toml.
+#
+# `(.hosts // [])` throughout: a config with no [[hosts]] block is the normal
+# case (every install predating this feature), and must read as zero hosts
+# rather than a jq null error.
+# ---------------------------------------------------------------------------
+
+# Number of remote hosts defined in config.
+agentmux_host_count() {
+  _amux_json | jq '(.hosts // []) | length'
+}
+
+# Field value for host at 0-based index. Empty string if absent.
+# Usage: agentmux_host_field <index> <field>
+agentmux_host_field() {
+  _amux_json | jq -r "(.hosts // [])[$1].${2} // empty"
+}
+
+# 0-based index of the host with the given name, or -1 if not found.
+agentmux_find_host_by_name() {
+  _amux_json | jq -r --arg n "$1" '
+    [ (.hosts // []) | to_entries[] | select(.value.name == $n) | .key ]
+    | first // -1'
+}
+
+# Roots for host at 0-based index, one per line, in config order.
+# `~` is NOT expanded here — these paths name directories on the REMOTE box, so
+# expanding against the local $HOME would be wrong whenever the two differ.
+# The remote sh expands them (see _rm_preflight_script).
+agentmux_host_roots() {
+  _amux_json | jq -r "((.hosts // [])[$1].roots // [])[]"
+}
+
+# All host names, one per line, config order (drives @<TAB> completion).
+agentmux_host_names() {
+  _amux_json | jq -r '(.hosts // [])[].name // empty'
+}
+
 # Name of the agent whose `dirs` matches the given directory, or empty if none.
 # A pattern matches when <dir> equals it or is a subdirectory of it; `~` expands
 # to $HOME and trailing slashes are ignored. When several patterns match, the
@@ -216,6 +260,9 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   # keep_alive/reattach branch independent of what the example ships with.
   _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"
+  # Reusable handle on the shipped example config: agents defined, no [[hosts]]
+  # block — exactly the "every install predating this feature" shape.
+  _selftest_example_cfg="$AGENTMUX_CONFIG"
   # Isolate the disk cache in a throwaway dir so selftest configs never touch or
   # leak into the user's real ~/.cache/agentmux, and it all disappears with one rm
   # at the end. Per-config cleanup can't reclaim these anyway: the cache key is
@@ -428,6 +475,45 @@ TOML
   _assert "amux tilde prefix"     "C-o"     "$(agentmux_amux_field prefix "$HOME/amux-pfx-home/x")"
   _assert "amux absent field"     ""        "$(agentmux_amux_field nonexistent)"
   rm -f "$_amcfg"
+
+  # ---- [[hosts]] accessors ----
+  _hostscfg=$(mktemp "${TMPDIR:-/tmp}/agentmux-hosts-XXXXXX.toml") || exit 1
+  cat > "$_hostscfg" <<'TOML'
+[[hosts]]
+name  = "buildbox"
+ssh   = "root@buildbox"
+roots = ["~/Developer/work", "~/src"]
+
+[[hosts]]
+name      = "bench"
+ssh       = "bench"
+roots     = ["~/code"]
+transport = "et"
+TOML
+  AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" _assert "host count" "2" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_host_count)"
+  _assert "host field ssh" "root@buildbox" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_host_field 0 ssh)"
+  _assert "host field transport absent is empty" "" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_host_field 0 transport)"
+  _assert "host field transport present" "et" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_host_field 1 transport)"
+  _assert "find host by name" "1" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_find_host_by_name bench)"
+  _assert "find host by name missing" "-1" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_find_host_by_name nope)"
+  # shellcheck disable=SC2088 # intentional: agentmux_host_roots must NOT expand ~
+  _assert "host roots" "~/Developer/work ~/src" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_host_roots 0 | tr '\n' ' ' | sed 's/ $//')"
+  _assert "host names" "buildbox bench" \
+    "$(AGENTMUX_CONFIG="$_hostscfg" _amux_json_cache="" agentmux_host_names | tr '\n' ' ' | sed 's/ $//')"
+  # A config with NO [[hosts]] block must return 0/-1/empty, never a jq null error —
+  # every existing user's config is exactly this shape.
+  _assert "no hosts block counts 0" "0" \
+    "$(AGENTMUX_CONFIG="$_selftest_example_cfg" _amux_json_cache="" agentmux_host_count)"
+  _assert "no hosts block finds -1" "-1" \
+    "$(AGENTMUX_CONFIG="$_selftest_example_cfg" _amux_json_cache="" agentmux_find_host_by_name buildbox)"
+  rm -f "$_hostscfg"
 
   rm -rf "$_selftest_cache"
   echo "---"; echo "Passed: $pass  Failed: $fail"
