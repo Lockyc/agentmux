@@ -204,9 +204,14 @@ _rm_classify_exit() {
   local kind="$1" st="$2"
   case "$st" in
     0)       printf 'clean'; return 0 ;;
+    127)     printf 'fail'; return 0 ;;
     130|143) printf 'clean'; return 0 ;;
     129|141) printf 'retry'; return 0 ;;
   esac
+  # 127 (command not found) is shared because it is never a transport failure —
+  # it means the remote program does not exist, and retrying will reproduce it
+  # forever. This applies to all transports: ssh, et, and mosh. The per-kind
+  # logic below handles failures that *are* transport-specific.
   case "$kind" in
     ssh)
       case "$st" in
@@ -409,11 +414,23 @@ TOML
   _assert "ssh 1 is fail"           "fail"  "$(_rm_classify_exit ssh 1)"
   _assert "ssh 127 is fail"         "fail"  "$(_rm_classify_exit ssh 127)"
   # et and mosh reconnect internally, so a non-zero exit from THEM means they
-  # gave up — retrying is still right, but 255 carries no special meaning.
+  # gave up — retrying is still right, but 255 carries no special meaning. The
+  # shared signal codes (130/143 clean, 129/141 retry) and command-not-found (127
+  # fail) apply to all transports.
   _assert "et 0 is clean"           "clean" "$(_rm_classify_exit et 0)"
   _assert "et 1 is retry"           "retry" "$(_rm_classify_exit et 1)"
+  _assert "et 127 is fail"          "fail"  "$(_rm_classify_exit et 127)"
+  _assert "et 130 is clean"         "clean" "$(_rm_classify_exit et 130)"
+  _assert "et 143 is clean"         "clean" "$(_rm_classify_exit et 143)"
+  _assert "et 129 is retry"         "retry" "$(_rm_classify_exit et 129)"
+  _assert "et 141 is retry"         "retry" "$(_rm_classify_exit et 141)"
   _assert "mosh 0 is clean"         "clean" "$(_rm_classify_exit mosh 0)"
   _assert "mosh 4 is retry"         "retry" "$(_rm_classify_exit mosh 4)"
+  _assert "mosh 127 is fail"        "fail"  "$(_rm_classify_exit mosh 127)"
+  _assert "mosh 130 is clean"       "clean" "$(_rm_classify_exit mosh 130)"
+  _assert "mosh 143 is clean"       "clean" "$(_rm_classify_exit mosh 143)"
+  _assert "mosh 129 is retry"       "retry" "$(_rm_classify_exit mosh 129)"
+  _assert "mosh 141 is retry"       "retry" "$(_rm_classify_exit mosh 141)"
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
