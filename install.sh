@@ -109,4 +109,8 @@ echo "for a fifth status line holding a per-tab note you click to write or edit.
 echo "It stays put while 'prefix N' swaps rows 1-3 between the AI summary and notes."
 echo "Per-directory override: [notes.dirs.\"<path>\"]."
 echo ""
+echo "Optional — launch/attach sessions on a remote machine: add a [[hosts]] block to"
+echo "amux.toml (see the example file) and run 'amux @<host>'. Auth is ssh's own"
+echo "(~/.ssh/config) — no credentials live in amux.toml."
+echo ""
 echo "For non-Claude agents: see README 'Adding an agent integration'."

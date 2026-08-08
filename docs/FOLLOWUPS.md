@@ -294,3 +294,128 @@ reads "alive" immediately after opening, and drive it from `tests/mouse`'s attac
 **Trigger to revisit:** tmux gaining a non-modal overlay — one that renders without taking
 the client's input. Nothing short of that changes the result; it is tmux's behaviour, not a
 shape we failed to find.
+
+## `amux attach <name>` is still an unguarded nesting vector
+
+**Status:** deferred — the same hole `_amux_nested_refuse` closed for a plain launch and
+`amux @host` is still open on this one path.
+
+**Where:** `bin/amux` → the `attach <name>` case arm (calls `_amux_attach_by_name`), which
+does not call `_amux_nested_refuse` the way the plain-launch and `@host` paths do.
+
+**What:** running `amux attach <name>` from inside an existing tmux nests a second tmux
+server's session inside the one you're already in — the exact objection
+`_amux_nested_refuse` exists to catch, stacking prefixes and burying one status bar inside
+another.
+
+**Why it's fine today:** `attach` is a narrower, more deliberate action than a bare launch —
+typed by name, from a specific directory, to reach a specific session — so the accidental
+nesting a plain `amux` guards against is less likely here. It's also the one path warden's
+GUI may itself invoke from inside a tmux pane it already manages; guarding it without first
+checking warden's call sites risks refusing a caller that has a legitimate reason to nest.
+
+**Fix when we act on it:** audit warden's `attach` call sites first — if none run from
+inside tmux, add the same `_amux_nested_refuse "attach"` guard `@host` and the plain launch
+already carry.
+
+**Trigger to revisit:** warden's call sites are audited, or a user reports a nested `amux
+attach` stacking prefixes.
+
+## et's own resumption makes the supervise loop mostly inert
+
+**Status:** deferred — expected behaviour of the `et` transport, not a bug.
+
+**Where:** `scripts/remote_attach.sh` → `_ra_supervise`, paired with `scripts/remote.sh`'s
+`_rm_classify_exit` for the `et` transport.
+
+**What:** ET reconnects internally on a dropped link, so `_ra_supervise`'s retry loop only
+ever sees an `et` process that has already given up — the holding screen and backoff exist
+for exactly that case, but on an `et` host they'll rarely trigger, since ET's own
+reconnection usually resolves the drop before agentmux's supervise loop gets a turn.
+
+**Why it's fine today:** the loop is still correct when it does fire (a genuinely
+unrecoverable `et` failure still shows the holding screen and retries), and `ssh` — the
+default transport — has no equivalent internal resumption, so most hosts exercise the loop
+normally.
+
+**Fix when we act on it:** none identified — this isn't a defect to fix, just a case where
+two reconnection layers (ET's and agentmux's) stack, and the outer one is mostly silent.
+
+**Trigger to revisit:** `et` hosts become the common case and the double layer causes
+confusing double-waits (a user sees ET's own reconnect message, then immediately
+agentmux's), at which point the two layers may need to be made aware of each other.
+
+## Multi-hop / jump-host roster scans don't reach a further box
+
+**Status:** deferred — narrow, and the common case (a direct host, or one reached via
+`ProxyJump`) already works.
+
+**Where:** `scripts/remote.sh` → `_rm_roster_script` and `_rm_preflight_script`, both of
+which run `find` against `roots` on the **target** host named by `ssh =`.
+
+**What:** a host reached via ssh's own `ProxyJump`/`ProxyCommand` to hop through a bastion
+works fine — ssh handles the hop transparently, and the scripts still run on the final
+target. But a host whose *projects* live on a **further** box (the `[[hosts]]` entry names
+box A, but the projects it should search for actually live on box B, reachable only from A)
+is not handled: the roster and preflight scripts have no second hop to run.
+
+**Why it's fine today:** every host configured so far names its own projects directly —
+"a host's roots are local to that host" holds in practice, and `ProxyJump` already covers
+the common bastion-access case.
+
+**Fix when we act on it:** would need either a second-hop `ssh` invocation nested inside the
+remote script (its own quoting/escaping burden, layered on the existing
+`_rm_shquote`/`_rm_remote_cmd` scheme), or a documented convention that `roots` must be
+local to the named host.
+
+**Trigger to revisit:** a host's projects stop being local to it — i.e. someone actually
+needs a `[[hosts]]` entry whose roots live on a machine other than the one `ssh =` names.
+
+## warden's remote UI is not built
+
+**Status:** deferred — the building blocks exist and are stable; nothing in warden consumes
+them yet.
+
+**Where:** `scripts/remote.sh` → `_rm_roster_json` (roster + liveness, joined on directory)
+and the local `--sessions-json` contract (`bin/amux` → `_amux_sessions_json`) that a remote
+`amux --sessions-json` call answers over ssh.
+
+**What:** warden has no remote-hosts UI yet — no way to browse a `[[hosts]]` host's projects
+or see their liveness from inside warden itself. The contracts a future UI would consume
+already exist and are exercised by `scripts/remote.sh`'s own selftest (`REMOTE_SELFTEST=1`):
+one remote `--sessions-json` call per host, joined against that host's roster by directory.
+
+**Why it's fine today:** `amux @host` is fully usable from a terminal without any warden
+integration — the picker (`_ra_pick`) already renders the same roster+liveness join a
+warden UI would.
+
+**Fix when we act on it:** build the warden-side UI against `_rm_roster_json`'s existing
+shape. The constraint it must honour: **poll a host once, never once per project** — the
+whole reason `_rm_roster_json` joins a single remote `--sessions-json` call against the
+roster instead of probing per project (see the CLAUDE.md footgun on host-scoped liveness).
+A per-project poll reintroduces the network-round-trip-inside-a-poll-loop cost the local
+presence dot was rebuilt to remove.
+
+**Trigger to revisit:** work starts on warden's remote UI.
+
+## `_ra_pick_render` pads project names with a fixed width
+
+**Status:** deferred — cosmetic; no crash, just cramped output.
+
+**Where:** `scripts/remote_attach.sh` → `_ra_pick_render`, the `jq` line padding
+`.value.name` to 18 characters (`" " * (18 - (. | length))`).
+
+**What:** a project name at or beyond the 18-character pad width runs straight into the
+path column with no separating space. `jq`'s `* (negative number)` on a string yields
+`null`, not an error, so the row just renders cramped rather than crashing.
+
+**Why it's fine today:** every project name seen in practice is well under 18 characters
+(they're repo basenames); the picker is still fully readable, just visually tight for a
+long one.
+
+**Fix when we act on it:** clamp the repeat count to a minimum of 0 (or 1, for a guaranteed
+single separating space) before multiplying, e.g. `(18 - (. | length) | if . < 1 then 1 else
+. end)`.
+
+**Trigger to revisit:** a real project name reaches 18+ characters and the picker's output
+is reported as hard to read.

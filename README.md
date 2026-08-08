@@ -1,10 +1,10 @@
 # agentmux
 
-[![Release](https://img.shields.io/github/v/release/Lockyc/agentmux?sort=semver&label=release)](https://github.com/Lockyc/agentmux/releases/latest)
-[![CI](https://github.com/Lockyc/agentmux/actions/workflows/ci.yml/badge.svg)](https://github.com/Lockyc/agentmux/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/lockyc/agentmux?sort=semver&label=release)](https://github.com/lockyc/agentmux/releases/latest)
+[![CI](https://github.com/lockyc/agentmux/actions/workflows/ci.yml/badge.svg)](https://github.com/lockyc/agentmux/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-555)
 ![Built with tmux](https://img.shields.io/badge/built%20with-tmux-1BB91F?logo=tmux&logoColor=white)
-[![License](https://img.shields.io/github/license/Lockyc/agentmux)](LICENSE)
+[![License](https://img.shields.io/github/license/lockyc/agentmux)](LICENSE)
 
 Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix m` cycles through the list.
 
@@ -29,7 +29,7 @@ The command checks dependencies, runs the installer, and interactively wires you
 ### Manual
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lockyc/agentmux/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash
 ```
 
 This clones agentmux into `~/.agentmux/` (a git clone — update later with
@@ -100,6 +100,7 @@ Normal shell commands — type them at a prompt.
 | `amux <agent> <session>` | New/attach named session with specified agent |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
 | `amux attach <name>` | Attach to a running agent session by name, from any directory — resolves which project's per-project socket is hosting it |
+| `amux @<host> [project]` | Launch/attach a session on a remote host from `[[hosts]]` — see [Remote sessions](#remote-sessions) |
 | `amux --restore [--global]` | Pick dropped agent tabs (lost to a crash/reboot) to relaunch — this project by default, `--global` for all. Also offered automatically when you launch `amux` in a project with dropped tabs |
 | `amux --probe [session]` | Exit 0 if a session exists — the agent **or** a lingering frame (default: current dir). Silent; for scripting a presence indicator (e.g. warden's cyan dot) off the exit code. With no `session` arg it matches only the session launched *from this dir*, so two projects sharing a folder name never cross-light — and exits **3** if there's no live session but a crashed one here is restorable (a plain `amux` launch would offer the restore picker), which warden renders as a ghost dot; **1** if there's nothing at all. An explicit `session` arg is a plain 0/1 presence check. Exit 3 is non-zero, so an `if amux --probe` consumer that only tests success still reads it as absent |
 | `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir). Like `--probe`, the no-arg form only reaps the session launched *from this dir* — a same-named sibling project is left alone |
@@ -284,6 +285,41 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   - `amux attach <name>` — attach to an agent session by name from any directory
     (it finds which project's socket is hosting it); useful when you're not
     currently `cd`'d into that project.
+
+## Remote sessions
+
+`amux @<host>` launches or attaches an agent session on a remote machine, defined in `~/.agentmux/amux.toml`:
+
+```toml
+[[hosts]]
+name  = "buildbox"                        # what you type after @
+ssh   = "root@buildbox"                   # ssh target or ~/.ssh/config alias
+roots = ["~/Developer/work", "~/src"]     # searched for <project>; ~ expands on the REMOTE
+transport = "ssh"                         # ssh (default) | et | mosh
+agent = "work"                            # optional: agent to pass to the remote amux
+```
+
+There is deliberately **no `user`/`port`/`key`/`password` field** — `ssh` names an ssh target or a `~/.ssh/config` `Host` alias, and ssh owns reaching it. If `ssh buildbox` works, `amux @buildbox` works, and no credential lives in `amux.toml`.
+
+Four invocation forms:
+
+| Command | Effect |
+|---|---|
+| `amux @buildbox` | Pick a project from a list of everything under that host's `roots` (a live session shows a filled dot and its tab count; an idle one a hollow dot) |
+| `amux @buildbox warden` | Launch/attach `warden` on buildbox directly, no picker |
+| `amux @buildbox:~/tmp/scrap` | An explicit remote path, skipping `roots` resolution entirely |
+| `amux @buildbox warden --kill` | Any flag after a named project forwards to the *remote* amux — so this kills `warden`'s session on buildbox, not locally |
+
+**Everything runs on the remote**: the tmux servers, the agent process, the session log, the AI summaries. Your local machine is transport only, so closing the laptop costs you a re-attach — `amux @buildbox warden` again — never work in flight. If the link drops mid-session, agentmux shows a holding screen ("reconnecting — attempt N, MM:SS elapsed… your session is still running on buildbox; nothing is lost") and retries with backoff; `q` gives up without touching the remote session, and the message it prints names the exact command to get back in.
+
+Like a plain launch, `amux @host` refuses to run from inside an existing tmux — a remote session brings its own tmux, and nesting stacks prefixes.
+
+**Transports**, set per host with `transport =`:
+- **`ssh`** (default) — stock, multiplexed (`ControlMaster`), full escape transparency. The right default for most links.
+- **`et`** (Eternal Terminal) — a transparent byte stream with its own automatic reconnect/roaming. Needs `et` installed locally and `etserver` on the remote.
+- **`mosh`** — supported for genuinely bad links, but it re-emulates the terminal and forwards only escapes it knows, so desktop notifications (OSC 777), OSC 52 clipboard and tmux passthrough silently stop working. agentmux warns once per host when you use it; prefer `ssh` or `et` unless the link needs it.
+
+Nothing new to install locally for the default `ssh` transport. On the remote, if agentmux isn't found, `amux @host` offers to install it (the same `curl | bash` from [Install](#install)) before continuing — an offer you can decline.
 
 ## Adding an agent
 
