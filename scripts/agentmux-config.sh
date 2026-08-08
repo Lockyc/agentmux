@@ -147,7 +147,7 @@ agentmux_host_names() {
 # Usage: agentmux_agent_for_dir <dir>
 agentmux_agent_for_dir() {
   _amux_json | jq -r --arg dir "$1" --arg home "$HOME" '
-    [ .agents[]
+    [ (.agents // [])[]
       | .name as $name
       | (.dirs // [])[]
       | (gsub("^~"; $home) | rtrimstr("/")) as $pat
@@ -174,7 +174,7 @@ agentmux_next_agent() {
 
 # Newline-separated list of agent names and -<flag> shortcuts for shell completions.
 agentmux_list_agent_completions() {
-  _amux_json | jq -r '.agents[] | .name, (if .flag then "-" + .flag else empty end)'
+  _amux_json | jq -r '(.agents // [])[] | .name, (if .flag then "-" + .flag else empty end)'
 }
 
 # Field value from [llm] table. Returns empty string if field absent.
@@ -514,6 +514,21 @@ TOML
   _assert "no hosts block finds -1" "-1" \
     "$(AGENTMUX_CONFIG="$_selftest_example_cfg" _amux_json_cache="" agentmux_find_host_by_name buildbox)"
   rm -f "$_hostscfg"
+
+  # A config with NO [[agents]] block (hosts-only) must return empty/0, never a jq null error —
+  # this is now a valid and discoverable config shape (remote-only hosts, no local agents).
+  _hostsonlycfg=$(mktemp "${TMPDIR:-/tmp}/agentmux-hostsonly-XXXXXX.toml") || exit 1
+  cat > "$_hostsonlycfg" <<'TOML'
+[[hosts]]
+name  = "buildbox"
+ssh   = "root@buildbox"
+roots = ["~/Developer/work"]
+TOML
+  _assert "no agents block agent_for_dir" "" \
+    "$(AGENTMUX_CONFIG="$_hostsonlycfg" _amux_json_cache="" agentmux_agent_for_dir /tmp/anywhere)"
+  completions=$(AGENTMUX_CONFIG="$_hostsonlycfg" _amux_json_cache="" agentmux_list_agent_completions)
+  _assert "no agents block completions empty" "" "$completions"
+  rm -f "$_hostsonlycfg"
 
   rm -rf "$_selftest_cache"
   echo "---"; echo "Passed: $pass  Failed: $fail"
