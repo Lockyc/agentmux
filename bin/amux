@@ -1637,6 +1637,21 @@ amux() {
         _amux_agent_session_names
         return 0
         ;;
+      --complete-hosts)
+        # Hidden: emit @-prefixed host names, so `amux @<TAB>` completes whole
+        # tokens rather than requiring the sigil to be typed first.
+        agentmux_host_names | sed 's/^/@/'
+        return 0
+        ;;
+      --complete-remote)
+        shift
+        # Cache only — never a live call. Completion runs on every <TAB>, and a
+        # network round trip there hangs the shell the moment a host is slow or
+        # unreachable. The cache is refreshed by the picker and by any launch.
+        local _crf; _crf="$(_rm_roster_cache_file "${1:-}")"
+        [ -s "$_crf" ] && sed 's#.*/##' "$_crf"
+        return 0
+        ;;
       --help)
         cat <<'EOF'
 amux [(-<flag> | <agent_name>)] [session_name]
@@ -2671,6 +2686,35 @@ STUB
   else
     echo "SKIP: legacy notice test (tmux not found)"
   fi
+
+  # ---- completion ----
+  # --complete-hosts emits @-prefixed names, so `amux @<TAB>` completes whole
+  # tokens rather than requiring the user to have typed the sigil already.
+  _assert "complete-hosts is empty with no [[hosts]]" "" \
+    "$(amux --complete-hosts 2>/dev/null)"
+  _cmp_cfg="$_st_tmpdir/hosts.toml"
+  cat > "$_cmp_cfg" <<'TOML'
+[[hosts]]
+name = "buildbox"
+ssh  = "n"
+[[hosts]]
+name = "bench"
+ssh  = "b"
+TOML
+  _assert "complete-hosts emits @names" "@buildbox @bench" \
+    "$(AGENTMUX_CONFIG="$_cmp_cfg" _amux_json_cache="" amux --complete-hosts 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+  # Completion reads the CACHE ONLY. A network round trip on every <TAB> would
+  # hang the shell whenever the host is slow or down — a stale list is the right
+  # trade, and the picker/launch paths go live regardless.
+  _cmp_state="$_st_tmpdir/state"; mkdir -p "$_cmp_state/remote"
+  printf '/d/warden\n/d/lector\n' > "$_cmp_state/remote/buildbox.roster"
+  _assert "complete-remote reads the cache" "lector warden" \
+    "$(AGENTMUX_CONFIG="$_cmp_cfg" AGENTMUX_STATE_DIR="$_cmp_state" _amux_json_cache="" \
+       amux --complete-remote buildbox 2>/dev/null | sort | tr '\n' ' ' | sed 's/ $//')"
+  _assert "complete-remote is silent with no cache" "" \
+    "$(AGENTMUX_CONFIG="$_cmp_cfg" AGENTMUX_STATE_DIR="$_cmp_state" _amux_json_cache="" \
+       amux --complete-remote bench 2>/dev/null)"
+  rm -f "$_cmp_cfg"; rm -rf "$_cmp_state"
 
   # Regression (the socket-leak fix): every tmux server we spawned went to the
   # per-run throwaway TMUX_TMPDIR, so the user's REAL shared tmux dir must carry

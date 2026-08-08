@@ -21,13 +21,23 @@ if [ -n "${ZSH_VERSION:-}" ]; then
       # zsh-only block; shellcheck parses it as bash and misreads the (@f) flag.
       # shellcheck disable=SC2296
       _amux_comps=("${(@f)$("$AGENTMUX_BIN" --complete 2>/dev/null)}")
+      # Remote hosts complete as whole @tokens alongside agent names.
+      # shellcheck disable=SC2296
+      _amux_comps+=("${(@f)$("$AGENTMUX_BIN" --complete-hosts 2>/dev/null)}")
       compadd -- "${_amux_comps[@]}"
     elif (( CURRENT == 3 )); then
-      # Second arg of --kill/--frame-kill/--probe/attach is a session name. A case (not a
-      # zsh [[ == (a|b) ]] glob) keeps shellcheck — which parses this as bash — happy.
+      # Second arg of --kill/--frame-kill/--probe/attach is a session name, and
+      # of an @host token is a project on that host. A case (not a zsh
+      # [[ == (a|b) ]] glob) keeps shellcheck — which parses this as bash — happy.
       # words is a zsh completion special array, set by the completion system.
       # shellcheck disable=SC2154
       case "${words[2]}" in
+        @*)
+          local -a _amux_rp
+          # shellcheck disable=SC2296
+          _amux_rp=("${(@f)$("$AGENTMUX_BIN" --complete-remote "${words[2]#@}" 2>/dev/null)}")
+          compadd -- "${_amux_rp[@]}"
+          ;;
         --kill|--frame-kill|--probe|attach)
           local -a _amux_sess
           # shellcheck disable=SC2296
