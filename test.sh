@@ -110,6 +110,7 @@ run_selftest update_colors       env UPDATE_COLORS_SELFTEST=1       sh scripts/u
 run_selftest frame_reattach      env FRAME_REATTACH_SELFTEST=1      sh scripts/frame_reattach.sh
 run_selftest fork_session        env FORK_SESSION_SELFTEST=1        bash scripts/fork_session.sh
 run_selftest relaunch            env RELAUNCH_SELFTEST=1            bash scripts/relaunch.sh
+run_selftest remote              env REMOTE_SELFTEST=1              bash scripts/remote.sh
 run_selftest notes               env NOTES_SELFTEST=1               sh scripts/notes.sh
 
 # --- 4. mouse-click suite (tests/mouse) ------------------------------------
