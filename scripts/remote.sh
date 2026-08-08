@@ -363,8 +363,9 @@ _rm_preflight() {
 # Bootstrap
 # ---------------------------------------------------------------------------
 
-# The documented curl|bash install path, run on the remote. Single-sourced here
-# so it cannot drift from install.sh's own published one-liner.
+# The documented curl|bash install path, run on the remote. This string must be
+# kept in step with install.sh's published one-liner by hand — it is a hardcoded
+# duplicate, not derived from install.sh, so only one home per file, never two.
 _rm_bootstrap_cmd() {
   printf '%s' 'curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash'
 }
@@ -711,15 +712,50 @@ TOML
     "$(_rm_bootstrap_cmd | grep -c 'install.sh')"
   _assert "bootstrap pipes to bash" "1" "$(_rm_bootstrap_cmd | grep -c 'bash')"
   # Declining must NOT install: the offer is a question, and answering no is a
-  # supported outcome, not an error to route around.
-  export AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/stub"
+  # supported outcome, not an error to route around. A fake transport that records
+  # invocations verifies the decline branch is actually taken (not fallen through
+  # to _rm_run). The stub writes a marker when invoked; the test asserts that
+  # declining leaves no marker and accepting creates one (positive control).
   export AGENTMUX_CONFIG="$_rm_t/hosts.toml"; _amux_json_cache=""
-  _rm_marker="$_rm_t/installed"
-  _assert "declining does not install" "1" \
+  _rm_marker="$_rm_t/invoked"
+
+  # Wrapper stub that records when it's invoked by creating a marker file.
+  # Reads _RM_BOOTSTRAP_MARKER from the environment (passed by the test).
+  cat > "$_rm_t/stub-tracking" <<'TRACKING'
+#!/bin/sh
+# Mark that the transport was invoked, then run the command.
+if [ -n "$_RM_BOOTSTRAP_MARKER" ]; then
+  touch "$_RM_BOOTSTRAP_MARKER"
+fi
+for a in "$@"; do last="$a"; done
+exec sh -c "$last"
+TRACKING
+  chmod +x "$_rm_t/stub-tracking"
+
+  # Test 1: Declining must not invoke the transport.
+  export AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/stub-tracking"
+  export _RM_BOOTSTRAP_MARKER="$_rm_marker"
+  rm -f "$_rm_marker"
+  _assert "declining does not install (rc)" "1" \
     "$(printf 'n\n' | _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
-  _assert "declining left no marker" "0" \
+  _assert "declining left no marker (transport not invoked)" "0" \
     "$([ -f "$_rm_marker" ] && echo 1 || echo 0)"
-  unset AGENTMUX_REMOTE_TRANSPORT_CMD
+
+  # Test 2: Accepting must invoke the transport (positive control).
+  rm -f "$_rm_marker"
+  _assert "accepting does install (rc)" "0" \
+    "$(printf 'y\n' | _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
+  _assert "accepting created marker (transport was invoked)" "1" \
+    "$([ -f "$_rm_marker" ] && echo 1 || echo 0)"
+
+  # Test 3: EOF (no input at all) must decline, like explicit 'n'.
+  rm -f "$_rm_marker"
+  _assert "EOF declines (rc)" "1" \
+    "$(< /dev/null _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
+  _assert "EOF left no marker (transport not invoked)" "0" \
+    "$([ -f "$_rm_marker" ] && echo 1 || echo 0)"
+
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD _RM_BOOTSTRAP_MARKER
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
