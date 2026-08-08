@@ -153,7 +153,14 @@ _ra_render() {
 _ra_hold() {
   local host="$1" dir="$2" attempt="$3" started="$4" wait="$5"
   local key left now elapsed
+  # No tty (piped, or a test): there is no screen to draw and no key to read —
+  # but the WAIT still has to happen. Returning straight away made _ra_supervise
+  # redial with zero delay and no bound (AGENTMUX_REMOTE_MAX_ATTEMPTS defaults to
+  # unbounded), measured at 130 dials in 3 seconds against a dead host. _ra_sleep
+  # is the one place that honours AGENTMUX_REMOTE_BACKOFF=0, so the tests stay
+  # instant while the real path waits.
   if [ "${AGENTMUX_REMOTE_BACKOFF:-1}" = "0" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+    _ra_sleep "$wait"
     return 0
   fi
   tput smcup 2>/dev/null
@@ -286,6 +293,45 @@ STUB
   _assert "backoff 3" "4"  "$(_ra_backoff 3)"
   _assert "backoff 4" "8"  "$(_ra_backoff 4)"
   _assert "backoff caps at 15" "15" "$(_ra_backoff 9)"
+
+  # ---- the NON-TTY path still waits ----
+  # A no-tty _ra_hold has no screen to draw and no key to read, but it must
+  # still consume the backoff: returning immediately turned _ra_supervise into
+  # an unbounded zero-delay redial (measured: 130 dials in 3s against a dead
+  # host, since AGENTMUX_REMOTE_MAX_ATTEMPTS defaults to unbounded).
+  #
+  # Asserted through the seam, never by really sleeping. `sleep` is an external
+  # command, so a PATH-shadowed recorder captures exactly the argument _ra_sleep
+  # hands it — and this block runs with AGENTMUX_REMOTE_BACKOFF UNSET, i.e. down
+  # the real production path through _ra_sleep rather than its test no-op. That
+  # is the whole point: the no-op seam is what makes the rest of this file fast,
+  # so a test left under it could not see this defect at all.
+  _ra_bin="$_ra_t/bin"; mkdir -p "$_ra_bin"
+  cat > "$_ra_bin/sleep" <<'SLEEP'
+#!/bin/sh
+printf '%s\n' "$1" >> "$SLEEP_LOG"
+SLEEP
+  chmod +x "$_ra_bin/sleep"
+  export SLEEP_LOG="$_ra_t/slept"
+  _ra_prev_path="$PATH"; PATH="$_ra_bin:$PATH"
+  _ra_prev_backoff="${AGENTMUX_REMOTE_BACKOFF:-}"; unset AGENTMUX_REMOTE_BACKOFF
+
+  : > "$SLEEP_LOG"
+  _ra_hold buildbox /srv/p 1 "$(date +%s)" 7 </dev/null >/dev/null 2>&1
+  _assert "no-tty hold waits the backoff it was handed" "7" "$(cat "$SLEEP_LOG")"
+
+  # End to end: the loop's waits grow instead of the dials running flat out.
+  # Four waits for five attempts — the bound is reached without a fifth hold.
+  : > "$SLEEP_LOG"; : > "$STUB_COUNT"
+  STUB_FAILS=99 STUB_CODE=255 \
+    _ra_supervise ssh t "sh -c true" buildbox /srv/p </dev/null >/dev/null 2>&1
+  _assert "supervise waits, with backoff, between attempts" "1 2 4 8" \
+    "$(tr '\n' ' ' < "$SLEEP_LOG" | sed 's/ $//')"
+  _assert "supervise still honours the attempt bound" "5" "$(cat "$STUB_COUNT")"
+
+  PATH="$_ra_prev_path"
+  export AGENTMUX_REMOTE_BACKOFF="$_ra_prev_backoff"
+  unset SLEEP_LOG
 
   # ---- stderr capture reaches RA_LAST_ERR and the rendered screen ----
   # The transport is interactive and owns the terminal, so the capture must be
