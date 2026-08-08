@@ -924,7 +924,7 @@ _amux_nested_refuse() {
 # error surfaces here) → pick if needed → supervise. Nothing may retry before
 # preflight has succeeded once; see _ra_supervise.
 _amux_remote() {
-  _amux_nested_refuse "amux @host" || return 1
+  _amux_nested_refuse "@host" || return 1
   _rm_parse_target "$@" || { echo "amux: malformed remote target (expected @host)" >&2; return 2; }
 
   local hi; hi="$(agentmux_find_host_by_name "$RM_HOST")"
@@ -1681,7 +1681,7 @@ EOF
   # A plain launch nests a second tmux inside the one we are already in — the
   # same objection --frame has always refused on. Reached only by a real launch:
   # every query/management flag returned from its case arm above.
-  _amux_nested_refuse "amux" || return 1
+  _amux_nested_refuse "agent sessions" || return 1
 
   # One-time notice for agents still stranded on the old shared default socket
   # (see _amux_legacy_notice). Placed after every case arm's `return` above, so
@@ -2091,9 +2091,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
 
   # ---- @host dispatch + nesting guards ----
   _assert "unknown host is rejected by name" "1" \
-    "$(amux @nosuchhost 2>&1 >/dev/null | grep -c 'nosuchhost')"
+    "$(env -u TMUX -u AMUX_SELFTEST bash bin/amux @nosuchhost 2>&1 >/dev/null | grep -c 'nosuchhost')"
   _assert "unknown host exits non-zero" "1" \
-    "$(amux @nosuchhost >/dev/null 2>&1; [ $? -ne 0 ] && echo 1 || echo 0)"
+    "$(env -u TMUX -u AMUX_SELFTEST bash bin/amux @nosuchhost >/dev/null 2>&1; [ $? -ne 0 ] && echo 1 || echo 0)"
   # A remote session brings its own tmux, so @host inside tmux is the case
   # --frame already refuses. Same guard, same reason: nesting stacks prefixes.
   _assert "@host refuses inside tmux" "1" \
