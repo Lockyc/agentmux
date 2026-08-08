@@ -19,6 +19,8 @@ fi
 
 source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
 source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
+# shellcheck source=scripts/remote_attach.sh
+source "$AGENTMUX_SCRIPTS/remote_attach.sh"   # also sources remote.sh
 
 # tmux config dir (sibling of scripts/) and the dedicated sockets for --frame.
 AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
@@ -900,6 +902,82 @@ _amux_frame_kill_all() {
   echo "killed all frames + scratch terminals (agent sessions, if any, still run)"
 }
 
+# _amux_nested_refuse <what> — the shared "not inside tmux" guard.
+#
+# Nesting an amux session inside another tmux stacks prefixes and buries one
+# status bar inside another; --frame has refused it since it shipped. The same
+# objection applies to a PLAIN amux and to @host (which brings a remote tmux),
+# so all three share one rule rather than one path being quietly exempt.
+#
+# There is deliberately no allow_nested equivalent for these: --frame's escape
+# hatch exists for people already living in tmux who want the frame's layout
+# anyway, whereas a nested agent session has no upside to opt into.
+_amux_nested_refuse() {
+  [ -z "${TMUX:-}" ] && return 0
+  echo "amux: $1 must be run from a plain terminal, not inside tmux" >&2
+  return 1
+}
+
+# _amux_remote <arg>... — the whole `amux @host [...]` flow.
+#
+# Land order: parse → resolve host → preflight (no tty; every unrecoverable
+# error surfaces here) → pick if needed → supervise. Nothing may retry before
+# preflight has succeeded once; see _ra_supervise.
+_amux_remote() {
+  _amux_nested_refuse "amux @host" || return 1
+  _rm_parse_target "$@" || { echo "amux: malformed remote target (expected @host)" >&2; return 2; }
+
+  local hi; hi="$(agentmux_find_host_by_name "$RM_HOST")"
+  if [ "$hi" = "-1" ]; then
+    echo "amux: no host named '$RM_HOST' in ${AGENTMUX_CONFIG}" >&2
+    local names; names="$(agentmux_host_names | tr '\n' ' ')"
+    [ -n "$names" ] && echo "      known hosts: $names" >&2 \
+                    || echo "      add a [[hosts]] block (see config/amux.toml.example)" >&2
+    return 1
+  fi
+
+  local kind; kind="$(_rm_transport_for_host "$hi")"
+  [ "$kind" = mosh ] && _rm_mosh_warn "$RM_HOST"
+  if ! command -v "$kind" >/dev/null 2>&1; then
+    echo "amux: transport '$kind' is not installed locally (host $RM_HOST)" >&2
+    return 1
+  fi
+
+  # No project and no path → pick one. The picker goes live over the warm
+  # master; the completion cache is never consulted for a launch.
+  if [ -z "$RM_PROJECT" ] && [ -z "$RM_PATH" ] && [ "${#RM_REST[@]}" -eq 0 ]; then
+    RM_PROJECT="$(_ra_pick "$hi" "$RM_HOST")" || return 1
+    [ -n "$RM_PROJECT" ] || return 1
+  fi
+
+  _rm_preflight "$hi" "$RM_PROJECT" "$RM_PATH"
+  case $? in
+    0) : ;;
+    3) echo "amux: $RM_ERRMSG" >&2; return 1 ;;
+    *)
+      if [ "$RM_ERRCODE" = noamux ]; then
+        _rm_offer_bootstrap "$hi" "$RM_HOST" || return 1
+        _rm_preflight "$hi" "$RM_PROJECT" "$RM_PATH" || {
+          echo "amux: $RM_ERRMSG" >&2; return 1; }
+      else
+        echo "amux: $RM_ERRMSG" >&2
+        return 1
+      fi
+      ;;
+  esac
+
+  local prog cmd target
+  prog="$(_rm_prog_for_host "$hi")"
+  target="$(agentmux_host_field "$hi" ssh)"
+  local -a fwd=()
+  local ag; ag="$(agentmux_host_field "$hi" agent)"
+  [ -n "$ag" ] && fwd+=("$ag")
+  [ "${#RM_REST[@]}" -gt 0 ] && fwd+=("${RM_REST[@]}")
+  cmd="$(_rm_remote_cmd "$RM_DIR" "$prog" "${fwd[@]}")"
+
+  _ra_supervise "$kind" "$target" "$cmd" "$RM_HOST" "$RM_DIR"
+}
+
 # List agentmux-managed (@autoagent) sessions across ALL agent socket shards
 # (agentmux-agent-<cksum $PWD> per project): name, agent mode, window count,
 # attach state. The view that shows exact session names.
@@ -1471,6 +1549,10 @@ amux() {
 
   if [ $# -gt 0 ]; then
     case "$1" in
+      @*)
+        _amux_remote "$@"
+        return $?
+        ;;
       --version)
         local v; v=$(cat "$HOME/.agentmux/VERSION" 2>/dev/null | tr -d '[:space:]')
         echo "agentmux ${v:-unknown}"
@@ -1568,6 +1650,10 @@ amux [(-<flag> | <agent_name>)] [session_name]
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
   --sessions-json  the same, as JSON keyed on project dir (for scripts/remote hosts)
+  @host [project] launch/attach a session on a remote host from [[hosts]];
+                 bare @host picks from that host's projects, @host:<path> takes
+                 an explicit remote dir, and any other flags are forwarded to
+                 the remote amux (e.g. amux @buildbox warden --kill)
   --restore      pick dropped agent tabs (from a crash) to relaunch; --global for all projects
   --probe        exit 0 if a session [session] (agent or frame) exists (default: current dir); silent.
                  With no explicit session: exit 3 if absent but a crashed session here is
@@ -1591,6 +1677,11 @@ EOF
         ;;
     esac
   fi
+
+  # A plain launch nests a second tmux inside the one we are already in — the
+  # same objection --frame has always refused on. Reached only by a real launch:
+  # every query/management flag returned from its case arm above.
+  _amux_nested_refuse "amux" || return 1
 
   # One-time notice for agents still stranded on the old shared default socket
   # (see _amux_legacy_notice). Placed after every case arm's `return` above, so
@@ -1997,6 +2088,30 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     "$(amux --sessions-json 2>/dev/null)"
   _assert "sessions-json parses as JSON" "ok" \
     "$(amux --sessions-json 2>/dev/null | jq -e 'type == "array"' >/dev/null 2>&1 && echo ok)"
+
+  # ---- @host dispatch + nesting guards ----
+  _assert "unknown host is rejected by name" "1" \
+    "$(amux @nosuchhost 2>&1 >/dev/null | grep -c 'nosuchhost')"
+  _assert "unknown host exits non-zero" "1" \
+    "$(amux @nosuchhost >/dev/null 2>&1; [ $? -ne 0 ] && echo 1 || echo 0)"
+  # A remote session brings its own tmux, so @host inside tmux is the case
+  # --frame already refuses. Same guard, same reason: nesting stacks prefixes.
+  _assert "@host refuses inside tmux" "1" \
+    "$(TMUX="/tmp/fake,1,0" amux @nosuchhost 2>&1 >/dev/null | grep -ci 'plain terminal')"
+  # The identical hole on the LOCAL path, closed by the same rule. Before this,
+  # `env -u TMUX` let a plain amux nest silently inside any tmux.
+  _assert "plain amux refuses inside tmux" "1" \
+    "$(TMUX="/tmp/fake,1,0" amux 2>&1 >/dev/null | grep -ci 'plain terminal')"
+  _assert "plain amux inside tmux exits non-zero" "1" \
+    "$(TMUX="/tmp/fake,1,0" amux >/dev/null 2>&1; [ $? -ne 0 ] && echo 1 || echo 0)"
+  # The guard must not fire for the flags that legitimately run from anywhere,
+  # including from inside a tmux pane (warden and hooks call these).
+  _assert "--probe still works inside tmux" "0" \
+    "$(TMUX="/tmp/fake,1,0" amux --probe nosuchsession >/dev/null 2>&1; \
+       [ $? -eq 1 ] && echo 0 || echo 1)"
+  _assert "--sessions still works inside tmux" "0" \
+    "$(TMUX="/tmp/fake,1,0" amux --sessions >/dev/null 2>&1; echo $?)"
+
   _k=$(amux --kill __nope__ 2>&1); _krc=$?
   case "$_k" in *"no session '__nope__'"*) _got=ok ;; *) _got="bad:$_k" ;; esac
   _assert "kill missing msg"  "ok" "$_got"
