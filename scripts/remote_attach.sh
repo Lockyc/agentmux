@@ -217,8 +217,17 @@ _ra_pick_render() {
       + (if .value.live then "   \(.value.tabs) tab" + (if .value.tabs == 1 then "" else "s" end) else "" end)'
 }
 
-# _ra_pick <host_index> <host> — render, read a choice, print the chosen name.
+# _ra_pick <host_index> <host> — render, read a choice, print the chosen PATH.
 # Prints nothing when cancelled or empty.
+#
+# The PATH, not the name: the roster row the user picked already carries its
+# absolute directory, and a name throws that choice away. Handing a name back
+# to preflight re-resolves it by basename over the host's roots, which is a
+# second remote `find` and — for two same-basename projects, the exact case the
+# dir-keyed liveness join exists for — cannot answer at all: both rows collapse
+# to one string and preflight fails "matches 2 directories". The picker would be
+# offering a choice it could not honour. Its caller sets RM_PATH, which preflight
+# already handles as the explicit-directory form.
 _ra_pick() {
   local hi="$1" host="$2" json n sel
   json="$(_rm_roster_json "$hi" "$host")" || {
@@ -236,7 +245,7 @@ _ra_pick() {
   esac
   sel=$((10#$sel))
   { [ "$sel" -ge 1 ] && [ "$sel" -le "$n" ]; } || return 1
-  printf '%s' "$json" | jq -r ".[$((sel - 1))].name"
+  printf '%s' "$json" | jq -r ".[$((sel - 1))].path"
 }
 
 # ============================ selftest ============================
@@ -427,6 +436,54 @@ STUB
   # An empty roster is a real answer and must say so, not print a bare prompt.
   _assert "empty roster explains itself" "1" \
     "$(_ra_pick_render '[]' 2>&1 | grep -ci 'no projects')"
+
+  # ---- the picked ROW is what comes back ----
+  # Driven through the REAL _rm_roster_json over the offline transport stub
+  # rather than a hand-written JSON literal, because what is under test is the
+  # whole picker path. Two projects sharing a basename is the case a NAME cannot
+  # express: both rows answer "warden", so a name-emitting picker hands its
+  # caller a string that preflight then rejects as "matches 2 directories" — a
+  # choice offered and not honoured. Same collision the dir-keyed liveness join
+  # exists for.
+  _ra_pk="$_ra_t/pick"
+  mkdir -p "$_ra_pk/roots/one/warden/.git" "$_ra_pk/roots/two/warden/.git" \
+           "$_ra_pk/roots/empty"
+  cat > "$_ra_pk/stub" <<'STUB'
+#!/bin/sh
+for a in "$@"; do last="$a"; done
+exec sh -c "$last"
+STUB
+  chmod +x "$_ra_pk/stub"
+  printf '%s\n' '#!/bin/sh' \
+    'case "$1" in --version) echo 9.9.9 ;; --sessions-json) echo "[]" ;; esac' \
+    > "$_ra_pk/amux"; chmod +x "$_ra_pk/amux"
+  cat > "$_ra_pk/hosts.toml" <<TOML
+[[hosts]]
+name  = "dup"
+ssh   = "dup"
+roots = ["$_ra_pk/roots/one", "$_ra_pk/roots/two"]
+
+[[hosts]]
+name  = "bare"
+ssh   = "bare"
+roots = ["$_ra_pk/roots/empty"]
+TOML
+  export AGENTMUX_CONFIG="$_ra_pk/hosts.toml"; _amux_json_cache=""
+  export AGENTMUX_REMOTE_TRANSPORT_CMD="$_ra_pk/stub"
+  export AGENTMUX_REMOTE_TEST_PROG="$_ra_pk/amux"
+  export AGENTMUX_STATE_DIR="$_ra_pk/state"
+  export AGENTMUX_USER_DIR="$_ra_pk/user"
+
+  _assert "picking row 1 yields THAT row's path" "$_ra_pk/roots/one/warden" \
+    "$(printf '1\n' | _ra_pick 0 dup 2>/dev/null)"
+  _assert "picking row 2 yields the OTHER same-basename path" \
+    "$_ra_pk/roots/two/warden" \
+    "$(printf '2\n' | _ra_pick 0 dup 2>/dev/null)"
+  _assert "cancelling picks nothing" "" \
+    "$(printf 'q\n' | _ra_pick 0 dup 2>/dev/null)"
+
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG \
+        AGENTMUX_STATE_DIR AGENTMUX_USER_DIR AGENTMUX_CONFIG
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1

@@ -944,10 +944,13 @@ _amux_remote() {
   fi
 
   # No project and no path → pick one. The picker goes live over the warm
-  # master; the completion cache is never consulted for a launch.
+  # master; the completion cache is never consulted for a launch. It answers
+  # with the chosen row's PATH, which lands in RM_PATH (preflight's explicit-
+  # directory form) — see _ra_pick's header for why a name cannot carry the
+  # choice.
   if [ -z "$RM_PROJECT" ] && [ -z "$RM_PATH" ] && [ "${#RM_REST[@]}" -eq 0 ]; then
-    RM_PROJECT="$(_ra_pick "$hi" "$RM_HOST")" || return 1
-    [ -n "$RM_PROJECT" ] || return 1
+    RM_PATH="$(_ra_pick "$hi" "$RM_HOST")" || return 1
+    [ -n "$RM_PATH" ] || return 1
   fi
 
   _rm_preflight "$hi" "$RM_PROJECT" "$RM_PATH"
@@ -969,9 +972,23 @@ _amux_remote() {
   local prog cmd target
   prog="$(_rm_prog_for_host "$hi")"
   target="$(agentmux_host_field "$hi" ssh)"
+  # The host's `agent =` fills the remote amux's agent argument, which is
+  # POSITIONAL — so it may only lead when what follows is not a flag. Remote
+  # amux dispatches on its first token and treats a trailing bare word as the
+  # SESSION NAME, and the session-name whitelist keeps dashes intact: prepending
+  # the agent to `amux @host warden --kill` builds `amux <agent> --kill`
+  # remotely, which reads --kill as a session called "--kill" and LAUNCHES it
+  # instead of killing anything. A forwarded flag therefore travels alone, and
+  # remote amux resolves its own agent from [[agents]] dirs the way a local
+  # `amux --kill` does.
   local -a fwd=()
   local ag; ag="$(agentmux_host_field "$hi" agent)"
-  [ -n "$ag" ] && fwd+=("$ag")
+  if [ -n "$ag" ]; then
+    case "${RM_REST[0]:-}" in
+      -*) : ;;
+      *)  fwd+=("$ag") ;;
+    esac
+  fi
   [ "${#RM_REST[@]}" -gt 0 ] && fwd+=("${RM_REST[@]}")
   cmd="$(_rm_remote_cmd "$RM_DIR" "$prog" "${fwd[@]}")"
 
@@ -2126,6 +2143,90 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
        [ $? -eq 1 ] && echo 0 || echo 1)"
   _assert "--sessions still works inside tmux" "0" \
     "$(TMUX="/tmp/fake,1,0" amux --sessions >/dev/null 2>&1; echo $?)"
+
+  # ---- @host: the remote command it actually builds ----
+  # End to end over the offline transport seam: the stub runs the remote command
+  # with a real `sh` against a real temp tree, and the fake "remote amux" records
+  # the argv it was handed. So these assert the argument list a real launch would
+  # deliver, not a reconstruction of it. AGENTMUX_USER_DIR is redirected because
+  # transport resolution mkdir -p's the ssh ControlPath dir — without it this
+  # block writes into the user's real ~/.agentmux.
+  _rmt="$_st_tmpdir/remote"
+  mkdir -p "$_rmt/roots/one/warden/.git" "$_rmt/roots/two/warden/.git"
+  cat > "$_rmt/stub" <<'STUB'
+#!/bin/sh
+for a in "$@"; do last="$a"; done
+exec sh -c "$last"
+STUB
+  chmod +x "$_rmt/stub"
+  cat > "$_rmt/amux" <<'RAMUX'
+#!/bin/sh
+case "$1" in
+  --version)       echo 9.9.9; exit 0 ;;
+  --sessions-json) echo '[]';  exit 0 ;;
+esac
+: > "$REMOTE_ARGS"
+for a in "$@"; do printf 'ARG %s\n' "$a" >> "$REMOTE_ARGS"; done
+printf 'CWD %s\n' "$PWD" >> "$REMOTE_ARGS"
+RAMUX
+  chmod +x "$_rmt/amux"
+  cat > "$_rmt/hosts.toml" <<TOML
+[[hosts]]
+name  = "hx"
+ssh   = "hx"
+roots = ["$_rmt/roots/one"]
+agent = "work"
+
+[[hosts]]
+name  = "dup"
+ssh   = "dup"
+roots = ["$_rmt/roots/one", "$_rmt/roots/two"]
+agent = "work"
+TOML
+  _rmt_save_cfg="$AGENTMUX_CONFIG"; _rmt_save_user="${AGENTMUX_USER_DIR:-}"
+  _rmt_save_state="${AGENTMUX_STATE_DIR:-}"
+  AGENTMUX_CONFIG="$_rmt/hosts.toml"; _amux_json_cache=""
+  export AGENTMUX_USER_DIR="$_rmt/user" AGENTMUX_STATE_DIR="$_rmt/state"
+  export AGENTMUX_REMOTE_TRANSPORT_CMD="$_rmt/stub" AGENTMUX_REMOTE_TEST_PROG="$_rmt/amux"
+  export REMOTE_ARGS="$_rmt/args"
+  # @host refuses inside tmux, and the harness may itself be running in one.
+  _rmt_run() { ( unset TMUX; _amux_remote "$@" >/dev/null 2>&1 ); }
+
+  # A bare project takes the host's `agent =` as remote amux's agent argument.
+  : > "$REMOTE_ARGS"; _rmt_run "@hx" warden
+  _assert "@host <project> passes the host's agent" "ARG work" \
+    "$(grep '^ARG ' "$REMOTE_ARGS" | tr '\n' ' ' | sed 's/ $//')"
+  _assert "@host <project> lands in the resolved dir" "CWD $_rmt/roots/one/warden" \
+    "$(grep '^CWD ' "$REMOTE_ARGS")"
+
+  # A forwarded FLAG travels alone. The agent argument is positional, so leading
+  # with it builds `amux work --kill` remotely — where --kill is read as a
+  # session NAME (dashes survive the name whitelist) and a session called
+  # "--kill" is launched instead of anything being killed. The README documents
+  # exactly this invocation against a host that sets `agent =`.
+  : > "$REMOTE_ARGS"; _rmt_run "@hx" warden --kill
+  _assert "@host <project> --kill forwards the flag alone" "ARG --kill" \
+    "$(grep '^ARG ' "$REMOTE_ARGS" | tr '\n' ' ' | sed 's/ $//')"
+
+  # A forwarded bare word is a session name, not a flag — the agent still leads.
+  : > "$REMOTE_ARGS"; _rmt_run "@hx:$_rmt/roots/one/warden" other
+  _assert "@host:<path> <name> keeps the agent ahead of the name" "ARG work ARG other" \
+    "$(grep '^ARG ' "$REMOTE_ARGS" | tr '\n' ' ' | sed 's/ $//')"
+
+  # The picker's answer is a PATH that reaches preflight as the explicit-dir
+  # form. Two same-basename projects is the case that proves it: a name would
+  # collapse both rows to "warden" and preflight would reject the user's own
+  # choice as ambiguous.
+  : > "$REMOTE_ARGS"; printf '2\n' | ( unset TMUX; _amux_remote "@dup" >/dev/null 2>&1 )
+  _assert "picked row 2 launches in THAT row's dir" "CWD $_rmt/roots/two/warden" \
+    "$(grep '^CWD ' "$REMOTE_ARGS")"
+
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG REMOTE_ARGS
+  AGENTMUX_CONFIG="$_rmt_save_cfg"; _amux_json_cache=""
+  if [ -n "$_rmt_save_user" ]; then export AGENTMUX_USER_DIR="$_rmt_save_user"
+  else unset AGENTMUX_USER_DIR; fi
+  if [ -n "$_rmt_save_state" ]; then export AGENTMUX_STATE_DIR="$_rmt_save_state"
+  else unset AGENTMUX_STATE_DIR; fi
 
   _k=$(amux --kill __nope__ 2>&1); _krc=$?
   case "$_k" in *"no session '__nope__'"*) _got=ok ;; *) _got="bad:$_k" ;; esac
