@@ -126,8 +126,17 @@ amux: $1 uses the mosh transport — some agentmux features will not work.
 EOF
 }
 
+# The transport kinds, for human-readable messages ONLY. The kinds themselves
+# are _rm_transport_argv's case arms below — that function's `return 2` is the
+# single validator, and nothing re-lists them to decide whether a kind is
+# valid. This string is the prose echo of that list, and the selftest asserts
+# every name in it survives _rm_transport_argv, so the two cannot drift apart
+# silently.
+_RM_TRANSPORT_KINDS="ssh et mosh"
+
 # _rm_transport_argv <kind> <ssh_target> <remote_cmd> [--batch]
-# Sets RM_ARGV to the full argv. Returns 2 on an unknown kind.
+# Sets RM_ARGV to the full argv. Returns 2 on an unknown kind — the ONE place
+# that decides whether a transport kind exists.
 #
 # --batch builds the NON-INTERACTIVE form (preflight, roster, bootstrap): no
 # tty, no stdin. It is a flag here rather than a second builder so the ssh
@@ -252,6 +261,19 @@ _rm_prog_for_host() {
 #
 # -maxdepth is not POSIX but is universal on GNU and BSD find. `-quit`/-printf
 # are NOT — macOS remotes lack them — so this pipes to head instead.
+#
+# `d=$(eval printf %s "$path")` and the matching line over each root are an
+# EVAL ON PURPOSE: `~` is expanded by the shell, not by the filesystem, so a
+# configured `roots = ["~/Developer/work"]` or an `@host:~/tmp/x` target is a
+# literal tilde until something evaluates it — and it must be the REMOTE shell
+# that does, since the remote home is frequently not the local one. Note the
+# asymmetry with the _rm_shquote calls above, which is what makes this easy to
+# miss on the next edit: those quote the value so the remote shell takes it
+# LITERALLY, and then this line deliberately evaluates it again. So the value
+# is not inert here, and `$(…)` in it would run on the remote too. No security
+# boundary is crossed — both values come from the invoking user's own argv and
+# amux.toml, and that user already has a shell on that host — but anything that
+# ever widens where they come from has to revisit this line.
 _rm_preflight_script() {
   local project="$1" path="$2" roots="$3" prog="$4"
   # shellcheck disable=SC2016  # $-vars below are for the REMOTE shell, not us
@@ -331,21 +353,22 @@ _rm_preflight() {
   local target kind roots prog script out st TAB; TAB=$(printf '\t')
   target="$(agentmux_host_field "$hi" ssh)"
   kind="$(_rm_transport_for_host "$hi")"
-  # Validated HERE, before ever calling _rm_run: an unknown `transport =`
-  # value is a config mistake, not a flaky link, so it must resolve as rc 1
-  # (RM_ERRCODE=badtransport) rather than fall through to _rm_run/
-  # _rm_transport_argv's own `return 2`, which _rm_run turns into rc 3 —
-  # "transport failure", the ONE code a caller may ever retry. Retrying a
-  # typo'd transport can never succeed; the list mirrors _rm_transport_argv's
-  # case statement and must be kept in sync with it.
-  case "$kind" in
-    ssh|et|mosh) : ;;
-    *)
-      RM_ERRCODE="badtransport"
-      RM_ERRMSG="unknown transport \"$kind\" (must be one of: ssh, et, mosh)"
-      return 1
-      ;;
-  esac
+  # Validated HERE, before ever calling _rm_run: an unknown `transport =` value
+  # is a config mistake, not a flaky link, so it must resolve as rc 1
+  # (RM_ERRCODE=badtransport) rather than fall through to _rm_run's rc 3 —
+  # "transport failure", the ONE code a caller may ever retry. Retrying a typo'd
+  # transport can never succeed.
+  #
+  # The check is _rm_transport_argv's OWN rc 2, not a second case statement
+  # listing the kinds. A copy would have to be kept in sync by hand, which is
+  # what it said of itself, and a newly added transport would then be rejected
+  # here while working everywhere else. RM_ARGV is rebuilt by _rm_run below, so
+  # calling it for the answer costs nothing.
+  if ! _rm_transport_argv "$kind" "$target" ':' --batch; then
+    RM_ERRCODE="badtransport"
+    RM_ERRMSG="unknown transport \"$kind\" (must be one of: $(printf '%s' "$_RM_TRANSPORT_KINDS" | sed 's/ /, /g'))"
+    return 1
+  fi
   roots="$(agentmux_host_roots "$hi")"
   prog="$(_rm_prog_for_host "$hi")"
   script="$(_rm_preflight_script "$project" "$path" "$roots" "$prog")"
@@ -445,6 +468,13 @@ _rm_offer_bootstrap() {
 # Finds directories NAMED .git and prunes there, so each repo is reported once
 # and nothing descends into object stores. -maxdepth 4 on .git means a repo up
 # to three levels below a root — enough for ~/Developer/<host>/<owner>/<repo>.
+#
+# `r=$(eval printf %s "$r")` is the same deliberate eval as in
+# _rm_preflight_script: a configured root is written with `~`, which only a
+# shell expands, and it must be the REMOTE one. The `_rm_shquote` above makes
+# the roots list arrive literally and this line then evaluates it, so despite
+# the quoting the value is NOT inert. Read that function's header for the full
+# note; the roots come from the invoking user's own amux.toml.
 _rm_roster_script() {
   local roots="$1"
   printf '%s\n' \
@@ -695,6 +725,16 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   _assert "mosh argv" "mosh bench --" "${RM_ARGV[0]} ${RM_ARGV[1]} ${RM_ARGV[2]}"
   _rm_transport_argv bogus "bench" "x"
   _assert "unknown transport rejected" "2" "$?"
+  # _rm_transport_argv's rc 2 is the ONE validator; _RM_TRANSPORT_KINDS is only
+  # the prose the error message names. Nothing enforces that a kind in the prose
+  # is actually built, so assert it: every name in the list must survive the
+  # builder, which is what stops the two homes drifting the way the removed
+  # second case statement did.
+  _rm_kind_drift=""
+  for _rm_k in $_RM_TRANSPORT_KINDS; do
+    _rm_transport_argv "$_rm_k" "bench" "x" || _rm_kind_drift="$_rm_kind_drift $_rm_k"
+  done
+  _assert "every advertised transport kind is really built" "" "$_rm_kind_drift"
 
   # ---- transport resolution + the mosh warning ----
   # Reuses the isolated $_RM_TEST_DIR set up at the top of this block (reaped by
