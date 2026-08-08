@@ -90,6 +90,13 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   _assert "path wins over project" "buildbox||~/x" "$RM_HOST|$RM_PROJECT|$RM_PATH"
   _assert "path then bare word forwards" "warden" "${RM_REST[*]}"
 
+  # Multi-arg RM_REST with space-containing arg must preserve element count and
+  # content — guards against accidental join of array elements (would fail if
+  # RM_REST were set to ("$*") instead of ("$@")).
+  _rm_parse_target "@buildbox" "--msg" "hello world"
+  _assert "rest count with space arg" "2" "${#RM_REST[@]}"
+  _assert "rest space-containing element" "hello world" "${RM_REST[1]}"
+
   # Paths with spaces survive as ONE element (the whole reason RM_REST is an
   # array and not a string).
   _rm_parse_target "@buildbox:~/my docs" "--probe"
