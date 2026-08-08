@@ -926,6 +926,34 @@ _amux_sessions() {
   fi
 }
 
+# _amux_sessions_json — the machine-readable twin of _amux_sessions.
+#
+# Keyed on @amux_dir, NOT the session name: names are sanitized basenames, so
+# two same-basename projects (~/work/api, ~/personal/api) share one and a
+# name-keyed consumer would attribute one project's liveness to the other. This
+# is the same collision the @amux_dir launch guard exists for.
+#
+# Always emits a valid JSON array (`[]` when empty) — every consumer pipes it
+# straight into jq, so a human "no agent sessions" line here would be a parse
+# error, not a friendly message.
+_amux_sessions_json() {
+  local rows _s TAB; TAB=$(printf '\t')
+  rows=$(for _s in $(_amux_agent_socks); do
+    tmux -L "$_s" list-sessions \
+      -F '#{?@autoagent,#{session_name}	#{@amux_dir}	#{@agent-mode}	#{session_windows}	#{?session_attached,true,false},}' \
+      2>/dev/null
+  done | grep .)
+  [ -n "$rows" ] || { printf '[]\n'; return 0; }
+  printf '%s\n' "$rows" | jq -R -s --arg tab "$TAB" '
+    split("\n") | map(select(length > 0) | split($tab) | select(length >= 5) | {
+      name:     .[0],
+      dir:      .[1],
+      agent:    .[2],
+      windows:  (.[3] | tonumber? // 0),
+      attached: (.[4] == "true")
+    })'
+}
+
 # _amux_restore_into <cwd>   (reads: agent<TAB>resume_cmd per line on stdin)
 # Restores the tabs for ONE project session. Window-0-replace: the first tab
 # into a fresh session replaces window 0; the rest are new windows created
@@ -1484,6 +1512,10 @@ amux() {
         _amux_sessions
         return $?
         ;;
+      --sessions-json)
+        _amux_sessions_json
+        return $?
+        ;;
       --restore)
         shift
         if [ "${1:-}" = "--global" ]; then _amux_restore_pick global; else _amux_restore_pick explicit; fi
@@ -1535,6 +1567,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
   session_name   defaults to basename of $PWD (chars outside A-Za-z0-9_- → _)
 
   --sessions     list agentmux agent sessions (name, agent, windows, attach state)
+  --sessions-json  the same, as JSON keyed on project dir (for scripts/remote hosts)
   --restore      pick dropped agent tabs (from a crash) to relaunch; --global for all projects
   --probe        exit 0 if a session [session] (agent or frame) exists (default: current dir); silent.
                  With no explicit session: exit 3 if absent but a crashed session here is
@@ -1956,6 +1989,14 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   AGENTMUX_TERM_SOCKET="amux-selftest-term-$$"
   _assert "sessions empty"          "amux: no agent sessions" "$(amux --sessions 2>/dev/null)"
   _assert "complete-sessions empty" ""                        "$(amux --complete-sessions 2>/dev/null)"
+  # --sessions-json: valid JSON always, [] when no agent sessions exist. The
+  # selftest runs with no agent servers on its throwaway socket dir, so this
+  # asserts the empty case AND that the output is parseable (a bare `echo`
+  # fallback would fail `jq -e .` and is the regression to catch).
+  _assert "sessions-json is [] when no sessions" "[]" \
+    "$(amux --sessions-json 2>/dev/null)"
+  _assert "sessions-json parses as JSON" "ok" \
+    "$(amux --sessions-json 2>/dev/null | jq -e 'type == "array"' >/dev/null 2>&1 && echo ok)"
   _k=$(amux --kill __nope__ 2>&1); _krc=$?
   case "$_k" in *"no session '__nope__'"*) _got=ok ;; *) _got="bad:$_k" ;; esac
   _assert "kill missing msg"  "ok" "$_got"
