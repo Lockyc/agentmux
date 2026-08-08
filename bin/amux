@@ -37,8 +37,8 @@ AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>
 # including a GUI app launched from the scratch terminal. That app relaunches amux
 # for other projects, each inheriting the var, and "explicit value honoured verbatim"
 # then pinned every project's left pane to the FIRST project's term server; two
-# projects sharing a basename (~/lachlan/substrate, ~/construct/substrate) both
-# resolve to `substrate-term` there and `new-session -A` silently attached the second
+# projects sharing a basename (~/work/api, ~/personal/api) both
+# resolve to `api-term` there and `new-session -A` silently attached the second
 # to the first one's scratch terminal. The sockets now travel as @amux_term_socket /
 # @amux_agent_socket tmux options on the frame SESSION (set in _amux_frame), which is
 # scoped to the frame and cannot leak. Don't re-add an export here.
@@ -1664,7 +1664,10 @@ amux() {
         shift
         # Cache only — never a live call. Completion runs on every <TAB>, and a
         # network round trip there hangs the shell the moment a host is slow or
-        # unreachable. The cache is refreshed by the picker and by any launch.
+        # unreachable. The picker is what refreshes it (_rm_roster_json is the
+        # one caller passing --refresh); a launch resolves live through preflight
+        # and never touches the roster, so a repo cloned a minute ago is
+        # launchable before completion has noticed it.
         local _crf; _crf="$(_rm_roster_cache_file "${1:-}")"
         [ -s "$_crf" ] && sed 's#.*/##' "$_crf"
         return 0

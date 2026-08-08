@@ -242,8 +242,9 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   leaves the wrapper, which reattaches at the old size.
 - **Open frames by default.** Set `[frame] default = true` to make a bare `amux`
   (run from a plain terminal) behave like `amux --frame`; use `amux --no-frame` for
-  a one-off plain launch. It's ignored when `amux` runs inside an existing tmux (a
-  frame can't nest there) — that case falls through to a normal in-tmux launch.
+  a one-off plain launch. Inside an existing tmux it is refused rather than
+  downgraded, exactly as `amux --frame` is — see **Nesting inside tmux** below,
+  including the `allow_nested` opt-in that lifts it.
 - **Nesting inside tmux.** By default `--frame` refuses to run inside an existing
   tmux: the frame is its own tmux server, so nesting it stacks prefixes (your outer
   `C-b`, the frame's `C-f`, the scratch terminal's). Advanced users already living
