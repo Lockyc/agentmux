@@ -178,6 +178,47 @@ _rm_transport_argv() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Exit classification
+# ---------------------------------------------------------------------------
+
+# _rm_classify_exit <kind> <status> — clean | retry | fail
+#
+# THE BIAS IS DELIBERATE AND ASYMMETRIC: anything not positively known to be a
+# transport failure classifies as clean/fail, i.e. exit. The two errors are not
+# equal. A missed reconnect costs one retyped command; a false retry traps the
+# user in a terminal that keeps redialling a session they deliberately left, and
+# the remote session is safe in both cases. Never widen `retry` to "non-zero".
+#
+# ssh reserves 255 for its own failures; every other non-zero status is the
+# REMOTE command's (amux couldn't start, the dir vanished) and must not retry —
+# reconnecting would reproduce it forever.
+#
+# 130 (SIGINT) and 143 (SIGTERM) are the user asking to stop. 129 (SIGHUP) and
+# 141 (SIGPIPE) are the link dying under us, which is exactly what to retry.
+#
+# et and mosh reconnect internally, so reaching us at all means they gave up:
+# any non-zero is a link they could not restore, and worth another attempt from
+# a fresh process.
+_rm_classify_exit() {
+  local kind="$1" st="$2"
+  case "$st" in
+    0)       printf 'clean'; return 0 ;;
+    130|143) printf 'clean'; return 0 ;;
+    129|141) printf 'retry'; return 0 ;;
+  esac
+  case "$kind" in
+    ssh)
+      case "$st" in
+        255) printf 'retry' ;;
+        *)   printf 'fail' ;;
+      esac
+      ;;
+    *) printf 'retry' ;;
+  esac
+  return 0
+}
+
 # ============================ selftest ============================
 # REMOTE_SELFTEST=1 bash scripts/remote.sh
 if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
@@ -357,6 +398,22 @@ TOML
   _assert "transport honours config"  "mosh" "$(_rm_transport_for_host 1)"
   _assert "mosh warns about notifications" "1" \
     "$(_rm_mosh_warn b 2>&1 >/dev/null | grep -ci 'notification')"
+
+  # ---- exit classification ----
+  _assert "ssh 0 is clean"          "clean" "$(_rm_classify_exit ssh 0)"
+  _assert "ssh 255 is retry"        "retry" "$(_rm_classify_exit ssh 255)"
+  _assert "ssh SIGHUP (129) retry"  "retry" "$(_rm_classify_exit ssh 129)"
+  _assert "ssh SIGPIPE (141) retry" "retry" "$(_rm_classify_exit ssh 141)"
+  _assert "ssh SIGINT (130) clean"  "clean" "$(_rm_classify_exit ssh 130)"
+  _assert "ssh SIGTERM (143) clean" "clean" "$(_rm_classify_exit ssh 143)"
+  _assert "ssh 1 is fail"           "fail"  "$(_rm_classify_exit ssh 1)"
+  _assert "ssh 127 is fail"         "fail"  "$(_rm_classify_exit ssh 127)"
+  # et and mosh reconnect internally, so a non-zero exit from THEM means they
+  # gave up — retrying is still right, but 255 carries no special meaning.
+  _assert "et 0 is clean"           "clean" "$(_rm_classify_exit et 0)"
+  _assert "et 1 is retry"           "retry" "$(_rm_classify_exit et 1)"
+  _assert "mosh 0 is clean"         "clean" "$(_rm_classify_exit mosh 0)"
+  _assert "mosh 4 is retry"         "retry" "$(_rm_classify_exit mosh 4)"
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
