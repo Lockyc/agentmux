@@ -224,6 +224,126 @@ _rm_classify_exit() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+
+# The remote amux program for host <index>, or the default.
+# Raw-inserted into the remote sh (see _rm_remote_cmd), so $HOME expands there.
+_rm_prog_for_host() {
+  local p; p="$(agentmux_host_field "$1" amux)"
+  printf '%s' "${RM_TEST_PROG:-${p:-\"\$HOME\"/.agentmux/bin/amux}}"
+}
+
+# _rm_preflight_script <project> <path> <roots-newline>
+# The sh program run on the remote. Prints exactly one line:
+#   RM_OK<TAB><abs-dir><TAB><amux-version>
+#   RM_ERR<TAB><code><TAB><message>
+#
+# Runs BEFORE any tty is allocated, and that ordering is what makes the retry
+# loop safe: a bad host, a refused key, a missing project or an uninstalled
+# agentmux all surface here, where nothing retries. The supervise loop is only
+# ever reached once a session was genuinely established.
+#
+# Resolution is "a directory named <project>, containing .git, under a root".
+# Requiring .git is what makes `amux @host <name>` mean the same thing as the
+# roster shows; an arbitrary directory is reachable via the explicit
+# @host:<path> form, which skips this entirely.
+#
+# -maxdepth is not POSIX but is universal on GNU and BSD find. `-quit`/-printf
+# are NOT — macOS remotes lack them — so this pipes to head instead.
+_rm_preflight_script() {
+  local project="$1" path="$2" roots="$3" prog="$4"
+  # shellcheck disable=SC2016  # $-vars below are for the REMOTE shell, not us
+  printf '%s\n' \
+    "project=$(_rm_shquote "$project")" \
+    "path=$(_rm_shquote "$path")" \
+    "roots=$(_rm_shquote "$roots")" \
+    'TAB=$(printf "\t")' \
+    'err() { printf "RM_ERR%s%s%s%s\n" "$TAB" "$1" "$TAB" "$2"; exit 0; }' \
+    'if [ -n "$path" ]; then' \
+    '  d=$(eval printf %s "$path")' \
+    '  [ -d "$d" ] || err nodir "no such directory on the remote: $path"' \
+    '  dir=$(cd "$d" && pwd)' \
+    'else' \
+    '  [ -n "$project" ] || err notfound "no project given"' \
+    '  [ -n "$roots" ]   || err noroots "host has no roots = [...] configured"' \
+    '  found=""; n=0' \
+    '  IFS="' \
+    '"' \
+    '  for r in $roots; do' \
+    '    r=$(eval printf %s "$r")' \
+    '    [ -d "$r" ] || continue' \
+    '    for c in $(find "$r" -maxdepth 4 -type d -name "$project" 2>/dev/null); do' \
+    '      [ -e "$c/.git" ] || continue' \
+    '      n=$((n+1)); found="$found$c' \
+    '"' \
+    '    done' \
+    '  done' \
+    '  [ "$n" -eq 0 ] && err notfound "no project named \"$project\" under this host'"'"'s roots"' \
+    '  if [ "$n" -gt 1 ]; then' \
+    '    err ambiguous "$n directories match this project name: $(printf %s "$found" | tr "\n" " ")"' \
+    '  fi' \
+    '  dir=$(printf %s "$found" | head -n1)' \
+    'fi' \
+    "v=\$($prog --version 2>/dev/null | awk '{print \$NF}')" \
+    '[ -n "$v" ] || err noamux "agentmux is not installed on this host"' \
+    'printf "RM_OK%s%s%s%s\n" "$TAB" "$dir" "$TAB" "$v"'
+}
+
+# _rm_run <kind> <target> <cmd> — a NON-INTERACTIVE transport call.
+# Reuses the ControlMaster the interactive session will use, so it is nearly
+# free after the first call to a host. Returns the transport's exit status.
+#
+# AGENTMUX_REMOTE_TRANSPORT_CMD replaces the argv wholesale, with <cmd> appended
+# last. That is the offline test seam and the ONLY way the selftests exercise
+# this path — never add a second bypass.
+_rm_run() {
+  local kind="$1" target="$2" cmd="$3"
+  if [ -n "${AGENTMUX_REMOTE_TRANSPORT_CMD:-}" ]; then
+    "$AGENTMUX_REMOTE_TRANSPORT_CMD" "$target" "$cmd"
+    return $?
+  fi
+  _rm_transport_argv "$kind" "$target" "$cmd" --batch || return 2
+  "${RM_ARGV[@]}"
+}
+
+# _rm_preflight <host_index> <project> <path>
+# Sets RM_DIR, RM_VERSION, RM_ERRCODE, RM_ERRMSG.
+# Returns 0 ok, 1 resolved error (RM_ERRCODE set), 3 transport failure.
+_rm_preflight() {
+  local hi="$1" project="$2" path="$3"
+  RM_DIR=""; RM_VERSION=""; RM_ERRCODE=""; RM_ERRMSG=""
+  local target kind roots prog script out st TAB; TAB=$(printf '\t')
+  target="$(agentmux_host_field "$hi" ssh)"
+  kind="$(_rm_transport_for_host "$hi")"
+  roots="$(agentmux_host_roots "$hi")"
+  prog="$(_rm_prog_for_host "$hi")"
+  script="$(_rm_preflight_script "$project" "$path" "$roots" "$prog")"
+  out="$(_rm_run "$kind" "$target" "sh -c $(_rm_shquote "$script")" 2>/dev/null)"
+  st=$?
+  if [ "$st" -ne 0 ] || [ -z "$out" ]; then
+    RM_ERRCODE="transport"
+    RM_ERRMSG="could not reach $target (transport exited $st)"
+    return 3
+  fi
+  out="$(printf '%s\n' "$out" | grep -E '^RM_(OK|ERR)' | tail -n1)"
+  case "$out" in
+    RM_OK*)
+      RM_DIR="$(printf '%s' "$out" | cut -d"$TAB" -f2)"
+      RM_VERSION="$(printf '%s' "$out" | cut -d"$TAB" -f3)"
+      return 0
+      ;;
+    RM_ERR*)
+      RM_ERRCODE="$(printf '%s' "$out" | cut -d"$TAB" -f2)"
+      RM_ERRMSG="$(printf '%s' "$out" | cut -d"$TAB" -f3)"
+      return 1
+      ;;
+  esac
+  RM_ERRCODE="transport"; RM_ERRMSG="unrecognised preflight reply"
+  return 3
+}
+
 # ============================ selftest ============================
 # REMOTE_SELFTEST=1 bash scripts/remote.sh
 if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
@@ -431,6 +551,87 @@ TOML
   _assert "mosh 143 is clean"       "clean" "$(_rm_classify_exit mosh 143)"
   _assert "mosh 129 is retry"       "retry" "$(_rm_classify_exit mosh 129)"
   _assert "mosh 141 is retry"       "retry" "$(_rm_classify_exit mosh 141)"
+
+  # ---- preflight, against a FAKE transport ----
+  # AGENTMUX_REMOTE_TRANSPORT_CMD replaces the transport entirely and receives
+  # the remote command as its last argument, so the whole preflight path runs
+  # with no ssh, no network and no remote box. Same isolation idiom as
+  # AGENTMUX_*_SOCKET. The stub runs the remote program under a real `sh`
+  # against a real temp tree, so the resolution logic is genuinely exercised
+  # rather than mocked away.
+  #
+  # Lives under $_RM_TEST_DIR (reaped by the EXIT trap above) rather than its
+  # own `mktemp -d` — a second, unreaped throwaway dir is exactly the leak this
+  # file's ControlPath fixture above was already fixed to stop causing.
+  _rm_t="$_RM_TEST_DIR/preflight"
+  mkdir -p "$_rm_t/roots/one/warden/.git" "$_rm_t/roots/one/lector/.git" \
+           "$_rm_t/roots/two/warden/.git" "$_rm_t/plain"
+  cat > "$_rm_t/stub" <<'STUB'
+#!/bin/sh
+# Last arg is the remote command; run it locally with sh, as a remote box would.
+for a in "$@"; do last="$a"; done
+exec sh -c "$last"
+STUB
+  chmod +x "$_rm_t/stub"
+  cat > "$_rm_t/hosts.toml" <<TOML
+[[hosts]]
+name  = "fake"
+ssh   = "fake"
+roots = ["$_rm_t/roots/one"]
+
+[[hosts]]
+name  = "dup"
+ssh   = "dup"
+roots = ["$_rm_t/roots/one", "$_rm_t/roots/two"]
+
+[[hosts]]
+name = "norootshost"
+ssh  = "x"
+TOML
+  export AGENTMUX_CONFIG="$_rm_t/hosts.toml"; _amux_json_cache=""
+  export AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/stub"
+  # A fake remote amux so the "is agentmux installed" check passes.
+  printf '#!/bin/sh\necho 9.9.9\n' > "$_rm_t/amux"; chmod +x "$_rm_t/amux"
+  export RM_TEST_PROG="$_rm_t/amux"
+
+  _rm_preflight 0 warden "" ; _rm_pf=$?
+  _assert "preflight resolves a project" "0" "$_rm_pf"
+  _assert "preflight dir" "$_rm_t/roots/one/warden" "$RM_DIR"
+  _assert "preflight version" "9.9.9" "$RM_VERSION"
+
+  _rm_preflight 0 nosuch "" ; _assert "preflight notfound rc" "1" "$?"
+  _assert "preflight notfound code" "notfound" "$RM_ERRCODE"
+
+  # Same project name under two roots must be an ERROR, not a silent first-wins:
+  # picking one would launch an agent in the wrong repo, and nothing downstream
+  # could tell.
+  _rm_preflight 1 warden "" ; _assert "preflight ambiguous rc" "1" "$?"
+  _assert "preflight ambiguous code" "ambiguous" "$RM_ERRCODE"
+  _assert "preflight ambiguous names both" "2" \
+    "$(printf '%s' "$RM_ERRMSG" | grep -o 'warden' | wc -l | tr -d ' ')"
+
+  # An explicit path skips root resolution entirely — including for a dir that
+  # is not a git repo and could never appear in the roster.
+  _rm_preflight 0 "" "$_rm_t/plain" ; _assert "explicit path rc" "0" "$?"
+  _assert "explicit path dir" "$_rm_t/plain" "$RM_DIR"
+  _rm_preflight 0 "" "$_rm_t/nope" ; _assert "explicit missing path rc" "1" "$?"
+  _assert "explicit missing path code" "nodir" "$RM_ERRCODE"
+
+  # A host with no roots and no path cannot resolve anything.
+  _rm_preflight 2 warden "" ; _assert "no roots code" "noroots" "$RM_ERRCODE"
+
+  # No remote amux → a distinct code, because it is the one error with a fix
+  # we can offer (Task 7), not just report.
+  RM_TEST_PROG="$_rm_t/definitely-not-here" _rm_preflight 0 warden ""
+  _assert "missing remote amux code" "noamux" "$RM_ERRCODE"
+
+  # Transport failure (stub exits non-zero without running anything) must be
+  # rc 3 — distinct from a resolved error, because only rc 3 may ever retry.
+  printf '#!/bin/sh\nexit 255\n' > "$_rm_t/deadstub"; chmod +x "$_rm_t/deadstub"
+  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_preflight 0 warden ""
+  _assert "transport failure rc" "3" "$?"
+
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD RM_TEST_PROG
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
