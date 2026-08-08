@@ -186,6 +186,30 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   _assert() { if [ "$3" = "$2" ]; then pass=$((pass+1)); echo "PASS: $1"
               else fail=$((fail+1)); echo "FAIL: $1 — expected '$2' got '$3'"; fi; }
 
+  # ---- isolation ----
+  # _rm_control_dir falls back to $HOME/.agentmux when AGENTMUX_USER_DIR is unset,
+  # and _rm_transport_argv's ssh branch unconditionally `mkdir -p`s it — so every
+  # assertion below that touches the ssh transport (directly, or via the
+  # throwaway hosts.toml fixture further down) must run under a redirected
+  # AGENTMUX_USER_DIR, the same seam AGENTMUX_STATE_DIR/TMUX_TMPDIR use elsewhere
+  # in this repo's selftests (see CLAUDE.md's Selftests section) — without it this
+  # block creates a real directory in the user's actual home. A short LITERAL dir,
+  # not `mktemp -d`: a macOS mktemp path plus "/ssh/<hash>" can itself approach
+  # the 104-char AF_UNIX limit the tests further below exist to guard, which
+  # would fail a correct implementation for an unrelated reason. EXIT-only trap,
+  # idempotent — this repo's selftest convention (no INT/TERM; see CLAUDE.md).
+  _RM_TEST_DIR="/tmp/rmtest-$$"
+  _rm_cleanup_done=""
+  _rm_cleanup() {
+    [ -n "$_rm_cleanup_done" ] && return 0
+    _rm_cleanup_done=1
+    rm -rf "$_RM_TEST_DIR"
+  }
+  trap _rm_cleanup EXIT
+  rm -rf "$_RM_TEST_DIR"
+  mkdir -p "$_RM_TEST_DIR"
+  export AGENTMUX_USER_DIR="$_RM_TEST_DIR/agentmux-user"
+
   # ---- target parsing ----
   _rm_parse_target "@buildbox"
   _assert "bare host" "buildbox||" "$RM_HOST|$RM_PROJECT|$RM_PATH"
@@ -233,10 +257,24 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   _assert "shquote plain" "'abc'" "$(_rm_shquote abc)"
   _assert "shquote space" "'a b'" "$(_rm_shquote 'a b')"
   _assert "shquote single quote" "'it'\\''s'" "$(_rm_shquote "it's")"
-  # The escaping must survive a round trip through a REAL shell — that, not the
-  # literal output above, is the property that matters.
-  _assert "shquote round-trips through sh" "wei'rd \$name \`x\` \"q\"" \
-    "$(eval "printf '%s' $(_rm_shquote 'wei'"'"'rd $name `x` "q"')")"
+
+  # The escaping must survive a round trip through a REAL, SEPARATE shell
+  # process — `_rm_shquote` exists specifically because the remote login shell
+  # may be fish, which mis-parses bash's `printf %q` output, so an `eval` inside
+  # THIS bash process (the previous version of this test) proves nothing: eval
+  # is itself bash and would happily accept bash-only escaping too. Adversarial
+  # input covers every character `_rm_shquote`'s single-quoting has to defeat:
+  # single quotes, double quotes, backslashes, `$`, and backticks.
+  _rm_adv='it'"'"'s "tricky" \slash $var `cmd`'
+  _rm_adv_q="$(_rm_shquote "$_rm_adv")"
+  _assert "shquote round-trips through sh" "$_rm_adv" \
+    "$(sh -c "printf '%s' $_rm_adv_q")"
+  if command -v fish >/dev/null 2>&1; then
+    _assert "shquote round-trips through fish" "$_rm_adv" \
+      "$(fish -c "printf '%s' $_rm_adv_q")"
+  else
+    echo "SKIP: shquote round-trips through fish — fish not installed"
+  fi
 
   # ---- remote command ----
   _assert "remote cmd cds and execs" \
@@ -268,8 +306,30 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   # ssh alias or $HOME is. A %r@%h:%p path would blow it on a long alias.
   _rm_cp="$(printf '%s\n' "${RM_ARGV[@]}" | sed -n 's/^ControlPath=//p')"
   _assert "control path uses %C" "1" "$(printf '%s' "$_rm_cp" | grep -c '%C$')"
-  _assert "control path fits AF_UNIX" "ok" \
-    "$([ "${#_rm_cp}" -lt 104 ] && echo ok || echo "too long: ${#_rm_cp}")"
+  # Must measure the EXPANDED length ssh will actually create, not the
+  # un-substituted template — the template is always short (it's a literal
+  # 2-char "%C"), so comparing ITS length against 104 passes even for the
+  # readable %r@%h:%p form this whole design avoids, which is what made the
+  # previous version of this assertion close to vacuous. %C is ssh's SHA1 hex
+  # digest of user+host+port+localhost: always exactly 40 chars, independent of
+  # the alias — the one thing that makes the total length provably bounded. Any
+  # other trailing token (%r@%h:%p, or anything else) has NO such bound (%h/%r
+  # can be arbitrarily long DNS names or usernames), so it can't be certified
+  # safe and this fails on sight rather than measuring a short test fixture that
+  # happens to pass — which is what makes it actually fail if someone "improves"
+  # %C into the readable form.
+  _RM_SHA1_HEX_LEN=40
+  case "$_rm_cp" in
+    *%C)
+      _rm_cp_prefix="${_rm_cp%\%C}"
+      _rm_cp_worst=$(( ${#_rm_cp_prefix} + _RM_SHA1_HEX_LEN ))
+      _rm_cp_result="$([ "$_rm_cp_worst" -lt 104 ] && echo ok || echo "too long: $_rm_cp_worst")"
+      ;;
+    *)
+      _rm_cp_result="unbounded — not %C-terminated, cannot certify a length bound"
+      ;;
+  esac
+  _assert "control path fits AF_UNIX (expanded worst case)" "ok" "$_rm_cp_result"
 
   _rm_transport_argv et "bench" "sh -c 'true'"
   _assert "et argv" "et bench -c" "${RM_ARGV[0]} ${RM_ARGV[1]} ${RM_ARGV[2]}"
@@ -279,7 +339,10 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   _assert "unknown transport rejected" "2" "$?"
 
   # ---- transport resolution + the mosh warning ----
-  _rm_cfg="$(mktemp -d)/hosts.toml"; mkdir -p "$(dirname "$_rm_cfg")"
+  # Reuses the isolated $_RM_TEST_DIR set up at the top of this block (reaped by
+  # the same EXIT trap) instead of a second `mktemp -d` — the old `mktemp -d`
+  # here was never removed and leaked a throwaway temp dir on every run.
+  _rm_cfg="$_RM_TEST_DIR/hosts.toml"
   cat > "$_rm_cfg" <<'TOML'
 [[hosts]]
 name = "a"
