@@ -7,7 +7,7 @@
 # same name prefers the same curated (bg fg) slot on every machine — the
 # randomColor.js "seeded, not random, curated range" idea. But a plain name-hash
 # pigeonholes: two distinct names can cksum to the same slot (e.g. agentmux &
-# reductable). So a NEW session DE-DUPS AT BIRTH — it linear-probes from its
+# smithy). So a NEW session DE-DUPS AT BIRTH — it linear-probes from its
 # preferred slot past every slot already claimed by a live session and takes the
 # first free one. That chosen slot is stored on the session (@l1idx) and never
 # recomputed: existing sessions are fixed points; newcomers fill the gaps around
@@ -265,15 +265,15 @@ test:')
   # avoid it.
   o=$(_sim 'agentmux:0
 lockyc:
-reductable:')
+smithy:')
   _assert "frozen slot unmoved by newcomers" "0" "$(_get "$o" agentmux)"
   _assert "newcomer avoids frozen slot (lockyc)" "no" \
     "$([ "$(_get "$o" lockyc)" = "0" ] && echo yes || echo no)"
-  _assert "newcomer avoids frozen slot (reductable)" "no" \
-    "$([ "$(_get "$o" reductable)" = "0" ] && echo yes || echo no)"
+  _assert "newcomer avoids frozen slot (smithy)" "no" \
+    "$([ "$(_get "$o" smithy)" = "0" ] && echo yes || echo no)"
 
   # Removing a session frees its slot without touching the survivor: agentmux pinned
-  # to 0 stays at 0 whether or not reductable is present.
+  # to 0 stays at 0 whether or not smithy is present.
   solo=$(_get "$(_sim 'agentmux:0')" agentmux)
   _assert "survivor unmoved when peer removed" "0" "$solo"
 

@@ -191,7 +191,7 @@ _amux_atmux() {
 }
 
 # tmux resolves a `-t` session target by exact → prefix → fnmatch, so a bare
-# `has-session -t reductable` is TRUE when only `reductable-www` exists and the
+# `has-session -t smithy` is TRUE when only `smithy-www` exists and the
 # subsequent attach joins the WRONG session (and the create-vs-attach decision is
 # wrong both ways). Prefixing the target with `=` forces EXACT matching. It is
 # honoured by has-session/attach-session/switch-client/kill-session and window
@@ -2531,7 +2531,7 @@ EOF
   _assert "update non-clone exit"    "1"  "$_rc"
   rmdir "$_td"
 
-  # Exact-match session resolution (the reductable-www bug): tmux resolves a bare
+  # Exact-match session resolution (the smithy-www bug): tmux resolves a bare
   # `-t name` by prefix/fnmatch, so without the `=` guard `_amux_session_exists
   # proj` is TRUE when only `proj-www` exists and amux attaches to the wrong
   # session. Drive _amux_session_exists on an isolated socket. Needs a real tmux;
