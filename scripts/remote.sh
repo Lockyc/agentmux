@@ -232,7 +232,7 @@ _rm_classify_exit() {
 # Raw-inserted into the remote sh (see _rm_remote_cmd), so $HOME expands there.
 _rm_prog_for_host() {
   local p; p="$(agentmux_host_field "$1" amux)"
-  printf '%s' "${RM_TEST_PROG:-${p:-\"\$HOME\"/.agentmux/bin/amux}}"
+  printf '%s' "${AGENTMUX_REMOTE_TEST_PROG:-${p:-\"\$HOME\"/.agentmux/bin/amux}}"
 }
 
 # _rm_preflight_script <project> <path> <roots-newline>
@@ -282,7 +282,7 @@ _rm_preflight_script() {
     '  done' \
     '  [ "$n" -eq 0 ] && err notfound "no project named \"$project\" under this host'"'"'s roots"' \
     '  if [ "$n" -gt 1 ]; then' \
-    '    err ambiguous "$n directories match this project name: $(printf %s "$found" | tr "\n" " ")"' \
+    '    err ambiguous "\"$project\" matches $n directories: $(printf %s "$found" | tr "\n" " ")"' \
     '  fi' \
     '  dir=$(printf %s "$found" | head -n1)' \
     'fi' \
@@ -317,6 +317,21 @@ _rm_preflight() {
   local target kind roots prog script out st TAB; TAB=$(printf '\t')
   target="$(agentmux_host_field "$hi" ssh)"
   kind="$(_rm_transport_for_host "$hi")"
+  # Validated HERE, before ever calling _rm_run: an unknown `transport =`
+  # value is a config mistake, not a flaky link, so it must resolve as rc 1
+  # (RM_ERRCODE=badtransport) rather than fall through to _rm_run/
+  # _rm_transport_argv's own `return 2`, which _rm_run turns into rc 3 —
+  # "transport failure", the ONE code a caller may ever retry. Retrying a
+  # typo'd transport can never succeed; the list mirrors _rm_transport_argv's
+  # case statement and must be kept in sync with it.
+  case "$kind" in
+    ssh|et|mosh) : ;;
+    *)
+      RM_ERRCODE="badtransport"
+      RM_ERRMSG="unknown transport \"$kind\" (must be one of: ssh, et, mosh)"
+      return 1
+      ;;
+  esac
   roots="$(agentmux_host_roots "$hi")"
   prog="$(_rm_prog_for_host "$hi")"
   script="$(_rm_preflight_script "$project" "$path" "$roots" "$prog")"
@@ -587,12 +602,17 @@ roots = ["$_rm_t/roots/one", "$_rm_t/roots/two"]
 [[hosts]]
 name = "norootshost"
 ssh  = "x"
+
+[[hosts]]
+name      = "badtransporthost"
+ssh       = "bt"
+transport = "shh"
 TOML
   export AGENTMUX_CONFIG="$_rm_t/hosts.toml"; _amux_json_cache=""
   export AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/stub"
   # A fake remote amux so the "is agentmux installed" check passes.
   printf '#!/bin/sh\necho 9.9.9\n' > "$_rm_t/amux"; chmod +x "$_rm_t/amux"
-  export RM_TEST_PROG="$_rm_t/amux"
+  export AGENTMUX_REMOTE_TEST_PROG="$_rm_t/amux"
 
   _rm_preflight 0 warden "" ; _rm_pf=$?
   _assert "preflight resolves a project" "0" "$_rm_pf"
@@ -607,8 +627,12 @@ TOML
   # could tell.
   _rm_preflight 1 warden "" ; _assert "preflight ambiguous rc" "1" "$?"
   _assert "preflight ambiguous code" "ambiguous" "$RM_ERRCODE"
-  _assert "preflight ambiguous names both" "2" \
-    "$(printf '%s' "$RM_ERRMSG" | grep -o 'warden' | wc -l | tr -d ' ')"
+  # Pins what actually matters — the user is told WHICH directories collided
+  # — not just a substring count a repeated single path could also satisfy.
+  _assert "preflight ambiguous names root one" "1" \
+    "$(printf '%s' "$RM_ERRMSG" | grep -Fc "$_rm_t/roots/one/warden")"
+  _assert "preflight ambiguous names root two" "1" \
+    "$(printf '%s' "$RM_ERRMSG" | grep -Fc "$_rm_t/roots/two/warden")"
 
   # An explicit path skips root resolution entirely — including for a dir that
   # is not a git repo and could never appear in the roster.
@@ -618,12 +642,23 @@ TOML
   _assert "explicit missing path code" "nodir" "$RM_ERRCODE"
 
   # A host with no roots and no path cannot resolve anything.
-  _rm_preflight 2 warden "" ; _assert "no roots code" "noroots" "$RM_ERRCODE"
+  _rm_preflight 2 warden "" ; _assert "no roots rc" "1" "$?"
+  _assert "no roots code" "noroots" "$RM_ERRCODE"
 
   # No remote amux → a distinct code, because it is the one error with a fix
   # we can offer (Task 7), not just report.
-  RM_TEST_PROG="$_rm_t/definitely-not-here" _rm_preflight 0 warden ""
+  AGENTMUX_REMOTE_TEST_PROG="$_rm_t/definitely-not-here" _rm_preflight 0 warden ""
+  _assert "missing remote amux rc" "1" "$?"
   _assert "missing remote amux code" "noamux" "$RM_ERRCODE"
+
+  # A misconfigured `transport =` value must be caught BEFORE ever touching
+  # the transport layer and reported as a RESOLVED error (rc 1) — never rc 3
+  # (transport failure), because only rc 3 may ever be retried by a caller,
+  # and no amount of retrying fixes a typo'd transport kind.
+  _rm_preflight 3 warden "" ; _assert "bad transport rc" "1" "$?"
+  _assert "bad transport code" "badtransport" "$RM_ERRCODE"
+  _assert "bad transport message names the bad value" "1" \
+    "$(printf '%s' "$RM_ERRMSG" | grep -c 'shh')"
 
   # Transport failure (stub exits non-zero without running anything) must be
   # rc 3 — distinct from a resolved error, because only rc 3 may ever retry.
@@ -631,7 +666,7 @@ TOML
   AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_preflight 0 warden ""
   _assert "transport failure rc" "3" "$?"
 
-  unset AGENTMUX_REMOTE_TRANSPORT_CMD RM_TEST_PROG
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
