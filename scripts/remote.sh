@@ -359,6 +359,44 @@ _rm_preflight() {
   return 3
 }
 
+# ---------------------------------------------------------------------------
+# Bootstrap
+# ---------------------------------------------------------------------------
+
+# The documented curl|bash install path, run on the remote. Single-sourced here
+# so it cannot drift from install.sh's own published one-liner.
+_rm_bootstrap_cmd() {
+  printf '%s' 'curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash'
+}
+
+# _rm_offer_bootstrap <host_index> <hostname>
+# Offers to install agentmux on a host that has none. Returns 0 if it is now
+# installed, 1 if declined or the install failed.
+#
+# An offer, not an automatic action: installing software on someone's machine is
+# outward-facing enough to ask about, and declining is a real answer — the user
+# may have meant a different host entirely.
+_rm_offer_bootstrap() {
+  local hi="$1" hname="$2" target kind ans st
+  target="$(agentmux_host_field "$hi" ssh)"
+  kind="$(_rm_transport_for_host "$hi")"
+  printf 'amux: agentmux is not installed on %s.\n' "$hname" >&2
+  printf '      Install it now? It clones into ~/.agentmux on that host. [y/N] ' >&2
+  read -r ans
+  case "$ans" in
+    y|Y|yes|YES) : ;;
+    *) printf 'amux: not installing; nothing changed on %s.\n' "$hname" >&2; return 1 ;;
+  esac
+  printf 'amux: installing agentmux on %s...\n' "$hname" >&2
+  _rm_run "$kind" "$target" "sh -c $(_rm_shquote "$(_rm_bootstrap_cmd)")" >&2
+  st=$?
+  if [ "$st" -ne 0 ]; then
+    printf 'amux: install failed on %s (exit %s).\n' "$hname" "$st" >&2
+    return 1
+  fi
+  return 0
+}
+
 # ============================ selftest ============================
 # REMOTE_SELFTEST=1 bash scripts/remote.sh
 if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
@@ -667,6 +705,21 @@ TOML
   _assert "transport failure rc" "3" "$?"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG
+
+  # ---- bootstrap ----
+  _assert "bootstrap uses install.sh over curl" "1" \
+    "$(_rm_bootstrap_cmd | grep -c 'install.sh')"
+  _assert "bootstrap pipes to bash" "1" "$(_rm_bootstrap_cmd | grep -c 'bash')"
+  # Declining must NOT install: the offer is a question, and answering no is a
+  # supported outcome, not an error to route around.
+  export AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/stub"
+  export AGENTMUX_CONFIG="$_rm_t/hosts.toml"; _amux_json_cache=""
+  _rm_marker="$_rm_t/installed"
+  _assert "declining does not install" "1" \
+    "$(printf 'n\n' | _rm_offer_bootstrap 0 fake >/dev/null 2>&1; echo $?)"
+  _assert "declining left no marker" "0" \
+    "$([ -f "$_rm_marker" ] && echo 1 || echo 0)"
+  unset AGENTMUX_REMOTE_TRANSPORT_CMD
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
