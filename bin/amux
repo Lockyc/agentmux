@@ -1710,10 +1710,28 @@ EOF
     esac
   fi
 
+  # Whether this run hands off to --frame: [frame] default = true makes a bare
+  # amux open a frame, as if --frame had been typed (--no-frame opts out).
+  # Reached only by a real launch: every query/management flag returned from its
+  # case arm above.
+  #
+  # Resolved BEFORE the nesting guard, because the two paths answer nesting
+  # differently and whichever one actually runs owns the question. --frame
+  # carries its own guard plus the documented [frame] allow_nested escape hatch;
+  # a plain launch has no hatch, deliberately (see _amux_nested_refuse). Guarding
+  # first refused a frame run that allow_nested explicitly permits, so `amux` and
+  # `amux --frame` disagreed about that hatch — and the allow_nested test in the
+  # frame condition below became dead code, since TMUX being set had already
+  # returned.
+  local use_frame=""
+  [ -z "$no_frame" ] && [ -n "$(_amux_frame_default)" ] && use_frame=1
+
   # A plain launch nests a second tmux inside the one we are already in — the
-  # same objection --frame has always refused on. Reached only by a real launch:
-  # every query/management flag returned from its case arm above.
-  _amux_nested_refuse "agent sessions" || return 1
+  # same objection --frame has always refused on, minus the hatch. A frame run
+  # is guarded by _amux_frame instead, which is what keeps the hatch honoured.
+  if [ -z "$use_frame" ]; then
+    _amux_nested_refuse "agent sessions" || return 1
+  fi
 
   # One-time notice for agents still stranded on the old shared default socket
   # (see _amux_legacy_notice). Placed after every case arm's `return` above, so
@@ -1721,11 +1739,7 @@ EOF
   # launch (plain or [frame] default=true) falls through to here.
   _amux_legacy_notice
 
-  # [frame] default = true makes a bare amux open a frame, as if --frame were
-  # passed. Skipped when --no-frame was given, or when already inside tmux and
-  # [frame] allow_nested isn't set (--frame can't nest there — fall through to a
-  # normal in-tmux launch instead).
-  if [ -z "$no_frame" ] && { [ -z "${TMUX:-}" ] || [ -n "$(_amux_frame_allow_nested)" ]; } && [ -n "$(_amux_frame_default)" ]; then
+  if [ -n "$use_frame" ]; then
     _amux_frame "$@"
     return $?
   fi
@@ -1868,7 +1882,38 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     *)                                     _got="bad:$_fout" ;;
   esac
   _assert "frame allow_nested lifts guard" "ok" "$_got"
-  rm -f "$_anw"
+
+  # The same hatch, through the BARE-LAUNCH entry point: [frame] default = true
+  # makes `amux` mean `amux --frame`, so allow_nested must lift the guard there
+  # identically — two entry points disagreeing about a documented escape hatch
+  # is the defect. The assertion above cannot see this: it calls _amux_frame
+  # directly and so starts past the guard the plain launch hits first.
+  _anwd=$(mktemp /tmp/amux-nest-XXXXXX.toml) || exit 1
+  printf '[frame]\ndefault = true\nallow_nested = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_anwd"
+  _fout=$(TMUX="/tmp/fake,1,0" AGENTMUX_CONFIG="$_anwd" _amux_json_cache="" \
+          AGENTMUX_TMUX="/tmp/amux-no-such-tmux-dir" amux 2>&1)
+  case "$_fout" in
+    *"agent sessions must be run"*) _got="plain-guard-fired" ;;
+    *"frame config not found"*)     _got=ok ;;
+    *)                              _got="bad:$_fout" ;;
+  esac
+  _assert "bare launch honours frame allow_nested too" "ok" "$_got"
+  # Without the hatch the refusal stands, and it names the hatch that lifts it.
+  # A SEPARATE temp file, not a rewrite of the one above: the config cache keys
+  # on path + mtime, and two writes to one path inside the same second collide
+  # on that key — the second run would then be asserted against the FIRST
+  # config's parse and pass for the wrong reason (it did).
+  _anwn=$(mktemp /tmp/amux-nest-XXXXXX.toml) || exit 1
+  printf '[frame]\ndefault = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_anwn"
+  _fout=$(TMUX="/tmp/fake,1,0" AGENTMUX_CONFIG="$_anwn" _amux_json_cache="" \
+          AGENTMUX_TMUX="/tmp/amux-no-such-tmux-dir" amux 2>&1); _frc=$?
+  case "$_fout" in *"plain terminal"*) _got=ok ;; *) _got="bad:$_fout" ;; esac
+  _assert "bare launch inside tmux still refused without the hatch" "ok" "$_got"
+  _assert "bare launch refusal exits non-zero" "1" "$([ "$_frc" -ne 0 ] && echo 1 || echo 0)"
+  _assert "the refusal names the hatch that lifts it" "1" \
+    "$(printf '%s' "$_fout" | grep -c 'allow_nested')"
+  rm -f "$_anw" "$_anwd" "$_anwn"
+  _amux_json_cache=""
 
   # _amux_frame_right_cmd: a bare tmux attach on the agent socket (the parent already
   # created + configured the session, so no second amux launch and no -f needed).
