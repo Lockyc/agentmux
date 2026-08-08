@@ -16,10 +16,6 @@ source "$RA_SCRIPT_DIR/remote.sh"
 # Supervise loop
 # ---------------------------------------------------------------------------
 
-# Replaced with the real holding screen in the next task.
-_ra_hold()    { _ra_sleep "$5"; return 0; }
-_ra_give_up() { return 0; }
-
 # _ra_backoff <attempt> — seconds to wait before attempt N. 1,2,4,8,15,15,…
 _ra_backoff() {
   local n="$1" s=1
@@ -79,6 +75,78 @@ _ra_supervise() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Holding screen
+# ---------------------------------------------------------------------------
+
+# _ra_elide <string> <max> — shorten from the MIDDLE, keeping the tail.
+# A project path's identifying part is its end, so truncating the front would
+# leave every long path looking the same.
+_ra_elide() {
+  local s="$1" max="$2" keep
+  [ "${#s}" -le "$max" ] && { printf '%s' "$s"; return 0; }
+  keep=$(( (max - 1) / 2 ))
+  printf '%s…%s' "${s:0:keep}" "${s: -keep}"
+}
+
+# _ra_render <host> <dir> <attempt> <elapsed> <error> — the screen body.
+# PURE: writes to stdout, reads no globals, touches no terminal state. That is
+# what makes the screen assertable without a pty; _ra_hold wraps it with the
+# alternate-screen and key handling.
+_ra_render() {
+  local host="$1" dir="$2" attempt="$3" elapsed="$4" err="$5"
+  local mm ss
+  mm=$(printf '%02d' $(( elapsed / 60 )))
+  ss=$(printf '%02d' $(( elapsed % 60 )))
+  printf '\n  agentmux · remote\n\n'
+  printf '    %-20s %s\n\n' "$host" "$(_ra_elide "$dir" 48)"
+  printf '    ⟳  reconnecting — attempt %s, %s:%s elapsed\n' "$attempt" "$mm" "$ss"
+  [ -n "$err" ] && printf '       %s\n' "$(_ra_elide "$err" 66)"
+  printf '\n       your session is still running there; nothing is lost\n\n'
+  printf '    r  retry now\n'
+  printf '    q  give up (session keeps running)\n'
+}
+
+# _ra_hold <host> <dir> <attempt> <started-epoch> <wait-seconds>
+# Shows the screen for <wait> seconds. Returns 0 to keep retrying, 1 if quit.
+#
+# Never touches the remote: there is nothing to clean up, because remote tmux
+# going on without us is precisely the correct behaviour.
+_ra_hold() {
+  local host="$1" dir="$2" attempt="$3" started="$4" wait="$5"
+  local key left now elapsed
+  if [ "${AGENTMUX_REMOTE_BACKOFF:-1}" = "0" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+    return 0
+  fi
+  tput smcup 2>/dev/null
+  left="$wait"
+  while [ "$left" -gt 0 ]; do
+    now=$(date +%s); elapsed=$(( now - started ))
+    tput clear 2>/dev/null
+    _ra_render "$host" "$dir" "$attempt" "$elapsed" "${RA_LAST_ERR:-}"
+    if read -r -n 1 -t 1 key 2>/dev/null; then
+      case "$key" in
+        q|Q) tput rmcup 2>/dev/null; return 1 ;;
+        r|R) break ;;
+      esac
+    fi
+    left=$(( left - 1 ))
+  done
+  tput rmcup 2>/dev/null
+  return 0
+}
+
+# _ra_give_up <host> <dir> — the parting message.
+# Names the exact command to get back in, so returning is a paste rather than a
+# thing to reconstruct.
+_ra_give_up() {
+  local host="$1" dir="$2" proj
+  proj="$(basename "$dir")"
+  printf '\namux: gave up reconnecting to %s.\n' "$host" >&2
+  printf '      Your session is still running there — nothing was lost.\n' >&2
+  printf '      Get back in with:  amux @%s %s\n\n' "$host" "$proj" >&2
+}
+
 # ============================ selftest ============================
 # REMOTE_ATTACH_SELFTEST=1 bash scripts/remote_attach.sh
 if [ "${REMOTE_ATTACH_SELFTEST:-}" = "1" ]; then
@@ -133,6 +201,38 @@ STUB
   _assert "backoff 3" "4"  "$(_ra_backoff 3)"
   _assert "backoff 4" "8"  "$(_ra_backoff 4)"
   _assert "backoff caps at 15" "15" "$(_ra_backoff 9)"
+
+  # ---- holding screen ----
+  # _ra_render is pure so it can be asserted on directly — no pty, no alternate
+  # screen, no timing. The terminal control lives in _ra_hold around it.
+  _ra_out="$(_ra_render buildbox /srv/projects/warden 3 84 'ssh: connect: Host is down')"
+  _assert "render names the host" "1" "$(printf '%s' "$_ra_out" | grep -c 'buildbox')"
+  _assert "render names the project dir" "1" \
+    "$(printf '%s' "$_ra_out" | grep -c 'warden')"
+  _assert "render shows the attempt" "1" "$(printf '%s' "$_ra_out" | grep -c 'attempt 3')"
+  _assert "render shows elapsed mm:ss" "1" "$(printf '%s' "$_ra_out" | grep -c '01:24')"
+  _assert "render shows the last error" "1" \
+    "$(printf '%s' "$_ra_out" | grep -c 'Host is down')"
+  # The reassurance line is the point of the screen: the question a dropped
+  # remote session actually raises is "did I lose that", and it is answered in
+  # place rather than left to be inferred.
+  _assert "render reassures about the session" "1" \
+    "$(printf '%s' "$_ra_out" | grep -ci 'still running')"
+  _assert "render names both keys" "2" \
+    "$(printf '%s' "$_ra_out" | grep -Eco '(^|[^a-z])(r|q)  ')"
+  # Long dirs must not wrap the layout — the middle is elided, never truncated
+  # at the front, because the tail is the identifying part.
+  _ra_long="$(_ra_render h /a/very/long/path/that/keeps/going/and/going/and/going/warden 1 5 x)"
+  _assert "long dir keeps its tail" "1" "$(printf '%s' "$_ra_long" | grep -c 'warden')"
+  _assert "long dir is elided" "1" "$(printf '%s' "$_ra_long" | grep -c '…')"
+
+  # Giving up must name the exact command to get back in — an instruction the
+  # user can paste, not a description of one.
+  _ra_bye="$(_ra_give_up buildbox /srv/projects/warden 2>&1)"
+  _assert "give up names the re-entry command" "1" \
+    "$(printf '%s' "$_ra_bye" | grep -c 'amux @buildbox warden')"
+  _assert "give up says the session survives" "1" \
+    "$(printf '%s' "$_ra_bye" | grep -ci 'still running')"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD STUB_COUNT
   echo "---- $pass passed, $fail failed"
