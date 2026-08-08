@@ -185,6 +185,53 @@ _ra_give_up() {
   printf '      Get back in with:  amux @%s %s\n\n' "$host" "$proj" >&2
 }
 
+# ---------------------------------------------------------------------------
+# Picker
+# ---------------------------------------------------------------------------
+
+# _ra_pick_render <roster-json> — the numbered list. PURE (stdout only).
+#
+# Every project is listed whether or not it has a live session; liveness is a
+# dot, never a filter. Hiding idle projects would make the list a different
+# shape every time and teach nothing about what is on the box — the same reason
+# the local surfaces render empty widgets in place rather than swapping views.
+_ra_pick_render() {
+  local json="$1" n
+  n="$(printf '%s' "$json" | jq 'length')"
+  if [ "${n:-0}" -eq 0 ]; then
+    printf '  no projects found under this host'"'"'s roots\n'
+    return 0
+  fi
+  printf '%s' "$json" | jq -r '
+    to_entries[]
+    | "  \(.key + 1)) \(if .value.live then "●" else "○" end)  "
+      + (.value.name | . + (" " * (18 - (. | length))))
+      + (.value.path)
+      + (if .value.live then "   \(.value.tabs) tab" + (if .value.tabs == 1 then "" else "s" end) else "" end)'
+}
+
+# _ra_pick <host_index> <host> — render, read a choice, print the chosen name.
+# Prints nothing when cancelled or empty.
+_ra_pick() {
+  local hi="$1" host="$2" json n sel
+  json="$(_rm_roster_json "$hi" "$host")" || {
+    printf 'amux: could not list projects on %s\n' "$host" >&2; return 1; }
+  n="$(printf '%s' "$json" | jq 'length')"
+  printf '\n  %s — %s project%s\n\n' "$host" "$n" \
+    "$([ "$n" = 1 ] || printf s)" >&2
+  _ra_pick_render "$json" >&2
+  [ "${n:-0}" -gt 0 ] || return 1
+  printf '\n  project (1-%s, q to cancel): ' "$n" >&2
+  read -r sel
+  case "$sel" in
+    ''|q|Q|quit) return 1 ;;
+    *[!0-9]*)    return 1 ;;
+  esac
+  sel=$((10#$sel))
+  { [ "$sel" -ge 1 ] && [ "$sel" -le "$n" ]; } || return 1
+  printf '%s' "$json" | jq -r ".[$((sel - 1))].name"
+}
+
 # ============================ selftest ============================
 # REMOTE_ATTACH_SELFTEST=1 bash scripts/remote_attach.sh
 if [ "${REMOTE_ATTACH_SELFTEST:-}" = "1" ]; then
@@ -314,6 +361,27 @@ STUB
     "$(printf '%s' "$_ra_bye" | grep -ci 'still running')"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD STUB_COUNT
+
+  # ---- picker ----
+  _ra_j='[{"name":"warden","path":"/d/warden","live":true,"tabs":2,"agent":"work"},
+          {"name":"lector","path":"/d/lector","live":false,"tabs":0,"agent":""}]'
+  _ra_p="$(_ra_pick_render "$_ra_j")"
+  _assert "picker numbers the rows" "1" "$(printf '%s' "$_ra_p" | grep -c '1) ')"
+  _assert "picker lists both" "2" "$(printf '%s' "$_ra_p" | grep -cE '^\s*[0-9]+\) ')"
+  # A live project gets a filled dot, an idle one a hollow dot — the control is
+  # present in BOTH states, never removed. Same discoverability rule as the
+  # local status surfaces: absence of data is shown in place, not by omission.
+  _assert "live project marked" "1" "$(printf '%s' "$_ra_p" | grep -c '●')"
+  _assert "idle project still listed with a dot" "1" "$(printf '%s' "$_ra_p" | grep -c '○')"
+  _assert "live project shows its tab count" "1" \
+    "$(printf '%s' "$_ra_p" | grep -c '2 tabs')"
+  # An idle project shows no tab count, but keeps its row shape.
+  _assert "idle row has no tab count" "1" \
+    "$(printf '%s' "$_ra_p" | grep -c 'lector')"
+  # An empty roster is a real answer and must say so, not print a bare prompt.
+  _assert "empty roster explains itself" "1" \
+    "$(_ra_pick_render '[]' 2>&1 | grep -ci 'no projects')"
+
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
   exit 0
