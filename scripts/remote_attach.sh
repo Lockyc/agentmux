@@ -186,12 +186,23 @@ _ra_hold() {
 # _ra_give_up <host> <dir> — the parting message.
 # Names the exact command to get back in, so returning is a paste rather than a
 # thing to reconstruct.
+#
+# The @host:<dir> form, never `@host <basename>`. A basename re-resolves over the
+# host's roots, which is precisely what two same-basename projects cannot answer
+# — see _ra_pick's header — so the printed command failed with "matches 2
+# directories" in the exact case the picker exists for, and named the WRONG repo
+# in no case at all only because preflight refuses rather than guesses. The dir
+# is already resolved and absolute here; handing it back verbatim can't
+# re-collide. Whitespace in it is quoted, since the point is that this pastes.
 _ra_give_up() {
-  local host="$1" dir="$2" proj
-  proj="$(basename "$dir")"
+  local host="$1" dir="$2" target
+  target="@$host:$dir"
+  case "$target" in
+    *[[:space:]]*) target="'$target'" ;;
+  esac
   printf '\namux: gave up reconnecting to %s.\n' "$host" >&2
   printf '      Your session is still running there — nothing was lost.\n' >&2
-  printf '      Get back in with:  amux @%s %s\n\n' "$host" "$proj" >&2
+  printf '      Get back in with:  amux %s\n\n' "$target" >&2
 }
 
 # ---------------------------------------------------------------------------
@@ -411,11 +422,20 @@ STUB
 
   # Giving up must name the exact command to get back in — an instruction the
   # user can paste, not a description of one.
+  # The re-entry command must be the @host:<dir> form. A basename re-resolves
+  # over the host's roots, so for two same-basename projects the printed command
+  # is one preflight rejects as "matches 2 directories" — a paste that fails in
+  # the exact case the picker exists for. Asserted on the FULL absolute dir, so
+  # reverting to a basename fails here rather than passing on a substring.
   _ra_bye="$(_ra_give_up buildbox /srv/projects/warden 2>&1)"
-  _assert "give up names the re-entry command" "1" \
-    "$(printf '%s' "$_ra_bye" | grep -c 'amux @buildbox warden')"
+  _assert "give up names the re-entry command by dir, not basename" "1" \
+    "$(printf '%s' "$_ra_bye" | grep -Fc 'amux @buildbox:/srv/projects/warden')"
   _assert "give up says the session survives" "1" \
     "$(printf '%s' "$_ra_bye" | grep -ci 'still running')"
+  # ...and it must still paste when the remote dir has a space in it.
+  _assert "give up quotes a target with whitespace" "1" \
+    "$(_ra_give_up buildbox "/srv/my projects/warden" 2>&1 \
+       | grep -Fc "amux '@buildbox:/srv/my projects/warden'")"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD STUB_COUNT
 
