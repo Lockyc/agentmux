@@ -48,7 +48,7 @@
 # [amux.dirs."<dir>"].session_colour; names are appended LAST so every positional
 # `bg fg` parse (and colours.sh's `awk '{print $1}'`) is unaffected.
 # Bar colours are intentionally NON-blue except `blue` itself (pinned/reserved for
-# locus): the agent tab palette already owns the cool region.
+# an opt-in project pin): the agent tab palette already owns the cool region.
 palette='20 231 blue
 42 16 teal
 28 231 green
@@ -246,9 +246,9 @@ if [ "${UPDATE_COLORS_SELFTEST:-}" = "1" ]; then
 
   # Global reservation: a slot reserved via @l1reserved is avoided by a newcomer
   # that prefers it, even though NO live session holds that slot.
-  _rp=$(_pref locus)
+  _rp=$(_pref alpha)
   _assert "newcomer avoids reserved slot (no live holder)" "no" \
-    "$([ "$(_get "$(_sim 'locus:' "$_rp")" locus)" = "$_rp" ] && echo yes || echo no)"
+    "$([ "$(_get "$(_sim 'alpha:' "$_rp")" alpha)" = "$_rp" ] && echo yes || echo no)"
 
   # De-dup at birth: two names that PREFER the same slot must still land on
   # distinct slots. (The colliding pair is tied to the palette size — dev & test

@@ -1646,7 +1646,7 @@ tmux() {
     "display-message -p")
       # honour an optional -t TARGET (ignored — fixed context) by shifting it off
       shift 2; [ "$1" = "-t" ] && shift 2
-      printf '/tmp/tmux-501/default\t4242\tlocus\t@3\tclaude\t/tmp/work\n' ;;
+      printf '/tmp/tmux-501/default\t4242\talpha\t@3\tclaude\t/tmp/work\n' ;;
     *) return 0 ;;
   esac
 }
@@ -1683,15 +1683,15 @@ _assert "disabled: no ledger" "0" "$([ -f "$ledger" ] && echo 1 || echo 0)"
 # --- fold carries the latest-ts column (recency ordering) ---
 rm -f "$ledger"; unset AGENTMUX_SESSION_LOG; AGENTMUX_SESSION_LOG=1
 cat > "$ledger" <<'JSON'
-{"ts":10,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":10,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"alpha","window_id":"@1","window_name":"claude","cwd":"/w/alpha","agent":"work"}
 {"ts":42,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@1","label":"a1b2","resume_cmd":"claude --resume a1b2"}
 {"ts":20,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"red","window_id":"@1","window_name":"claude","cwd":"/w/red","agent":"personal"}
 JSON
 foldout=$(_sl_fold "$ledger")
 _assert "fold lists every opened window" "2" "$(printf '%s\n' "$foldout" | grep -c .)"
 _assert "fold spans 2 distinct servers"  "2" "$(printf '%s\n' "$foldout" | cut -f2 | sort -u | grep -c .)"
-# maxts is column 9 (fork_cmd is appended after it, at column 10): locus = max(10,42) = 42
-_assert "fold trailing col is max ts"    "42" "$(printf '%s\n' "$foldout" | awk -F'\t' '$6=="/w/locus"{print $9}')"
+# maxts is column 9 (fork_cmd is appended after it, at column 10): alpha = max(10,42) = 42
+_assert "fold trailing col is max ts"    "42" "$(printf '%s\n' "$foldout" | awk -F'\t' '$6=="/w/alpha"{print $9}')"
 
 # ============ sl_dropped: restorable dropped tabs ============
 RMAP="work$(printf '\t')claude-work
@@ -1701,31 +1701,31 @@ personal$(printf '\t')claude-personal"
 # recording only @1 open at death (@2 was closed earlier → omitted).
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"; mkdir -p "$AGENTMUX_STATE_DIR/live"
 cat > "$ledger" <<JSON
-{"ts":200,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":200,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"alpha","window_id":"@1","window_name":"claude","cwd":"/w/alpha","agent":"work"}
 {"ts":201,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@1","label":"live1","resume_cmd":"claude --resume live1"}
-{"ts":100,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"locus","window_id":"@1","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":100,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"alpha","window_id":"@1","window_name":"claude","cwd":"/w/alpha","agent":"work"}
 {"ts":101,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@1","label":"drop1","resume_cmd":"claude --resume drop1"}
-{"ts":90,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"old","window_id":"@2","window_name":"claude","cwd":"/w/locus","agent":"work"}
+{"ts":90,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"old","window_id":"@2","window_name":"claude","cwd":"/w/alpha","agent":"work"}
 {"ts":91,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@2","label":"closed2","resume_cmd":"claude --resume closed2"}
 {"ts":80,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"notes","window_id":"@3","window_name":"claude","cwd":"/w/notes","agent":"personal"}
 {"ts":81,"event":"resume","socket_path":"/s/b","server_pid":9981,"window_id":"@3","label":"drop3","resume_cmd":"claude --resume drop3"}
-{"ts":70,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"sh","window_id":"@4","window_name":"shell","cwd":"/w/locus","agent":"shell"}
+{"ts":70,"event":"open","socket_path":"/s/b","server_pid":9981,"session":"sh","window_id":"@4","window_name":"shell","cwd":"/w/alpha","agent":"shell"}
 JSON
 printf '@1\n@3\n' > "$(_sl_live_file "/s/b" 9981)"   # @1,@3 open at death; @2 closed earlier
 
-# per-project /w/locus: only @1 (dead, open-at-death, work) — NOT @2 (closed),
+# per-project /w/alpha: only @1 (dead, open-at-death, work) — NOT @2 (closed),
 # NOT @4 (shell), NOT the live server's window, NOT /w/notes.
-out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/locus")
-_assert "dropped(locus): one row"        "1"          "$(printf '%s\n' "$out" | grep -c .)"
-_assert "dropped(locus): agent"          "work"       "$(printf '%s\n' "$out" | cut -f1)"
-_assert "dropped(locus): cwd"            "/w/locus"   "$(printf '%s\n' "$out" | cut -f2)"
-_assert "dropped(locus): swapped resume" "claude-work --resume drop1" "$(printf '%s\n' "$out" | cut -f3)"
-_assert "dropped(locus): omits live"     "0"          "$(printf '%s\n' "$out" | grep -c 'live1')"
-_assert "dropped(locus): omits closed"   "0"          "$(printf '%s\n' "$out" | grep -c 'closed2')"
-_assert "dropped(locus): omits notes"    "0"          "$(printf '%s\n' "$out" | grep -c 'drop3')"
-_assert "dropped(locus): omits shell"    "0"          "$(printf '%s\n' "$out" | grep -c '@4\|shell')"
+out=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/alpha")
+_assert "dropped(alpha): one row"        "1"          "$(printf '%s\n' "$out" | grep -c .)"
+_assert "dropped(alpha): agent"          "work"       "$(printf '%s\n' "$out" | cut -f1)"
+_assert "dropped(alpha): cwd"            "/w/alpha"   "$(printf '%s\n' "$out" | cut -f2)"
+_assert "dropped(alpha): swapped resume" "claude-work --resume drop1" "$(printf '%s\n' "$out" | cut -f3)"
+_assert "dropped(alpha): omits live"     "0"          "$(printf '%s\n' "$out" | grep -c 'live1')"
+_assert "dropped(alpha): omits closed"   "0"          "$(printf '%s\n' "$out" | grep -c 'closed2')"
+_assert "dropped(alpha): omits notes"    "0"          "$(printf '%s\n' "$out" | grep -c 'drop3')"
+_assert "dropped(alpha): omits shell"    "0"          "$(printf '%s\n' "$out" | grep -c '@4\|shell')"
 
-# --global: both dead dropped tabs (drop1 in locus, drop3 in notes), swapped.
+# --global: both dead dropped tabs (drop1 in alpha, drop3 in notes), swapped.
 outg=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
 _assert "dropped(--global): two rows"    "2"          "$(printf '%s\n' "$outg" | grep -c .)"
 _assert "dropped(--global): has drop1"   "1"          "$(printf '%s\n' "$outg" | grep -c 'claude-work --resume drop1')"
@@ -1733,7 +1733,7 @@ _assert "dropped(--global): has drop3"   "1"          "$(printf '%s\n' "$outg" |
 
 # ============ --pending: --new's filter, without --new's marking ============
 # --pending sees an un-offered drop, exactly as --new would.
-outp=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
+outp=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha")
 # What --pending PROMISES is a boolean: its only consumer (bin/amux's _amux_probe)
 # tests the output for emptiness and never reads the rows, so the sidecar fast path
 # answers it with one synthetic line. Assert that contract, not the row text.
@@ -1821,17 +1821,17 @@ rm -rf "$_scope_dir"; unset _ignore
 # THE REGRESSION GUARD: --pending must not write the notified marker. If it did, warden's
 # 5s probe would burn the gate on its first pass and the ghost would render once, never again.
 rm -f "$(_sl_state_dir)/notified"
-SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus" >/dev/null
+SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha" >/dev/null
 _assert "pending: does NOT mark notified" "0" "$([ -s "$(_sl_state_dir)/notified" ] && echo 1 || echo 0)"
 
 # --pending is repeatable: N calls give the same answer (the polling case).
-outp2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
+outp2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha")
 _assert "pending: repeatable"            "$outp"  "$outp2"
 
 # --pending respects a marker --new already wrote (the ghost clears once amux has offered).
 rm -f "$(_sl_state_dir)/notified"
-SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/locus" >/dev/null
-outp3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/locus")
+SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha" >/dev/null
+outp3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha")
 _assert "pending: empty after --new offered" "0" "$(printf '%s' "$outp3" | grep -c .)"
 rm -f "$(_sl_state_dir)/notified"
 
@@ -1917,17 +1917,17 @@ rm -rf "$_t2_dir"
 
 # dead server with NO sidecar (pre-feature) → all its windows count as dropped.
 rm -rf "$AGENTMUX_STATE_DIR/live"
-outn=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/locus")
+outn=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped "/w/alpha")
 _assert "dropped(no sidecar): shows @1"  "1"          "$(printf '%s\n' "$outn" | grep -c 'drop1')"
 _assert "dropped(no sidecar): shows @2"  "1"          "$(printf '%s\n' "$outn" | grep -c 'closed2')"
 
 # --- --new marks a (server,cwd) offered → second call for the SAME cwd is empty,
 #     but a DIFFERENT cwd from the same dead server is still offered. ---
 rm -rf "$AGENTMUX_STATE_DIR/live"; rm -f "$AGENTMUX_STATE_DIR/notified"
-n1=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/locus")
-_assert "--new(locus): first call shows"  "1" "$(printf '%s\n' "$n1" | grep -c 'drop1')"
-n2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/locus")
-_assert "--new(locus): second call empty" ""  "$n2"
+n1=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha")
+_assert "--new(alpha): first call shows"  "1" "$(printf '%s\n' "$n1" | grep -c 'drop1')"
+n2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha")
+_assert "--new(alpha): second call empty" ""  "$n2"
 n3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/notes")
 _assert "--new(notes): other cwd still offered" "1" "$(printf '%s\n' "$n3" | grep -c 'drop3')"
 
@@ -2138,14 +2138,14 @@ tmux() {
   case "$1 $2" in
     "display-message -p")
       shift 2; [ "$1" = "-t" ] && shift 2
-      printf '/tmp/tmux-501/default\t4242\tlocus\t@3\tclaude\t/tmp/work\n' ;;
+      printf '/tmp/tmux-501/default\t4242\talpha\t@3\tclaude\t/tmp/work\n' ;;
     *) return 0 ;;
   esac
 }
 # fold must surface the LATEST resume cmd for that window
 seedl="$AGENTMUX_STATE_DIR/seed.jsonl"
 cat > "$seedl" <<'JSON'
-{"ts":1,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"locus","window_id":"@3","window_name":"claude","cwd":"/w/locus","agent":"claude"}
+{"ts":1,"event":"open","socket_path":"/s/a","server_pid":4242,"session":"alpha","window_id":"@3","window_name":"claude","cwd":"/w/alpha","agent":"claude"}
 {"ts":2,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@3","label":"old","resume_cmd":"claude --resume old"}
 {"ts":3,"event":"resume","socket_path":"/s/a","server_pid":4242,"window_id":"@3","label":"new","resume_cmd":"claude --resume new"}
 JSON

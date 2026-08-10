@@ -172,7 +172,7 @@ time throttle for the prompt-less ones.
 - **First user message** — clearest cross-session goal statement; reliable when
   the session opens with intent. Captured via head-from-start.
 - **TodoWrite task list** — strongest goal signal *for orchestration sessions*,
-  but **absent in single-focus debugging/audit sessions** (verified: real locus
+  but **absent in single-focus debugging/audit sessions** (verified: real single-project
   sessions had zero TodoWrite calls). Never the *only* anchor.
 - **Early head turns** — good goal proxy, but interleave early *assistant*
   investigation prose that is already subgoal-flavoured and can dilute the goal.
