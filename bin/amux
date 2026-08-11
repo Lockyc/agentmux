@@ -90,6 +90,32 @@ _amux_sanitize_session() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_'; 
 # the parent and inherit its vars, but their own writes die with them. So a real launch
 # warms it once in parent context (see _amux_warm_launch_caches); a cold call (unwarmed
 # key, or a different $PWD) falls back to the fork. Same technique warms _amux_json.
+# Re-`cd` into the canonical form of $PWD, so every later read of $PWD in this process
+# is the string tmux will record. THE ONE NORMALISATION POINT: amux identifies a project
+# by $PWD in four places — the socket shard (below), the restore-picker scope (`dropped
+# --new "$PWD"`), warden's presence probe, and the `[*.dirs]` config tables — and the
+# session ledger identifies the same project by tmux's #{pane_current_path}, which is
+# getcwd(). $PWD is the path as the user TYPED it, so the two disagree the moment you cd
+# through a symlink, or type a different case on a case-insensitive filesystem (APFS/HFS+,
+# i.e. every stock Mac). Every one of those lookups is exact string equality, so a single
+# alternate spelling silently forks the project in two: a second tmux server for the same
+# dir, and a restore offer that can never match the ledger rows it is hunting for. That
+# was a real, total loss of crash recovery — tabs opened from `…/LSJC/business` were
+# invisible to `amux --restore` run in that very directory, because the ledger said
+# `…/lsjc/business`. Normalising ONCE here fixes all four by construction; normalising at
+# each lookup would be four copies of one fact, and the next lookup added would forget.
+#
+# `env pwd -P` is load-bearing and must not become a bare `pwd -P`: bash's BUILTIN pwd
+# resolves symlinks TEXTUALLY out of $PWD and never calls getcwd(), so it returns the
+# typed case unchanged and silently fixes nothing (verified: builtin gives `…/LSJC/…`,
+# `env pwd -P` gives `…/lsjc/…`). `env` is what reaches past the builtin to the real
+# binary. One fork per amux invocation, on entry only — not a hot path.
+_amux_canonicalise_pwd() {
+  local _p
+  _p=$(env pwd -P 2>/dev/null) || return 0
+  [ -n "$_p" ] && [ "$_p" != "$PWD" ] || return 0
+  cd -- "$_p" 2>/dev/null || true
+}
 _amux_pwd_hash() {
   if [ "${_amux_pwd_hash_key-}" = "$PWD" ] && [ -n "${_amux_pwd_hash_val-}" ]; then
     printf '%s\n' "$_amux_pwd_hash_val"; return
@@ -1564,6 +1590,14 @@ _amux_ensure_agent_session() {
 amux() {
   local agent_name="" session_arg="" no_frame=""
 
+  # FIRST statement, before any subcommand dispatches: every path below keys on $PWD
+  # (shard, restore scope, probe, [*.dirs] config), so the normalisation has to happen
+  # ahead of all of them, not just on the launch path — `--probe` and `--restore` are
+  # exactly where the spelling mismatch showed up. Safe here: amux is executed as its
+  # own process (the shell wrappers `command`-invoke it), so this cd cannot move the
+  # user's shell.
+  _amux_canonicalise_pwd
+
   if [ $# -gt 0 ]; then
     case "$1" in
       @*)
@@ -1795,6 +1829,34 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
       echo "FAIL: $desc — expected '$expected' got '$actual'"; fail=$((fail+1))
     fi
   }
+
+  # --- The project dir is canonicalised before anything keys on it. Everything
+  #     amux identifies a project by — the socket shard, the restore-picker scope,
+  #     warden's presence probe, the [*.dirs] config tables — reads $PWD, while the
+  #     ledger's cwd comes from tmux (getcwd). Two spellings of one dir therefore
+  #     fork the project in two. A SYMLINKED dir is the portable lever for this (a
+  #     case-only variant needs a case-insensitive filesystem, so it can't be
+  #     asserted on CI); both spellings resolve through the same getcwd, so this
+  #     covers the case-variant bug it was written for. Run in subshells: the
+  #     helper cd's, and the selftest's own cwd must not move.
+  _cp_tmp=$(mktemp -d); mkdir -p "$_cp_tmp/real"; ln -s "$_cp_tmp/real" "$_cp_tmp/link"
+  _cp_real=$(cd "$_cp_tmp/real" && env pwd -P)
+  _assert "canonical pwd: resolves a symlinked project dir" "$_cp_real" \
+    "$(cd "$_cp_tmp/link" && _amux_canonicalise_pwd && printf '%s' "$PWD")"
+  # The payoff, and the actual bug: one project must not shard onto two sockets.
+  # The expectation is derived INDEPENDENTLY from the resolved path — comparing the
+  # two spellings' sockets to each other would pass vacuously while the helper is
+  # still missing (both sides empty), which is exactly what it did when written.
+  # AGENTMUX_AGENT_SOCKET is cleared because an override wins verbatim and would
+  # answer with a constant no matter what $PWD says.
+  _cp_want="agentmux-agent-$(printf '%s' "$_cp_real" | cksum | cut -d' ' -f1)"
+  _assert "canonical pwd: both spellings shard to ONE socket" "$_cp_want" \
+    "$(cd "$_cp_tmp/link" && unset AGENTMUX_AGENT_SOCKET && _amux_canonicalise_pwd && _amux_agent_sock)"
+  # Idempotent: canonicalising an already-canonical dir is a no-op, so calling it
+  # on every entry path can never walk the dir somewhere new.
+  _assert "canonical pwd: idempotent" "$_cp_real" \
+    "$(cd "$_cp_tmp/real" && _amux_canonicalise_pwd && _amux_canonicalise_pwd && printf '%s' "$PWD")"
+  rm -rf "$_cp_tmp"
 
   # --complete emits agent names and -flags (newline-separated).
   completions=$(amux --complete)
