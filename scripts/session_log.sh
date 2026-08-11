@@ -968,32 +968,46 @@ sl_dropped() {
     ' \
   | sort -t"$TAB" -k2,2nr \
   | awk -F"$TAB" -v OFS="$TAB" '
-      # LAST CRASH ONLY: rows are ts-desc, so the first row names the single
-      # most-recently-active dead server (the crash we recover from); every other
-      # dead server in the ledger is history, not a recovery target. Then DEDUP by
-      # the resume session id (last token of the resume command) so a session that
-      # lived in >1 window of that server surfaces once. First-seen wins = newest
-      # (input already ts-desc).
+      # LAST CRASH ONLY, PER CWD: rows are ts-desc, so the first row seen for a cwd
+      # names that project'"'"'s most-recently-active dead server (the crash we recover
+      # from there); every older dead server of the SAME project is history, not a
+      # recovery target. Keyed per cwd, NOT once for the whole query: a scoped query
+      # has one cwd and so is unaffected, but --global spans projects, and a single
+      # global winner discarded every other project outright. That is precisely the
+      # reboot case — every server on the machine dies in the same instant, so
+      # "the last crash" is all of them — and it is the one case --global exists for.
+      # (_amux_restore_pick global renders a per-project header per group, i.e. it was
+      # already built for the multi-project answer this could not produce.)
+      # Then DEDUP by the resume session id (last token of the resume command) so a
+      # session that lived in >1 window of that server surfaces once. First-seen wins
+      # = newest (input already ts-desc); the id is unique across projects, so one
+      # shared seen[] is right.
       #
       # Then RE-ORDER to the original tab order, window-id ascending: the emitted
       # rows ARE the restored tab order (_amux_restore_into makes one window per
       # line, in order), so leaving them ts-desc restored a crashed session with
       # its tabs reversed. Both orderings are needed and they are not the same
       # ordering — recency selects WHICH rows survive, window id decides where each
-      # surviving tab lands. Emit the sort key as a leading numeric column (`@`
-      # stripped, so @10 sorts after @2 rather than between @1 and @2) and cut it
-      # off after. Every surviving row is from ONE server (best, above), so the ids
-      # are mutually comparable; a legacy row with no window id sorts to the front.
-      NR==1 { best=$1 }
-      $1 != best { next }
-      { m=split($5, g, " "); uuid=g[m]
+      # surviving tab lands. Emit the sort key as leading numeric columns (`@`
+      # stripped, so @10 sorts after @2 rather than between @1 and @2) and cut them
+      # off after. Window ids are unique per SERVER only, so they are mutually
+      # comparable only within one project — hence the PROJECT rank leads the key,
+      # keeping each project'"'"'s tabs contiguous and its windows in order. Rank is
+      # assignment order over the ts-desc stream, i.e. projects come out
+      # most-recently-active first (the scoped modes have exactly one project, so
+      # this is inert for them). A legacy row with no window id sorts to the front
+      # of its project.
+      { cwd=$4
+        if (!(cwd in best)) { best[cwd]=$1; rank[cwd]=++nproj }
+        if ($1 != best[cwd]) next
+        m=split($5, g, " "); uuid=g[m]
         if (uuid in seen) next
         seen[uuid]=1
         wn=$6; sub(/^@/, "", wn)
-        print wn+0, $3, $4, $5, $2 }
+        print rank[cwd], wn+0, $3, $4, $5, $2 }
     ' \
-  | sort -t"$TAB" -k1,1n \
-  | cut -f2-
+  | sort -t"$TAB" -k1,1n -k2,2n \
+  | cut -f3-
 
   rm -f "$rows" "$state"
 }
@@ -1987,21 +2001,41 @@ _assert "order: all three rows present" "3" "$(printf '%s\n' "$od" | grep -c .)"
 _assert "order: maxts still per-row recency" "110 210 310" \
   "$(printf '%s\n' "$od" | awk -F'\t' '{printf "%s%s", (NR>1?" ":""), $4} END{print ""}')"
 
-# --- --global honours last-crash-only too: newest dead server, across all its cwds ---
+# --- last-crash-only is PER CWD, not per query. Within one project the older dead
+#     server is history and stays hidden; ACROSS projects every project gets its own
+#     winner, because a reboot kills every server at once and a single global winner
+#     would silently discard every other project's tabs. /w/shared holds two dead
+#     servers (only the newer may show); /w/new1 and /w/new2 are the other projects. ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/live"
 cat > "$ledger" <<JSON
-{"ts":100,"event":"open","socket_path":"/s/a","server_pid":8001,"session":"x","window_id":"@1","window_name":"claude","cwd":"/w/old","agent":"work"}
+{"ts":100,"event":"open","socket_path":"/s/a","server_pid":8001,"session":"x","window_id":"@1","window_name":"claude","cwd":"/w/shared","agent":"work"}
 {"ts":101,"event":"resume","socket_path":"/s/a","server_pid":8001,"window_id":"@1","label":"oldg","resume_cmd":"claude --resume oldg"}
+{"ts":150,"event":"open","socket_path":"/s/c","server_pid":8003,"session":"x2","window_id":"@1","window_name":"claude","cwd":"/w/shared","agent":"work"}
+{"ts":151,"event":"resume","socket_path":"/s/c","server_pid":8003,"window_id":"@1","label":"newshared","resume_cmd":"claude --resume newshared"}
+{"ts":140,"event":"open","socket_path":"/s/c","server_pid":8003,"session":"x2","window_id":"@2","window_name":"claude","cwd":"/w/shared","agent":"work"}
+{"ts":141,"event":"resume","socket_path":"/s/c","server_pid":8003,"window_id":"@2","label":"sharedw2","resume_cmd":"claude --resume sharedw2"}
 {"ts":200,"event":"open","socket_path":"/s/b","server_pid":8002,"session":"y","window_id":"@1","window_name":"claude","cwd":"/w/new1","agent":"work"}
 {"ts":201,"event":"resume","socket_path":"/s/b","server_pid":8002,"window_id":"@1","label":"newg1","resume_cmd":"claude --resume newg1"}
 {"ts":202,"event":"open","socket_path":"/s/b","server_pid":8002,"session":"z","window_id":"@2","window_name":"claude","cwd":"/w/new2","agent":"work"}
 {"ts":203,"event":"resume","socket_path":"/s/b","server_pid":8002,"window_id":"@2","label":"newg2","resume_cmd":"claude --resume newg2"}
 JSON
 g=$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --global)
-_assert "global last-crash: newest server both cwds" "2" "$(printf '%s\n' "$g" | grep -c .)"
-_assert "global last-crash: hides older server"      "0" "$(printf '%s\n' "$g" | grep -c 'oldg')"
+_assert "global last-crash: every project offered"    "4" "$(printf '%s\n' "$g" | grep -c .)"
+_assert "global last-crash: hides older server in the SAME cwd" "0" "$(printf '%s\n' "$g" | grep -c 'oldg')"
+_assert "global last-crash: shows that cwd's newer server"      "1" "$(printf '%s\n' "$g" | grep -c 'newshared')"
 _assert "global last-crash: shows newest new1"       "1" "$(printf '%s\n' "$g" | grep -c 'newg1')"
 _assert "global last-crash: shows newest new2"       "1" "$(printf '%s\n' "$g" | grep -c 'newg2')"
+# Projects come out most-recently-active first (so the picker leads with the project you
+# were last in), and each project's tabs stay CONTIGUOUS — the two orderings compose, they
+# do not compete. /w/shared trails on recency (ts 151 < 203) despite holding the oldest and
+# newest rows in the fixture.
+_assert "global last-crash: projects ordered by recency, contiguous" "/w/new2 /w/new1 /w/shared /w/shared" \
+  "$(printf '%s\n' "$g" | awk -F'\t' '{printf "%s%s", (NR>1?" ":""), $2} END{print ""}')"
+# WITHIN a project, window id still decides — @1 before @2 — even though @2 is the older
+# row and the stream reaching this stage was ts-desc. Window ids are unique per server, so
+# this ordering is only meaningful inside one project; that is why project rank leads the key.
+_assert "global last-crash: within a project, window order not recency" "newshared sharedw2" \
+  "$(printf '%s\n' "$g" | awk -F'\t' '$2=="/w/shared"{printf "%s%s", (++k>1?" ":""), $3}' | sed 's/claude-work --resume //g')"
 
 # --- resume enrichment + dedup, env-less FALLBACK path (no $TMUX → key derived
 #     from the stubbed _sl_ctx: pid 4242, @3) ---
