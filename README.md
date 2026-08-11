@@ -6,7 +6,7 @@
 ![Built with tmux](https://img.shields.io/badge/built%20with-tmux-1BB91F?logo=tmux&logoColor=white)
 [![License](https://img.shields.io/github/license/lockyc/agentmux)](LICENSE)
 
-Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix m` cycles through the list.
+Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix m` cycles through the list. `amux @host` runs the same session on a [remote machine](#remote-sessions), transport-only from your laptop.
 
 ![agentmux overview](docs/overview.png)
 
@@ -99,6 +99,7 @@ Normal shell commands — type them at a prompt.
 | `amux <agent>` | New/attach session, agent by name |
 | `amux <agent> <session>` | New/attach named session with specified agent |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
+| `amux --sessions-json` | The same, as JSON keyed on project **directory** rather than name — always valid JSON (`[]` when nothing is running). For scripting, and how `amux @host` answers a whole host's liveness in one query instead of probing per project |
 | `amux attach <name>` | Attach to a running agent session by name, from any directory — resolves which project's per-project socket is hosting it |
 | `amux @<host> [project]` | Launch/attach a session on a remote host from `[[hosts]]` — see [Remote sessions](#remote-sessions) |
 | `amux --restore [--global]` | Pick dropped agent tabs (lost to a crash/reboot) to relaunch — this project by default, `--global` for all. Also offered automatically when you launch `amux` in a project with dropped tabs |
