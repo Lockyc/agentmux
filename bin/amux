@@ -831,6 +831,16 @@ _amux_frame() {
   # reason as extkeys). The feature is computed at attach, so a live frame picks it up on
   # the next reattach, not instantly.
   tmux -L "$sock" set-option -as terminal-features 'xterm*:sync,screen*:sync,tmux*:sync'
+  # Hyperlinks (OSC 8): the frame must re-emit the agent's hyperlinks to the host, or a
+  # clickable link (Claude Code renders its search citations as OSC 8) arrives at warden as
+  # plain styled text with the URL nowhere on screen — nothing for ghostty to detect, since
+  # its other link path matches URL *text* in the cells. tmux gates re-emission on the
+  # `hyperlinks` feature and derives it from the terminfo `Hls` cap, which xterm-ghostty does
+  # not ship at all (unlike Sync, which it ships and tmux still ignores), so naming it is the
+  # only way. frame.conf sets it for a fresh server; this keeps a pre-existing frame current
+  # (same long-lived-server reason as sync). Computed at attach, so a live frame picks it up
+  # on the next reattach.
+  tmux -L "$sock" set-option -as terminal-features 'xterm*:hyperlinks,screen*:hyperlinks'
   # Reset-split binding + its per-session data, asserted here (not just frame.conf)
   # for the same long-lived-server reason as the hook above: a frame server
   # predating this feature has no @amux_left/@amux_left_pane and no `0` override.
