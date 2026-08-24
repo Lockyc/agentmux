@@ -473,11 +473,14 @@ _amux_note_opts() {
 }
 
 # The effective frame prefix for $PWD: [frame] prefix, or frame.conf's built-in
-# default when unset. Kept in sync with `set -g prefix` in tmux/frame.conf.
-_AMUX_FRAME_PREFIX_DEFAULT="C-f"
+# default when unset. The default is READ from frame.conf's `set -g prefix` line, not
+# restated here: this value only feeds the [amux]/[frame] collision guard, and a
+# second copy of the literal would let a changed frame.conf default pass a colliding
+# [amux] prefix through the guard silently (the frame then shadows it unwarned).
 _amux_frame_prefix() {
   local p; p=$(agentmux_frame_field prefix "$PWD")
-  printf '%s' "${p:-$_AMUX_FRAME_PREFIX_DEFAULT}"
+  [ -z "$p" ] && p=$(sed -n 's/^set -g prefix \([^ ]*\).*/\1/p' "$AGENTMUX_TMUX/frame.conf")
+  printf '%s' "$p"
 }
 
 # Resolve the per-session prefix for the amux (agent) session: [amux] prefix,

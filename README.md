@@ -339,14 +339,20 @@ colour = "green"
 code like `"colour82"`/`"82"` — agentmux derives the active and inactive tab shades
 from it automatically. Run `amux --colours pick myagent` to choose one interactively
 and get a paste-ready line. For full manual control, skip `colour` and set the raw
-tmux styles instead (see [Optional per-agent fields](#optional-per-agent-fields)).
+tmux styles instead (see [the `[[agents]]` table](#agents--one-block-per-agent)).
 
 The new agent appears in the `prefix m` cycle immediately (no reload needed).
 
-## Optional per-agent fields
+## Configuration reference
+
+Every key `~/.agentmux/amux.toml` reads, grouped per level. `config/amux.toml.example` is the annotated tour; these tables are the complete list. Env overrides are named where one exists.
+
+### `[[agents]]` — one block per agent
 
 | Field | Default | Effect |
 |---|---|---|
+| `name` | required | Agent name — what `amux <agent>` takes, and the `@agent-mode` value `prefix m` cycles through |
+| `cmd` | required | Command the agent tab runs (env assignments allowed, e.g. `CLAUDE_CONFIG_DIR=~/.claude-work claude`) |
 | `flag` | — | Single-letter shorthand for `amux -<flag>` |
 | `dirs` | — | List of directories; a bare `amux` run inside one (or any subdirectory) auto-selects this agent. `~` → `$HOME`; longest match wins. See [Directory-based agent selection](#directory-based-agent-selection) |
 | `label` | name | Short display name used in tmux tab labels (e.g. `label = "pers"` for a `name = "personal"` agent) |
@@ -355,6 +361,73 @@ The new agent appears in the `prefix m` cycle immediately (no reload needed).
 | `keep_alive` | false | Appends `; exec $SHELL` so the tab stays open after the agent exits |
 | `reattach` | false | Uses `reattach-to-user-namespace` (macOS clipboard fix); requires `keep_alive = true` |
 | `resume` | — | Resume program for this agent's windows, used by both the restore picker (`amux --restore`) and `prefix f` (fork). Overrides just the executable of the recorded resume command (e.g. `resume = "claude-work"` → `claude-work --resume <id>`); omit to use the program the adapter recorded. Set this for any agent launched through a wrapper, or its restored and forked tabs start with the bare program |
+
+### `[amux]` — the agent session
+
+Per-directory overrides: `[amux.dirs."<path>"]` blocks, matched like an agent's `dirs` (longest path wins, `~` → `$HOME`).
+
+| Key | Default | What it does |
+|---|---|---|
+| `prefix` | your `~/.tmux.conf` prefix | Prefix for the amux session only (a session option). Must differ from the `[frame]` prefix — a colliding value is ignored with a warning, since the frame would shadow it. Cascades to `[amux.dirs]` |
+| `session_colour` | — (auto-assigned) | Pin this directory's status-bar colour by name (`amux --colours` lists them) and reserve it from the auto-assign pool. Only meaningful inside a `[amux.dirs."<path>"]` block. See [Session colours](#session-colours) |
+
+### `[frame]` — the `--frame` side-terminal layout
+
+Per-directory overrides: `[frame.dirs."<path>"]` blocks, resolved per field. See [Side-terminal layout](#side-terminal-layout---frame).
+
+| Key | Default | What it does |
+|---|---|---|
+| `left` | `30` | Left (scratch terminal) pane width, percent |
+| `prefix` | `C-f` (from `tmux/frame.conf`) | The frame's own prefix for focus/resize/quit. Must differ from the `[amux]` prefix |
+| `left_vertical_split` | unset (single left pane) | Percent height (`10`–`90`) of a top region of plain shells above the scratch terminal |
+| `left_top_panes` | `1` | Plain shells stacked in that top region (`1`–`6`); needs `left_vertical_split` |
+| `focus` | `"agent"` | Pane focused at launch: `"agent"` (right) or `"terminal"` (left column) |
+| `status_position` | `"bottom"` | Where the frame's status bar sits: `"bottom"` or `"top"` |
+| `default` | `false` | Make a bare `amux` open a frame (`amux --no-frame` for a one-off plain launch). Skipped inside an existing tmux unless `allow_nested` |
+| `allow_nested` | `false` | Let `--frame` run inside an existing tmux (stacks prefixes; refused otherwise) |
+
+### `[notes]` — the always-on note row
+
+Per-directory overrides: `[notes.dirs."<path>"]`, same shape as `[frame]`'s. See [The always-on note row](#the-always-on-note-row).
+
+| Key | Default | What it does |
+|---|---|---|
+| `row` | `false` | Show a fourth, always-visible per-tab note row (five status lines instead of four). Apply a change with `amux --reload` or by re-running `amux` in the project |
+
+### `[log]` — the session ledger
+
+| Key | Default | What it does |
+|---|---|---|
+| `sessions` | `true` | Record every agent window amux opens, so `amux --restore` (and the offer a bare `amux` makes after a crash) can relaunch them; also carries the session id `prefix f` forks from. Env: `AGENTMUX_SESSION_LOG=1/0` |
+
+### `[update]` — version check
+
+| Key | Default | What it does |
+|---|---|---|
+| `check` | `false` | Once-daily check for a newer agentmux on GitHub; notify-only (run `amux --update` to apply). Env: `AGENTMUX_VERSION_CHECK=1/0` |
+
+### `[llm]` — the AI summary endpoint
+
+Any OpenAI-compatible `/v1/chat/completions` server (LM Studio, Ollama, llama.cpp). Each request needs ≥ 4096 tokens of context — see the example file's notes and [AI summary status lines](#ai-summary-status-lines).
+
+| Key | Default | What it does |
+|---|---|---|
+| `url` | `http://localhost:1234/v1/chat/completions` | Endpoint. Env: `AGENTMUX_LLM_URL` |
+| `model` | `qwen2.5-14b-instruct` | Model name sent in the request. Env: `AGENTMUX_LLM_MODEL` |
+| `timeout` | `45` (`_AMUX_LLM_TIMEOUT_DEFAULT` in `scripts/llm-config.sh`) | Per-request cap in seconds — a cap, not a wait. Env: `AGENTMUX_LLM_TIMEOUT` |
+
+### `[[hosts]]` — remote machines for `amux @<name>`
+
+See [Remote sessions](#remote-sessions). There is deliberately no user/port/key field: `ssh` names a target or `~/.ssh/config` alias and ssh owns reaching it.
+
+| Key | Default | What it does |
+|---|---|---|
+| `name` | required | What you type after `@` |
+| `ssh` | required | ssh target (`user@host`) or a `~/.ssh/config` Host alias |
+| `roots` | — | Remote directories searched for `<project>` (and listed by the picker); `~` expands on the remote |
+| `transport` | `"ssh"` | `ssh` (multiplexed, full escape transparency), `et` (Eternal Terminal, auto-reconnect), or `mosh` (warns: drops the OSC 777/OSC 52/passthrough escapes agentmux relies on) |
+| `agent` | — | Agent name passed to the remote `amux` |
+| `amux` | `"$HOME"/.agentmux/bin/amux` | Remote amux program; inserted unquoted into a remote `sh -c`, so it may carry env or a wrapper |
 
 ## Adding an agent integration
 

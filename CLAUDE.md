@@ -134,7 +134,7 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 | `tmux/frame.conf` | `amux --frame` outer wrapper config (own socket; no `~/.tmux.conf`) |
 | `tmux/term.conf` | `amux --frame` left scratch terminal config (own socket; persistent) |
 | `tmux/agent.conf` | Agent socket config, loaded via `-f` by `_amux_atmux` (sources `agentmux.conf`; no `~/.tmux.conf`/TPM). Keeps a cold per-project agent server fast |
-| `config/amux.toml.example` | Example agent config |
+| `config/amux.toml.example` | Example agent config. **A new config key lands in the README `## Configuration reference` table in the same change as its parser** — the table is a second copy of the key list by construction and stays honest only by moving with the code |
 | `config/user.tmux.conf.example` | Template for the optional **per-role** user tmux overlays — `~/.agentmux/user.{agent,frame,term}.tmux.conf`, each `source-file -q`'d last by its own socket so it overrides amux's defaults without a binding leaking across roles (a shared file would break the frame's C-f layout). The escape hatch for the deliberate `~/.tmux.conf` isolation |
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
