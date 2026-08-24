@@ -3,6 +3,25 @@
 # Provides config reader functions. Requires: toml2json, jq.
 # Override config path: export AGENTMUX_CONFIG=<path>
 
+# Idempotence guard. Eight scripts source this file and several source each other
+# (remote_attach.sh -> remote.sh -> here), so one process could load it repeatedly —
+# bin/amux alone did it twice per invocation. Re-sourcing is pure cost: the function
+# definitions are identical and the rename migration below is a no-op the second time.
+#
+# The flag is shared with bin/amux's `_amux_need config` — that helper checks this exact
+# variable rather than keeping its own, so the two can never disagree about whether this
+# file is loaded. Deliberately NOT exported: the selftest below runs via
+# `bash scripts/agentmux-config.sh`, a fresh process where the flag must be unset so the
+# file loads in full.
+#
+# Cache invalidation does NOT go through re-sourcing — callers assign
+# `_amux_json_cache=""` directly (dozens of sites) — so guarding this cannot stale a
+# cached read.
+if [ -n "${_AMUX_LOADED_CONFIG:-}" ]; then
+  return 0
+fi
+_AMUX_LOADED_CONFIG=1
+
 AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 
 # One-time migration for installs that crossed the agents.toml -> amux.toml rename

@@ -7,7 +7,22 @@
 #               AGENTMUX_SCRIPTS (default: <dir of this script>/../scripts)
 
 AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
-AGENTMUX_SCRIPTS="${AGENTMUX_SCRIPTS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" 2>/dev/null && pwd)}"
+
+# Install root, canonicalised ONCE — then every derived path is pure parameter
+# expansion off it. This used to be three separate
+# `$(cd "$(dirname "${BASH_SOURCE[0]}")/../<dir>" && pwd)` expansions (scripts/, tmux/,
+# bin/) plus a `basename`: ~7 forks before amux had even looked at its arguments, paid
+# by every invocation — including warden's per-tab presence probe, which runs on a ~5s
+# floor per tab and is the hottest command amux has. `${_amux_bindir%/*}` is the install
+# root, already absolute and `..`-free because _amux_bindir was canonicalised, so the
+# derived paths need no second `cd` to normalise them.
+_amux_self="${BASH_SOURCE[0]}"
+case "$_amux_self" in
+  */*) _amux_bindir="${_amux_self%/*}" ;;
+  *)   _amux_bindir="." ;;
+esac
+_amux_bindir="$(cd "$_amux_bindir" 2>/dev/null && pwd)"
+AGENTMUX_SCRIPTS="${AGENTMUX_SCRIPTS:-${_amux_bindir%/*}/scripts}"
 
 # BASH_SOURCE is not symlink-resolved: the default above assumes bin/ and
 # scripts/ are siblings (the install + dev layout). Fail fast with a readable
@@ -17,13 +32,52 @@ if [ ! -d "$AGENTMUX_SCRIPTS" ]; then
   exit 1
 fi
 
-source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
-source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
-# shellcheck source=scripts/remote_attach.sh
-source "$AGENTMUX_SCRIPTS/remote_attach.sh"   # also sources remote.sh
+# --- Lazy helper loading -----------------------------------------------------------
+# agent_window_style.sh (+ colours.sh) and remote_attach.sh (+ remote.sh) are ~1,800
+# lines that each re-resolve their own script dir with forks at source time, and
+# agentmux-config.sh is another ~536. NOTHING on the presence-probe path touches any of
+# them — `_amux_probe` needs only functions defined in this file — so sourcing all three
+# eagerly was the dominant cost of the command warden polls most. Load on first use.
+#
+# Idempotent, so callers never coordinate: put the `_amux_need` line at the top of a
+# function that uses one of these, not at each call site. The `_AMUX_LOADED_*` flags are
+# the in-process half of the guard agentmux-config.sh now enforces on itself for the
+# many OTHER scripts that source it directly; `config` shares that file's exact flag so
+# the two mechanisms cannot disagree about whether it is loaded.
+_amux_need() {
+  local lib
+  for lib in "$@"; do
+    case "$lib" in
+      config)
+        if [ -z "${_AMUX_LOADED_CONFIG:-}" ]; then
+          source "$AGENTMUX_SCRIPTS/agentmux-config.sh"
+        fi
+        ;;
+      style)
+        # agent_window_style.sh's header requires agentmux-config.sh already sourced.
+        if [ -z "${_AMUX_LOADED_STYLE:-}" ]; then
+          _amux_need config
+          _AMUX_LOADED_STYLE=1
+          source "$AGENTMUX_SCRIPTS/agent_window_style.sh"
+        fi
+        ;;
+      remote)
+        if [ -z "${_AMUX_LOADED_REMOTE:-}" ]; then
+          _AMUX_LOADED_REMOTE=1
+          # shellcheck source=scripts/remote_attach.sh
+          source "$AGENTMUX_SCRIPTS/remote_attach.sh"   # also sources remote.sh
+        fi
+        ;;
+      *)
+        echo "amux: unknown lib '$lib'" >&2
+        return 1
+        ;;
+    esac
+  done
+}
 
 # tmux config dir (sibling of scripts/) and the dedicated sockets for --frame.
-AGENTMUX_TMUX="${AGENTMUX_TMUX:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../tmux" 2>/dev/null && pwd)}"
+AGENTMUX_TMUX="${AGENTMUX_TMUX:-${_amux_bindir%/*}/tmux}"
 # Frame/term sockets are UNSET by default in production, so the resolvers below shard
 # them per project (cksum of $PWD) — each project gets its own single-threaded tmux
 # server, draining in parallel instead of serializing every project's output (and the
@@ -59,7 +113,7 @@ AGENTMUX_AGENT_SOCKET="${AGENTMUX_AGENT_SOCKET:-}"
 export AGENTMUX_USER_DIR="${AGENTMUX_USER_DIR:-$HOME/.agentmux}"
 # Absolute path to this launcher (for --frame's right-pane re-invocation), resolved
 # once here from the same BASH_SOURCE the dirs above use.
-AGENTMUX_BIN="${AGENTMUX_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/$(basename "${BASH_SOURCE[0]}")}"
+AGENTMUX_BIN="${AGENTMUX_BIN:-$_amux_bindir/${_amux_self##*/}}"
 
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -556,6 +610,7 @@ _amux_update() {
 }
 
 _amux_launch_window0() {
+  _amux_need style
   local session="$1" agent="$2"
   local idx cmd
 
@@ -960,6 +1015,7 @@ _amux_nested_refuse() {
 # error surfaces here) → pick if needed → supervise. Nothing may retry before
 # preflight has succeeded once; see _ra_supervise.
 _amux_remote() {
+  _amux_need remote
   _amux_nested_refuse "@host" || return 1
   _rm_parse_target "$@" || { echo "amux: malformed remote target (expected @host)" >&2; return 2; }
 
@@ -1091,6 +1147,7 @@ _amux_sessions_json() {
 # WITH the resume_cmd as their pane start command, so launch_agent.sh's guard
 # skips the auto-launch. Sets the session opts a normal launch would.
 _amux_restore_into() {
+  _amux_need style
   local cwd="$1" name="${2:-}" agent rcmd win created=0 exists=0
   # Restore into the RESTORED project's shard, not the invoking process's $PWD
   # shard (bash dynamic scoping makes every _amux_atmux/_amux_session_exists
@@ -1608,6 +1665,19 @@ amux() {
   # user's shell.
   _amux_canonicalise_pwd
 
+  # Config choke point. 20 functions below read config, so loading it here — once,
+  # ahead of dispatch — is what keeps `_amux_need config` off 20 call sites. `--probe`
+  # is the one exemption: it reads no config at all (verified: none of
+  # _amux_default_session_name / _amux_{agent,frame}_session_is_mine / the socket
+  # resolvers touch an agentmux_* function), and it is the path warden polls per tab, so
+  # it must not pay for 536 lines it never uses. Exempt a subcommand here ONLY after
+  # checking the same way; a wrong exemption is an "unbound function" at runtime, not a
+  # compile error.
+  case "${1:-}" in
+    --probe) ;;
+    *) _amux_need config ;;
+  esac
+
   if [ $# -gt 0 ]; then
     case "$1" in
       @*)
@@ -1712,6 +1782,7 @@ amux() {
         # one caller passing --refresh); a launch resolves live through preflight
         # and never touches the roster, so a repo cloned a minute ago is
         # launchable before completion has noticed it.
+        _amux_need remote
         local _crf; _crf="$(_rm_roster_cache_file "${1:-}")"
         [ -s "$_crf" ] && sed 's#.*/##' "$_crf"
         return 0
@@ -1811,6 +1882,12 @@ EOF
 
 # Self-test: AMUX_SELFTEST=1 bash bin/amux
 if [ "${AMUX_SELFTEST:-}" = "1" ]; then
+  # The selftest is a SECOND entry point into this file: it calls internal functions
+  # (_amux_frame, _amux_note_row, ...) directly instead of going through amux(), so the
+  # config choke point in amux() never runs for it. Load config here for the same reason
+  # that choke point exists — miss this and a config read silently returns empty, which
+  # surfaces as a wrong-behaviour assertion (a lifted guard still firing), not an error.
+  _amux_need config
   _selftest_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AGENTMUX_CONFIG="$_selftest_dir/../config/amux.toml.example"
   _amux_json_cache=""

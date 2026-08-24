@@ -419,3 +419,41 @@ single separating space) before multiplying, e.g. `(18 - (. | length) | if . < 1
 
 **Trigger to revisit:** a real project name reaches 18+ characters and the picker's output
 is reported as hard to read.
+
+## Batch presence probing: one `amux` process answers N tabs
+
+**Status:** deferred — the per-probe cost that motivated it has been cut ~2× by lazy
+helper loading (see `bin/amux`'s `_amux_need`), so this is no longer urgent for a normal
+window. It stays worth doing for a wide `[[window.root]]`.
+
+**Where:** `bin/amux` → `_amux_probe` / the `--probe` dispatch arm; consumer is warden's
+`probe.rs` (`sweep`, `MAX_PROBE_CONCURRENCY`).
+
+**What:** warden forks one `sh -c "amux --probe"` **per tab**, so a burst costs
+`N × (interpreter + script load + check)` when only the check varies. A `--probe-many
+<dir>…` that emits one presence verdict per line would make it `1 × load + N × checks`.
+
+**The numbers that motivate it** (measured 2026-08-24, M3 Max, before lazy loading):
+a probe was ~102ms of which the single `tmux` presence check — the only part that
+answers the question — was ~7ms. A 5-tab burst spent ~0.42s of CPU in a ~94ms window.
+Connecting to all 9 agent sockets directly to test liveness takes 0.28ms with zero forks,
+so the floor here is very low; almost all of the cost is per-process, which is exactly
+what batching removes.
+
+**Why not just have warden check the sockets itself:** it would have to re-encode amux's
+session naming and socket sharding (`agentmux-{agent,frame}-<cksum $PWD>`) in Rust — a
+second source of truth for the layout, which drifts the moment the sharding changes.
+warden's README is explicit that the probe stays a one-liner so it "can't drift from
+amux's internals." Batching keeps that property: amux still owns the layout, warden just
+asks about N dirs instead of one.
+
+**Shape when we act on it:** `amux --probe-many` reads dirs (argv or stdin, one per line)
+and prints `<exit-code> <dir>` per line, reusing `_amux_probe`'s own logic per dir so the
+single-dir and batch answers cannot disagree. Note the wrinkle: `_amux_probe`'s CWD-derived
+path keys on `$PWD` (canonicalised once on entry to `amux()`), so a batch mode must
+canonicalise **per dir** — `_amux_canonicalise_pwd` is the one normalisation point and a
+batch loop is a fourth caller of it, not a place to re-derive the rule.
+
+**Trigger to revisit:** a `[[window.root]]` over a big tree (dozens of discovered tabs)
+where the sweep's CPU burst becomes visible again, or if `probe_interval` ever needs to
+go below the current floor.
