@@ -398,6 +398,16 @@ _amux_frame_default() {
   [ "$(agentmux_frame_field default "$PWD")" = "true" ] && echo 1 || echo ""
 }
 
+# THE frame-vs-plain decision, in one place: `[frame] default = true` opens a frame
+# unless this run passed --no-frame. Both callers must agree — a bare `amux` launch
+# and `amux --restore`'s attach step — because they land the user in the same
+# project: a restore that attached plainly put a frame-default project's tabs in a
+# bare session, and the frame the user configured simply never appeared.
+# Args: <no_frame flag> (non-empty = opted out). Echoes "1" when on, "" otherwise.
+_amux_use_frame() {
+  [ -z "${1:-}" ] && [ -n "$(_amux_frame_default)" ] && echo 1 || echo ""
+}
+
 # [notes] row: 1 when this project's fourth status row (the always-on note line)
 # is enabled, else empty. Published to tmux as @amux_note_row on every launch;
 # update_colors.sh reads THAT to choose `status 5` over `status 4`.
@@ -1215,7 +1225,7 @@ _amux_restore_into() {
 #   explicit — dropped "$PWD"; attaches to $PWD's session after
 #   global   — dropped --global; restores all picked; attaches to $PWD's session if present
 _amux_restore_pick() {
-  local mode="$1" name_override="${2:-}" TAB; TAB=$(printf '\t')
+  local mode="$1" name_override="${2:-}" no_frame="${3:-}" TAB; TAB=$(printf '\t')
   local rows
   case "$mode" in
     auto)     rows=$("$AGENTMUX_SCRIPTS/session_log.sh" dropped --new "$PWD" 2>/dev/null) ;;
@@ -1355,11 +1365,25 @@ $c
     printf '%s' "$lines" | _amux_restore_into "$c" "$grp_name"
     [ "$mode" = auto ] && _amux_auto_restored=1
   done
-  # Attach behaviour by mode.
+  # Attach behaviour by mode. auto is mid-launch — its caller owns the attach.
+  #
+  # The others land the user in $PWD's project, so they take the SAME frame-vs-plain
+  # decision a bare `amux` takes there (`_amux_use_frame`, honouring an earlier
+  # --no-frame on this command line). Attaching plainly instead ignored
+  # `[frame] default = true` outright: the tabs came back in a bare session with no
+  # scratch terminal, in a project whose every other launch is framed. The handoff is
+  # safe and does not recurse — `_amux_frame` re-enters `_amux_ensure_agent_session`,
+  # which finds the session we just restored into and whose own auto picker finds
+  # nothing, the offer having been marked consumed above.
   if [ "$mode" != auto ]; then
     local pname; pname=$(_amux_default_session_name)   # $PWD-bound — correct here
-    if _amux_session_exists "$pname"; then _amux_attach "$pname"
-    else echo "amux: restored tabs in other projects; cd there and run amux to attach" >&2; fi
+    if ! _amux_session_exists "$pname"; then
+      echo "amux: restored tabs in other projects; cd there and run amux to attach" >&2
+    elif [ -n "$(_amux_use_frame "$no_frame")" ]; then
+      _amux_frame
+    else
+      _amux_attach "$pname"
+    fi
   fi
 }
 
@@ -1755,7 +1779,11 @@ amux() {
         ;;
       --restore)
         shift
-        if [ "${1:-}" = "--global" ]; then _amux_restore_pick global; else _amux_restore_pick explicit; fi
+        # $no_frame carries a --no-frame typed EARLIER on this line (its case arm
+        # falls through rather than returning), so `amux --no-frame --restore` opts
+        # the attach below out of the frame exactly as it does a bare launch.
+        if [ "${1:-}" = "--global" ]; then _amux_restore_pick global "" "$no_frame"
+        else _amux_restore_pick explicit "" "$no_frame"; fi
         return $?
         ;;
       --probe)
@@ -1865,8 +1893,7 @@ EOF
   # `amux --frame` disagreed about that hatch — and the allow_nested test in the
   # frame condition below became dead code, since TMUX being set had already
   # returned.
-  local use_frame=""
-  [ -z "$no_frame" ] && [ -n "$(_amux_frame_default)" ] && use_frame=1
+  local use_frame; use_frame=$(_amux_use_frame "$no_frame")
 
   # A plain launch nests a second tmux inside the one we are already in — the
   # same objection --frame has always refused on, minus the hatch. A frame run
@@ -2089,6 +2116,50 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "the refusal names the hatch that lifts it" "1" \
     "$(printf '%s' "$_fout" | grep -c 'allow_nested')"
   rm -f "$_anw" "$_anwd" "$_anwn"
+  _amux_json_cache=""
+
+  # _amux_use_frame: the single home for the frame-vs-plain decision both the bare
+  # launch and --restore's attach step take. Truth table, config-driven.
+  _ufon=$(mktemp /tmp/amux-uf-XXXXXX.toml) || exit 1
+  printf '[frame]\ndefault = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_ufon"
+  _ufoff=$(mktemp /tmp/amux-uf-XXXXXX.toml) || exit 1
+  printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_ufoff"
+  _assert "use_frame: default=true"        "1" \
+    "$(AGENTMUX_CONFIG="$_ufon"  _amux_json_cache="" _amux_use_frame "")"
+  _assert "use_frame: --no-frame wins"     ""  \
+    "$(AGENTMUX_CONFIG="$_ufon"  _amux_json_cache="" _amux_use_frame 1)"
+  _assert "use_frame: default unset"       ""  \
+    "$(AGENTMUX_CONFIG="$_ufoff" _amux_json_cache="" _amux_use_frame "")"
+  _amux_json_cache=""
+
+  # `amux --restore` must take that SAME decision. It used to attach plainly, so a
+  # [frame] default = true project got its crashed tabs back in a bare session with
+  # no scratch terminal — the frame the user configured simply never appeared, and
+  # `amux` and `amux --restore` disagreed about the project's own setting. Stubs
+  # stand in for the ledger and for the two landings, so this asserts the BRANCH
+  # without needing a real tmux (the landings themselves are covered elsewhere).
+  _rfd=$(mktemp -d /tmp/amux-rf-XXXXXX) || exit 1
+  mkdir -p "$_rfd/scripts"
+  {
+    echo '#!/bin/sh'
+    echo 'case "${2:-}" in --mark) exit 0 ;; esac'
+    printf '%s\n' 'printf "work\t%s\tclaude --resume x\t1\n" "$PWD"'
+  } > "$_rfd/scripts/session_log.sh"
+  chmod +x "$_rfd/scripts/session_log.sh"
+  _rf_run() {   # <config> <no_frame flag> → FRAME | PLAIN
+    (
+      AGENTMUX_SCRIPTS="$_rfd/scripts"; AGENTMUX_CONFIG="$1"; _amux_json_cache=""
+      _amux_restore_into()   { cat >/dev/null; }
+      _amux_session_exists() { return 0; }
+      _amux_frame()          { echo FRAME; }
+      _amux_attach()         { echo PLAIN; }
+      printf 'a\n' | _amux_restore_pick explicit "" "$2" 2>/dev/null
+    )
+  }
+  _assert "--restore honours [frame] default"        "FRAME" "$(_rf_run "$_ufon"  "")"
+  _assert "--restore --no-frame opts out"            "PLAIN" "$(_rf_run "$_ufon"  1)"
+  _assert "--restore plain when frame default unset" "PLAIN" "$(_rf_run "$_ufoff" "")"
+  rm -rf "$_rfd"; rm -f "$_ufon" "$_ufoff"
   _amux_json_cache=""
 
   # _amux_frame_right_cmd: a bare tmux attach on the agent socket (the parent already
