@@ -17,7 +17,9 @@
 #   forkcmd [target]         emit `agent<TAB>fork_cmd` for one LIVE window (or nothing)
 #   dropped <cwd>|--global|--new <cwd>
 #                            restorable dropped tabs (dead server, open-at-death),
-#                            one TSV row each; --new also marks them offered
+#                            one TSV row each; --new applies the offer gate read-only
+#   dropped --mark <cwd>     mark this cwd's dead servers offered — the write half of
+#                            that gate, run only once the user has ACTED on the offer
 #   dropped --pending <cwd>  the same question as a BOOLEAN, for warden's presence
 #                            poll: one synthetic line if a restore would be offered
 #                            here, nothing if not. Its consumer tests emptiness and
@@ -815,10 +817,12 @@ _sl_pending_fast() {  # <cwd>
 # reachability sl_prune's keep set is built from — and DEDUP by
 # resume session id (the same session resumed across several server lifetimes, or in two
 # windows of one server, surfaces once). `<cwd>` filters to that dir; `--global` = no
-# filter; `--new <cwd>` additionally emits ONLY servers not yet offered for that cwd and
-# marks them offered (the once-per-server-per-project launch gate); `--pending <cwd>` applies
-# that same gate READ-ONLY (no marking) — warden's presence probe polls it to decide whether a
-# plain `amux` launch here would offer a restore, and a marking read would burn the gate.
+# filter; `--new <cwd>` additionally emits ONLY servers not yet offered for that cwd (the
+# once-per-server-per-project launch gate); `--pending <cwd>` applies that same gate to answer
+# emptiness only — warden's presence probe polls it to decide whether a plain `amux` launch here
+# would offer a restore. NEITHER MARKS — rendering an offer must never consume it. `--mark <cwd>`
+# is the write half: it records every still-dead, not-yet-offered server for that cwd as offered,
+# and its caller runs it once the user has ACTED on the picker.
 sl_dropped() {
   _sl_enabled || return 0
   # PRESENCE-POLL FAST PATH. --pending's only consumer (bin/amux's _amux_probe) tests
@@ -842,13 +846,19 @@ sl_dropped() {
   # answer outright — the common case, and the case this whole path exists for.
   _sl_load_dead
   # _gate_new: apply the once-per-(server,cwd) offer filter. _mark_new: also record the
-  # offer. --new does both (the launch picker consumes it once). --pending gates WITHOUT
-  # marking: warden's presence probe polls this every few seconds, so a marking read would
-  # burn the gate on the first pass and the ghost would render once and never again.
+  # offer. ONLY --mark does both, and NO READ EVER MARKS — the gate is burned by an
+  # ACTION, never by having rendered the offer. Both readers gate read-only: warden's
+  # presence probe polls --pending every few seconds, so a marking read there would render
+  # the ghost once and never again; and the launch picker reads --new BEFORE the user has
+  # answered, so a marking read there discarded the offer for anyone who closed the window
+  # (or Ctrl-C'd) at the prompt — the tabs stayed in the ledger, reachable only by the
+  # ungated `amux --restore`, which nothing tells you about. bin/amux calls --mark once the
+  # prompt has actually been answered.
   _mark_new=0; _gate_new=0; _scope=""
   case "$1" in
-    --new)     _mark_new=1; _gate_new=1; _scope="${2:-}" ;;
+    --new)     _gate_new=1; _scope="${2:-}" ;;
     --pending) _gate_new=1; _scope="${2:-}" ;;
+    --mark)    _mark_new=1; _gate_new=1; _scope="${2:-}" ;;
     --global)  _scope="--global" ;;
     *)         _scope="${1:-}" ;;
   esac
@@ -1340,7 +1350,7 @@ sl_prune() {
   ' "$_ledger" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_ledger" || rm -f "$_tmp"
 
   # Trim the `notified` marker the same way as the ledger: it grows one
-  # "socket|pid|cwd" line per (server,cwd) offered (sl_dropped --new appends,
+  # "socket|pid|cwd" line per (server,cwd) offered (sl_dropped --mark appends,
   # never prunes), so keep only lines whose "socket|pid" PREFIX is still in the
   # KEEP set. Drops stale keys (and blank lines) so it self-cleans instead of
   # growing unbounded. It must stay in step with the ledger in BOTH directions: a
@@ -1832,21 +1842,25 @@ _ignore=$(SESSION_LOG_LIVE_WINDOWS="@1" AGENTMUX_STATE_DIR="$_scope_dir" _sl_sna
 _assert "memo: snapshot clears the entry"      "0" "$(_has_memo '/s/here|111')"
 rm -rf "$_scope_dir"; unset _ignore
 
-# THE REGRESSION GUARD: --pending must not write the notified marker. If it did, warden's
-# 5s probe would burn the gate on its first pass and the ghost would render once, never again.
+# THE REGRESSION GUARD: neither READ may write the notified marker. --pending is warden's
+# 5s probe, which would burn the gate on its first pass and render the ghost once, never
+# again; --new is the launch picker's read, taken BEFORE the user answers, so marking there
+# discards the offer for anyone who closes the window at the prompt. Only --mark writes.
 rm -f "$(_sl_state_dir)/notified"
 SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha" >/dev/null
 _assert "pending: does NOT mark notified" "0" "$([ -s "$(_sl_state_dir)/notified" ] && echo 1 || echo 0)"
+SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha" >/dev/null
+_assert "new: does NOT mark notified"     "0" "$([ -s "$(_sl_state_dir)/notified" ] && echo 1 || echo 0)"
 
 # --pending is repeatable: N calls give the same answer (the polling case).
 outp2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha")
 _assert "pending: repeatable"            "$outp"  "$outp2"
 
-# --pending respects a marker --new already wrote (the ghost clears once amux has offered).
+# --pending respects a marker --mark wrote (the ghost clears once the user has acted).
 rm -f "$(_sl_state_dir)/notified"
-SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha" >/dev/null
+SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --mark "/w/alpha" >/dev/null
 outp3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha")
-_assert "pending: empty after --new offered" "0" "$(printf '%s' "$outp3" | grep -c .)"
+_assert "pending: empty after --mark consumed" "0" "$(printf '%s' "$outp3" | grep -c .)"
 rm -f "$(_sl_state_dir)/notified"
 
 # ---- Task 1: sl_open stamps cwd + agent onto the window --------------------
@@ -1935,15 +1949,22 @@ outn=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_
 _assert "dropped(no sidecar): shows @1"  "1"          "$(printf '%s\n' "$outn" | grep -c 'drop1')"
 _assert "dropped(no sidecar): shows @2"  "1"          "$(printf '%s\n' "$outn" | grep -c 'closed2')"
 
-# --- --new marks a (server,cwd) offered → second call for the SAME cwd is empty,
-#     but a DIFFERENT cwd from the same dead server is still offered. ---
+# --- THE OFFER IS CONSUMED BY --mark, NEVER BY A READ. Repeated --new reads keep
+#     showing the same drop (the user closed the window at the prompt); --mark retires
+#     it; a DIFFERENT cwd on the same dead server is unaffected by that mark. ---
 rm -rf "$AGENTMUX_STATE_DIR/live"; rm -f "$AGENTMUX_STATE_DIR/notified"
 n1=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha")
 _assert "--new(alpha): first call shows"  "1" "$(printf '%s\n' "$n1" | grep -c 'drop1')"
+n1b=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha")
+_assert "--new(alpha): UNANSWERED offer survives a second read" "1" "$(printf '%s\n' "$n1b" | grep -c 'drop1')"
+_assert "--new: marks nothing" "0" "$([ -s "$AGENTMUX_STATE_DIR/notified" ] && echo 1 || echo 0)"
+SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --mark "/w/alpha" >/dev/null
 n2=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/alpha")
-_assert "--new(alpha): second call empty" ""  "$n2"
+_assert "--new(alpha): empty once --mark has consumed it" ""  "$n2"
+p2=$(AMUX_PENDING_NO_FAST=1 SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --pending "/w/alpha")
+_assert "--pending(alpha): empty once --mark has consumed it" "" "$p2"
 n3=$(SESSION_LOG_LIVE_PIDS="4242" SESSION_LOG_BOOT_EPOCH=1 SESSION_LOG_RESUME_MAP="$RMAP" sl_dropped --new "/w/notes")
-_assert "--new(notes): other cwd still offered" "1" "$(printf '%s\n' "$n3" | grep -c 'drop3')"
+_assert "--new(notes): other cwd unaffected by alpha's mark" "1" "$(printf '%s\n' "$n3" | grep -c 'drop3')"
 
 # --- LAST-CRASH-ONLY: with multiple dead servers, only the most-recently-active one
 #     is offered; older dead servers are history. Plus dedup: a session resumed across

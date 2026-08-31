@@ -1207,8 +1207,10 @@ _amux_restore_into() {
 }
 
 # _amux_restore_pick <mode>   mode ∈ auto|explicit|global
-# Renders the numbered picker for a scope, reads + parses the selection, groups
-# the chosen rows by cwd, and restores each project via _amux_restore_into.
+# Renders the numbered picker for a scope, reads + parses the selection, marks every
+# offered cwd consumed (see the comment at the read — the ANSWER consumes the offer,
+# not the render), groups the chosen rows by cwd, and restores each project via
+# _amux_restore_into.
 #   auto     — dropped --new "$PWD"; silent when empty; no attach (caller continues launch)
 #   explicit — dropped "$PWD"; attaches to $PWD's session after
 #   global   — dropped --global; restores all picked; attaches to $PWD's session if present
@@ -1300,8 +1302,34 @@ $gc
   printf '\n%s\n' '──────────────────────────────────────────────' >&2
   printf 'restore? [a = all · 1,2 = some · n = none]› ' >&2
   local reply=""; IFS= read -r reply
+  # THE OFFER IS CONSUMED HERE — by the answer, not by having been printed. Every
+  # cwd on screen is retired from future AUTO offers now that the user has acted on
+  # it, INCLUDING a decline and the rows they left unpicked: what they acted on is
+  # the list, and re-offering the remainder on the next launch would make `n`
+  # unsayable. Anything that is NOT an answer — closing the window, Ctrl-C, a
+  # dropped ssh link — never reaches this line, so the offer survives it; that is
+  # the whole point of marking late. `dropped --new` is a read and marks nothing:
+  # the marking lives in `--mark`, which retires every still-dead server in $c (a
+  # session restored below is new and live, so only the dead source is marked).
+  # It also subsumes the retire-after-restore this used to do per restored cwd —
+  # a manual --restore/--global is ungated on the way IN, so without a mark on the
+  # way out a later bare `amux` would auto-restore the same tab AGAIN, into a
+  # second window fighting the same session id.
+  local mk_seen="" mi mc
+  for ((mi=1;mi<=n;mi++)); do
+    mc="${R_cwd[mi]}"
+    case "$mk_seen" in *"
+$mc
+"*) continue ;; esac
+    mk_seen="$mk_seen
+$mc
+"
+    "$AGENTMUX_SCRIPTS/session_log.sh" dropped --mark "$mc" >/dev/null 2>&1 || true
+  done
   local picked; picked=$(_amux_parse_selection "$n" "$reply")
-  [ -n "$picked" ] || { echo "amux: nothing restored" >&2; return 0; }
+  # Name the ungated route out: the gate above has now retired this offer, and
+  # `amux --restore` is the only thing that still reaches these rows.
+  [ -n "$picked" ] || { echo "amux: nothing restored — \`amux --restore\` to pick them up later" >&2; return 0; }
   # Group picked rows by cwd, feed each project's rows to _amux_restore_into.
   # seen_cwd is a newline-delimited membership set, NOT an associative array:
   # macOS ships bash 3.2 (no `local -A`), and amux is `#!/usr/bin/env bash`, so a
@@ -1326,13 +1354,6 @@ $c
     local grp_name=""; [ "$c" = "$PWD" ] && grp_name="$name_override"
     printf '%s' "$lines" | _amux_restore_into "$c" "$grp_name"
     [ "$mode" = auto ] && _amux_auto_restored=1
-    # Retire this cwd's dead servers from future AUTO offers now that their tabs
-    # are relaunched — otherwise a manual --restore/--global (which don't mark the
-    # notified gate) leaves the tab offerable, and a later bare `amux` would
-    # auto-restore it AGAIN into a second window fighting the same session id.
-    # `dropped --new` marks (socket|pid|cwd) for every still-dead server in $c;
-    # the just-created live session is excluded, so only the dead source is marked.
-    "$AGENTMUX_SCRIPTS/session_log.sh" dropped --new "$c" >/dev/null 2>&1 || true
   done
   # Attach behaviour by mode.
   if [ "$mode" != auto ]; then
