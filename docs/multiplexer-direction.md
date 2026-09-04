@@ -128,6 +128,8 @@ warden tab renders inline for PNG and direct RGB with no warden code and no pin 
 out-of-band surface is a warden pane, with no tmux involvement at all. Detail:
 [warden's `docs/native-splits-direction.md`](https://github.com/lockyc/warden/blob/main/docs/native-splits-direction.md).
 
-**Open, unrelated to the above:** `tmux/term.conf` has no `allow-passthrough on`, unlike
-`frame.conf` and `agentmux.conf`. That is a genuine gap for non-agent image tooling in
-the scratch pane.
+**`allow-passthrough` is now uniform across all three sockets**, `term.conf` included. That
+buys transit, not managed images: tmux's grid does not track that a pixel region is
+occupied, so text overdraws an image and a scroll or redraw loses it. It is parity plus
+one-shot viewing for non-agent tooling, and it is deliberately not an image story — which
+is why the out-of-band conclusion above stands independent of it.
