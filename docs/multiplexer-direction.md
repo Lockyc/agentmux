@@ -116,12 +116,17 @@ programs (yazi, chafa, plotting tools) in a pane, never Claude Code's own output
 only shape that works for agent-produced images is **out-of-band**: render into a surface
 the agent's TUI does not own.
 
-That is now cheap for warden specifically: libghostty gained kitty graphics protocol
-support (~270-line PR, per the *Libghostty Kitty Graphics Protocol Support* devlog),
-with PNG decoding as an optional runtime-swappable `sys` callback so libghostty keeps its
-zero-runtime-dependency property, direct-RGB working without it, a conservative default
-image budget for embedders, and file/shared-memory transfer mediums opt-in. warden embeds
-libghostty, so the out-of-band surface is a warden pane, with no tmux involvement at all.
+That is cheap for warden specifically — in fact free. The devlog *Libghostty Kitty
+Graphics Protocol Support* describes a ~270-line PR against **libghostty-vt**, the
+standalone VT library: PNG decoding as an optional runtime-swappable `sys` callback so it
+keeps its zero-runtime-dependency property, direct-RGB working without it, a conservative
+default image budget for embedders, and file/shared-memory transfer mediums opt-in. Those
+are libghostty-vt's terms for an embedder writing its own renderer, and **they are not
+warden's**: warden embeds Ghostty's *surface* API, which has rendered kitty graphics all
+along. Measured 2026-09-04 against warden's pinned build — a kitty escape written to a
+warden tab renders inline for PNG and direct RGB with no warden code and no pin move. The
+out-of-band surface is a warden pane, with no tmux involvement at all. Detail:
+[warden's `docs/native-splits-direction.md`](https://github.com/lockyc/warden/blob/main/docs/native-splits-direction.md).
 
 **Open, unrelated to the above:** `tmux/term.conf` has no `allow-passthrough on`, unlike
 `frame.conf` and `agentmux.conf`. That is a genuine gap for non-agent image tooling in
