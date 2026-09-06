@@ -111,6 +111,7 @@ Normal shell commands — type them at a prompt.
 | `amux --colours [grid\|names\|pick]` | Preview the colour palette: `grid` (curated names + 256 codes) or `names` (the raw palette-name list). `pick [agent]` interactively builds a paste-ready `colour =` line |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 | `amux --no-frame` | One-off plain launch when `[frame] default = true` is set (skips the frame) |
+| `amux --term [session]` | Attach (or create) this project's persistent scratch terminal **on its own** — the exact server and session a frame's left pane uses, for a host that supplies its own split (warden: `[split] cmd = "amux --term"` beside `cmd = "amux --no-frame"`). A frame started in a plain terminal and a warden pane therefore share one shell. Reaped by `--kill`; `--probe` ignores it (a shell is not a session) |
 | `amux --frames` | List active `--frame` wrappers (each lives on its own per-project tmux socket) |
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |

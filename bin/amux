@@ -719,6 +719,26 @@ _amux_frame_left_cmd() { # <term-socket> <term-conf> <term-session>
     "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")" "$(_amux_shquote "$PWD")"
 }
 
+# amux --term [session]: the frame's LEFT pane, standalone. Attaches (creating if needed)
+# this dir's persistent scratch terminal on its own term socket — the very server and
+# session a `--frame` in this dir would put in its left pane, built by the same
+# `_amux_frame_left_cmd`, so a host that supplies its own split (warden's `[split]
+# cmd = "amux --term"`) and a frame started in a plain terminal share ONE scratch shell.
+# term.conf's respawn hook keeps the shell alive across `exit`, as in a frame. A term
+# started this way has no frame to die with — `_amux_kill` reaps it by dir regardless,
+# and `--probe` ignores it (a shell is not a session). The command string is a separate
+# function so the selftest can pin the wiring without attaching a client.
+_amux_term_cmd() { # [session]
+  local session
+  if [ $# -gt 0 ] && [ -n "$1" ]; then session=$(_amux_sanitize_session "$1"); else session=$(_amux_default_session_name); fi
+  _amux_frame_left_cmd "$(_amux_term_sock)" "$AGENTMUX_TMUX/term.conf" "${session}-term"
+}
+_amux_term() {
+  _amux_warm_launch_caches
+  local cmd; cmd=$(_amux_term_cmd "$@")
+  eval "exec $cmd"
+}
+
 # Outer "frame": a bare $SHELL in the left pane, amux in the right pane, as a
 # nested tmux on a dedicated socket. Must be run from a plain terminal.
 _amux_frame() {
@@ -1392,8 +1412,9 @@ $c
 # neither does. Silent — meant to back a status indicator (e.g. warden's cyan
 # presence dot) on its exit code alone. The frame leg is what lets the dot stay
 # lit after an agent exits while its frame wrapper is still up — the state
-# `amux --kill` reaps; no separate -term check, since a frame's scratch terminal
-# never outlives the frame (both die together). Default target is the current
+# `amux --kill` reaps; no -term check on purpose — a scratch terminal (a frame's
+# left pane, or a standalone `amux --term`) is a shell, not a session, so it never
+# lights the dot on its own. Default target is the current
 # dir's session; an explicit arg is sanitised, and a trailing -frame/-term is
 # stripped to the base (so `amux --probe foo-frame` queries project `foo`).
 _amux_probe() {
@@ -1439,7 +1460,7 @@ _amux_kill() {
     *-term)  base="${arg%-term}" ;;
     *)       base="$arg" ;;
   esac
-  local fsock tsock parts="" by_dir=0 own_frame=0
+  local fsock tsock parts="" by_dir=0
   [ $# -eq 0 ] && by_dir=1
   if [ "$by_dir" -eq 1 ]; then
     fsock=$(_amux_frame_sock); tsock=$(_amux_term_sock)   # CWD path: derive from $PWD
@@ -1450,8 +1471,9 @@ _amux_kill() {
   # CWD-derived kill (no explicit name → warden's call): only reap sessions whose
   # recorded @amux_dir is THIS dir, so a same-basename sibling project is never
   # torn down. An explicit name skips the guard (unchanged behaviour). The term
-  # session carries no @amux_dir — it's paired 1:1 with the frame, so its
-  # ownership follows the frame's.
+  # session carries no @amux_dir and needs no guard: its socket is sharded per dir
+  # (`_amux_term_sock`), so the by-dir path can only ever reach THIS project's
+  # scratch terminal — which may exist with no frame at all (`amux --term`).
   local _asock=""
   if [ "$by_dir" -eq 0 ]; then _asock=$(_amux_agent_socks | _amux_sock_hosting "$base"); fi
   if { [ "$by_dir" -eq 0 ] && [ -n "$_asock" ]; } \
@@ -1476,10 +1498,9 @@ _amux_kill() {
   if [ -n "$fsock" ] && { { [ "$by_dir" -eq 0 ] && tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; } \
      || { [ "$by_dir" -eq 1 ] && _amux_frame_session_is_mine "${base}-frame"; }; }; then
     tmux -L "$fsock" kill-session -t "=${base}-frame" 2>/dev/null
-    parts="${parts:+$parts + }frame '${base}-frame'"; own_frame=1
+    parts="${parts:+$parts + }frame '${base}-frame'"
   fi
-  if [ -n "$tsock" ] && { [ "$by_dir" -eq 0 ] || [ "$own_frame" -eq 1 ]; } \
-     && tmux -L "$tsock" has-session -t "=${base}-term" 2>/dev/null; then
+  if [ -n "$tsock" ] && tmux -L "$tsock" has-session -t "=${base}-term" 2>/dev/null; then
     tmux -L "$tsock" kill-session -t "=${base}-term" 2>/dev/null
     parts="${parts:+$parts + }terminal '${base}-term'"
   fi
@@ -1751,6 +1772,11 @@ amux() {
         _amux_frame "$@"
         return $?
         ;;
+      --term)
+        shift
+        _amux_term "$@"
+        return $?
+        ;;
       --no-frame)
         # Opt out of [frame] default for this run; fall through to a plain launch.
         no_frame=1
@@ -1869,6 +1895,9 @@ amux [(-<flag> | <agent_name>)] [session_name]
   --colours      preview the colour palette (grid|pick subcommands)
   --frame        open a side terminal (left) beside amux (right), nested tmux
   --no-frame     force a plain launch (opt out of [frame] default = true)
+  --term [session]  attach (or create) this dir's scratch terminal on its own — the frame's
+                 left pane, for a host that supplies its own split (warden); shares the
+                 shell with a frame, reaped by --kill, ignored by --probe
   --frames       list active frames (they live on a separate tmux socket)
   --frame-kill   kill a frame [session] (default: current dir); agent keeps running
   --frame-kill-all     kill ALL frames + scratch terminals at once; agents keep running
@@ -2395,6 +2424,44 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _assert "help advertises --reload" "present" "$_got"
   case "$help" in *"--frame-kill-all"*) _got=present ;; *) _got=absent ;; esac
   _assert "help advertises --frame-kill-all" "present" "$_got"
+  case "$help" in *"--term"*) _got=present ;; *) _got=absent ;; esac
+  _assert "help advertises --term" "present" "$_got"
+
+  # --- --term: the frame's left pane, standalone. Same server, same session name, same
+  #     term.conf as a frame would use for this dir — so a warden split and a frame started
+  #     in a plain terminal share ONE persistent scratch shell. The command is built by the
+  #     one builder the frame uses (_amux_frame_left_cmd); this pins the wiring, not tmux.
+  _tm_save="${AGENTMUX_TERM_SOCKET:-}"; AGENTMUX_TERM_SOCKET="amux-selftest-term-$$"
+  _tm_cmd=$(_amux_term_cmd)
+  case "$_tm_cmd" in *"-L 'amux-selftest-term-$$' "*) _got=ok ;; *) _got="$_tm_cmd" ;; esac
+  _assert "--term targets this dir's term socket" "ok" "$_got"
+  case "$_tm_cmd" in *"-s '$(_amux_default_session_name)-term' "*) _got=ok ;; *) _got="$_tm_cmd" ;; esac
+  _assert "--term attaches the frame's own -term session name" "ok" "$_got"
+  case "$_tm_cmd" in *"/term.conf' "*) _got=ok ;; *) _got="$_tm_cmd" ;; esac
+  _assert "--term loads term.conf (respawn-on-exit)" "ok" "$_got"
+  case "$(_amux_term_cmd 'a.b:c')" in *"-s 'a_b_c-term' "*) _got=ok ;; *) _got=bad ;; esac
+  _assert "--term sanitises an explicit session arg" "ok" "$_got"
+
+  # A scratch terminal started by --term has NO frame. `amux --kill` from the dir must still
+  # reap it (the term socket is sharded per dir, so the by-dir kill can only ever hit this
+  # project's own server) — previously the term was only reaped alongside an owned frame.
+  if command -v tmux >/dev/null 2>&1; then
+    _tk_dir=$(mktemp -d); _tk_base=$(cd "$_tk_dir" && _amux_default_session_name)
+    ( cd "$_tk_dir" && env -u TMUX tmux -L "$AGENTMUX_TERM_SOCKET" -f "$AGENTMUX_TMUX/term.conf" \
+        new-session -d -s "${_tk_base}-term" -c "$_tk_dir" 2>/dev/null )
+    _assert "frame-less term is live before kill" "0" \
+      "$(tmux -L "$AGENTMUX_TERM_SOCKET" has-session -t "=${_tk_base}-term" 2>/dev/null; echo $?)"
+    _tk_out=$(cd "$_tk_dir" && amux --kill 2>&1)
+    case "$_tk_out" in *"terminal '${_tk_base}-term'"*) _got=ok ;; *) _got="$_tk_out" ;; esac
+    _assert "--kill by dir reaps a frame-less term" "ok" "$_got"
+    _assert "frame-less term is gone after kill" "1" \
+      "$(tmux -L "$AGENTMUX_TERM_SOCKET" has-session -t "=${_tk_base}-term" 2>/dev/null; echo $?)"
+    tmux -L "$AGENTMUX_TERM_SOCKET" kill-server 2>/dev/null
+    rm -rf "$_tk_dir"
+  else
+    echo "SKIP: frame-less term kill test (tmux not found)"
+  fi
+  if [ -n "$_tm_save" ]; then AGENTMUX_TERM_SOCKET="$_tm_save"; else unset AGENTMUX_TERM_SOCKET; fi
   # The old name is gone (renamed, no alias).
   case "$help" in *"--frame-server-kill"*) _got=present ;; *) _got=absent ;; esac
   _assert "help drops --frame-server-kill" "absent" "$_got"

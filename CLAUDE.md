@@ -37,6 +37,10 @@ restore offer that can never match the ledger rows it is hunting for. Normalise 
 at each lookup — four copies of one fact is how the next lookup added forgets. **A new lookup
 that identifies a project therefore needs no normalisation of its own; it just reads `$PWD`.**
 
+The term shard is also reachable **standalone** via `amux --term` (the frame's left pane, for a
+host that supplies its own split — warden's `[split] cmd = "amux --term"`), so a scratch
+terminal can exist with no frame; `_amux_kill`'s by-dir path reaps it regardless of a frame
+(the shard is per dir, so no same-basename guard is needed), and `--probe` never counts it.
 A **framed** agent runs two
 tmux deep (frame → agent); an un-framed one is a single layer. That nesting is what the
 escape/key footguns below turn on. Each socket loads only its own `-f` config
