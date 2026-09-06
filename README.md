@@ -111,7 +111,7 @@ Normal shell commands — type them at a prompt.
 | `amux --colours [grid\|names\|pick]` | Preview the colour palette: `grid` (curated names + 256 codes) or `names` (the raw palette-name list). `pick [agent]` interactively builds a paste-ready `colour =` line |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 | `amux --no-frame` | One-off plain launch when `[frame] default = true` is set (skips the frame) |
-| `amux --term [session]` | Attach (or create) this project's persistent scratch terminal **on its own** — the exact server and session a frame's left pane uses, for a host that supplies its own split (warden: `[split] cmd = "amux --term"` beside `cmd = "amux --no-frame"`). A frame started in a plain terminal and a warden pane therefore share one shell. Reaped by `--kill`; `--probe` ignores it (a shell is not a session) |
+| `amux --term [session]` | Attach (or create) this project's persistent scratch terminal **on its own** — the exact server and session a frame's left pane attaches, **including** the `[frame]` top-region shells (`left_vertical_split` / `left_top_panes` are built inside this session, not by the frame), for a host that supplies its own split (warden: `[split] cmd = "amux --term"` beside `cmd = "amux --no-frame"`). A frame started in a plain terminal and a warden pane therefore share one scratch column. Reaped by `--kill`; `--probe` ignores it (a shell is not a session) |
 | `amux --frames` | List active `--frame` wrappers (each lives on its own per-project tmux socket) |
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
@@ -229,19 +229,25 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
 - Set the left-pane width with `[frame] left = <percent>` (default `30`).
   Optionally split the left column top/bottom with `[frame] left_vertical_split =
   <percent>` (the top region's height, `10`–`90`; unset = single left pane). The
-  top region is plain shells; the scratch terminal (with its tab bar) stays in
-  the bottom sub-pane — reach the top shells with the mouse. Stack more than one
-  shell in the top region with `[frame] left_top_panes = <count>` (`1`–`6`, default
-  `1`, equal-height, full-width; needs `left_vertical_split`) — e.g.
+  top region is plain shells stacked **inside the scratch terminal's own tmux** —
+  panes of its first window, above the scratch pane, whose tab bar stays at the
+  bottom — so the same column appears wherever that session is attached, `--frame`
+  or `--term`. Reach the top shells with the mouse, `C-f j`/`k` (the frame forwards
+  them to the inner terminal), or the terminal's own `C-b` pane keys; a top shell
+  closes on `exit` like any plain shell (only the scratch pane respawns). Stack more
+  than one shell in the top region with `[frame] left_top_panes = <count>` (`1`–`6`,
+  default `1`, equal-height, full-width; needs `left_vertical_split`) — e.g.
   `left_vertical_split = 30` + `left_top_panes = 3` stacks three small shells above a
   larger scratch terminal. Two more layout fields:
   `[frame] focus` picks which pane starts focused — `"agent"` (right, the default)
   or `"terminal"` (the left column); `[frame] status_position` places the frame's
   outer status bar at `"bottom"` (default) or `"top"`. Frame
-  config applies when the frame is **created** — a persistent frame keeps its
-  layout, so after changing it, tear the frame down (`C-f Q` or
-  `amux --frame-kill <session>`) and relaunch. Killing only the agent session
-  leaves the wrapper, which reattaches at the old size.
+  config applies when the frame **and its scratch terminal** are **created** — both
+  persist and keep their layout (the left column's split lives in the scratch
+  terminal, so it survives the frame too), so after changing it, tear them down
+  (`C-f Q` or `amux --frame-kill <session>`, both of which drop the terminal as
+  well) and relaunch. Killing only the agent session leaves the wrapper, which
+  reattaches at the old size.
 - **Open frames by default.** Set `[frame] default = true` to make a bare `amux`
   (run from a plain terminal) behave like `amux --frame`; use `amux --no-frame` for
   a one-off plain launch. Inside an existing tmux it is refused rather than
@@ -380,7 +386,7 @@ Per-directory overrides: `[frame.dirs."<path>"]` blocks, resolved per field. See
 |---|---|---|
 | `left` | `30` | Left (scratch terminal) pane width, percent |
 | `prefix` | `C-f` (from `tmux/frame.conf`) | The frame's own prefix for focus/resize/quit. Must differ from the `[amux]` prefix |
-| `left_vertical_split` | unset (single left pane) | Percent height (`10`–`90`) of a top region of plain shells above the scratch terminal |
+| `left_vertical_split` | unset (single left pane) | Percent height (`10`–`90`) of a top region of plain shells above the scratch terminal — built inside the scratch terminal's own session, so `--term` shows it too |
 | `left_top_panes` | `1` | Plain shells stacked in that top region (`1`–`6`); needs `left_vertical_split` |
 | `focus` | `"agent"` | Pane focused at launch: `"agent"` (right) or `"terminal"` (left column) |
 | `status_position` | `"bottom"` | Where the frame's status bar sits: `"bottom"` or `"top"` |

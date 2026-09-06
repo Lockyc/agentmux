@@ -134,9 +134,10 @@ left = 30
 # prefix = "C-Space"
 
 # Optionally split the left column top/bottom: percent height of the TOP region
-# (10..90). Unset = single left pane (default). The top region is plain shells;
-# the scratch terminal (with its tab bar) stays in the bottom sub-pane. Reach the
-# top shells with the mouse. e.g.:
+# (10..90). Unset = single left pane (default). The top region is plain shells
+# stacked inside the scratch terminal's own tmux, above the scratch pane (its tab
+# bar stays at the bottom) — so `amux --term` shows the same column. Reach the top
+# shells with the mouse, C-f j/k in a frame, or the terminal's own C-b pane keys. e.g.:
 #
 # left_vertical_split = 70
 

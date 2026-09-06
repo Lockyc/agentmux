@@ -41,6 +41,14 @@ The term shard is also reachable **standalone** via `amux --term` (the frame's l
 host that supplies its own split — warden's `[split] cmd = "amux --term"`), so a scratch
 terminal can exist with no frame; `_amux_kill`'s by-dir path reaps it regardless of a frame
 (the shard is per dir, so no same-basename guard is needed), and `--probe` never counts it.
+**The `[frame]` left-column layout (`left_vertical_split` / `left_top_panes`) is built INSIDE
+the term session** — `_amux_term_ensure`, at creation, called by both `--frame` and `--term`
+before either attaches — never as panes on the frame socket. The frame is a fixed two-pane
+wrapper whose left pane is just a term client (`frame.conf`'s `j`/`k` forward to the inner
+server for that reason). Building the top shells on the frame socket instead is the trap:
+it looks like the frame's layout, but then any frame-less host of the session — warden's
+`--term` split — gets the bare scratch pane and a `[frame.dirs]` block silently never
+applies there.
 A **framed** agent runs two
 tmux deep (frame → agent); an un-framed one is a single layer. That nesting is what the
 escape/key footguns below turn on. Each socket loads only its own `-f` config
@@ -143,7 +151,7 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
 | `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
 | `tmux/frame.conf` | `amux --frame` outer wrapper config (own socket; no `~/.tmux.conf`) |
-| `tmux/term.conf` | `amux --frame` left scratch terminal config (own socket; persistent) |
+| `tmux/term.conf` | The scratch terminal's config — a frame's left pane and `--term` alike (own socket; persistent; the `[frame]` top shells are panes of this session) |
 | `tmux/agent.conf` | Agent socket config, loaded via `-f` by `_amux_atmux` (sources `agentmux.conf`; no `~/.tmux.conf`/TPM). Keeps a cold per-project agent server fast |
 | `config/amux.toml.example` | Example agent config. **A new config key lands in the README `## Configuration reference` table in the same change as its parser** — the table is a second copy of the key list by construction and stays honest only by moving with the code |
 | `config/user.tmux.conf.example` | Template for the optional **per-role** user tmux overlays — `~/.agentmux/user.{agent,frame,term}.tmux.conf`, each `source-file -q`'d last by its own socket so it overrides amux's defaults without a binding leaking across roles (a shared file would break the frame's C-f layout). The escape hatch for the deliberate `~/.tmux.conf` isolation |
