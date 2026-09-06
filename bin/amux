@@ -364,14 +364,15 @@ _amux_ago() {
 # clamped to 10..90. Non-numeric or absent → default.
 _amux_frame_width() { _amux_clamp_pct "$(agentmux_frame_field left "$PWD")" 30; }
 
-# Resolve the OPTIONAL left-column vertical split for --frame: [frame]
-# left_vertical_split (percent height of the TOP sub-pane), clamped to 10..90.
-# Opt-in: unset or non-numeric → empty output (the left column stays one pane).
+# Resolve the OPTIONAL scratch-column vertical split: [frame] left_vertical_split
+# (percent height of the TOP region), clamped to 10..90. Opt-in: unset or non-numeric
+# → empty output (the column stays one pane). Consumed by _amux_term_ensure — the
+# layout is built inside the term session, so it reaches --frame and --term alike.
 _amux_frame_top_height() { _amux_clamp_pct "$(agentmux_frame_field left_vertical_split "$PWD")" ""; }
 
-# Resolve how many stacked (top/bottom) plain-shell panes fill the top sub-region for
-# --frame: [frame] left_top_panes, clamped to 1..6, default 1 (absent/non-numeric).
-# Only meaningful when left_vertical_split is set (no top region otherwise).
+# Resolve how many stacked (top/bottom) plain-shell panes fill that top region:
+# [frame] left_top_panes, clamped to 1..6, default 1 (absent/non-numeric). Only
+# meaningful when left_vertical_split is set (no top region otherwise).
 _amux_frame_top_panes() {
   local v; v=$(agentmux_frame_field left_top_panes "$PWD")
   case "$v" in ''|*[!0-9]*) v=1 ;; esac
@@ -719,22 +720,89 @@ _amux_frame_left_cmd() { # <term-socket> <term-conf> <term-session>
     "$(_amux_shquote "$1")" "$(_amux_shquote "$2")" "$(_amux_shquote "$3")" "$(_amux_shquote "$PWD")"
 }
 
+# The controlling terminal's size as "cols lines" ("0 0" when unreadable — no tty).
+# Read via `stty size` (→ "rows cols") on /dev/tty, not the inherited stdout: `tput`
+# reports the terminfo default under command substitution. Used to size a session
+# BEFORE its first client attaches — tmux distributes a later *resize* equally across
+# panes, so a layout born at the detached 80x24 default skews its configured
+# percentages the moment a real-sized client attaches.
+_amux_tty_size() {
+  local _sz lines cols
+  _sz=$(stty size </dev/tty 2>/dev/null); lines=${_sz%% *}; cols=${_sz##* }
+  case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
+  case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
+  printf '%s %s' "$cols" "$lines"
+}
+
+# Ensure this dir's scratch-terminal session exists on the term socket, CREATING it —
+# detached, with the [frame] left-column layout built INSIDE it — when it doesn't.
+# <session-base> is the agent session name (the term session is "<base>-term");
+# <cols> <lines> size the window on creation (0 = let tmux default).
+#
+# The layout lives in the TERM server, not the frame, by design: left_vertical_split /
+# left_top_panes put plain shells ABOVE the scratch pane, as panes of the term session's
+# first window, so every host that attaches this session gets the same column — a
+# frame's left pane and a standalone `amux --term` (warden's split) alike. When the
+# frame built the top shells on ITS socket, a frame-less host got the bare scratch pane
+# and a `[frame.dirs]` layout silently never applied there. One builder, one place.
+#
+# Applies at CREATION only (like a tmux server's own -f config): a live term session
+# keeps its layout until it is reaped (`amux --kill` / `--frame-kill`), so a later `-A`
+# attach never re-splits it and a top shell the user closed stays closed. The scratch
+# pane keeps term.conf's server-wide remain-on-exit + respawn (it is the pane that must
+# never die); each top shell gets a per-pane `remain-on-exit off` so it closes on `exit`
+# like the plain shell it is. `-l N%` is a percentage of the pane being split: the top
+# region is cut from the whole window, then divided into $top_panes ~equal rows by
+# always splitting the same top pane at 100/i % as i counts down.
+_amux_term_ensure() { # <session-base> [cols lines]
+  local tsock tsess top top_panes cols lines
+  tsock=$(_amux_term_sock); tsess="$1-term"; cols=${2:-0}; lines=${3:-0}
+  tmux -L "$tsock" has-session -t "=$tsess" 2>/dev/null && return 0
+  top=$(_amux_frame_top_height); top_panes=$(_amux_frame_top_panes)
+  local nsargs=(-f "$AGENTMUX_TMUX/term.conf" new-session -d -s "$tsess" -c "$PWD")
+  [ "$cols" -gt 0 ] && [ "$lines" -gt 0 ] && nsargs+=(-x "$cols" -y "$lines")
+  env -u TMUX tmux -L "$tsock" "${nsargs[@]}" || return 1
+  [ -n "$top" ] || return 0
+  local scratch top_pid pid i
+  scratch=$(tmux -L "$tsock" list-panes -t "=$tsess" -F '#{pane_id}')
+  # `-b` inserts the new pane ABOVE the scratch, so the scratch (with the tab bar
+  # beneath it) stays at the BOTTOM; `-l` sizes the new (top) pane to $top%.
+  top_pid=$(tmux -L "$tsock" split-window -v -b -t "$scratch" -l "${top}%" -c "$PWD" -P -F '#{pane_id}')
+  tmux -L "$tsock" set -p -t "$top_pid" remain-on-exit off
+  for (( i = top_panes; i >= 2; i-- )); do
+    pid=$(tmux -L "$tsock" split-window -v -t "$top_pid" -l "$((100 / i))%" -c "$PWD" -P -F '#{pane_id}')
+    tmux -L "$tsock" set -p -t "$pid" remain-on-exit off
+  done
+  # The first attach lands in the scratch pane, wherever the splits left the active one.
+  tmux -L "$tsock" select-pane -t "$scratch"
+}
+
+# The agent session name `--term [session]` resolves to (its term session is "<base>-term").
+_amux_term_session_base() { # [session]
+  if [ $# -gt 0 ] && [ -n "$1" ]; then _amux_sanitize_session "$1"; else _amux_default_session_name; fi
+}
+
 # amux --term [session]: the frame's LEFT pane, standalone. Attaches (creating if needed)
 # this dir's persistent scratch terminal on its own term socket — the very server and
 # session a `--frame` in this dir would put in its left pane, built by the same
-# `_amux_frame_left_cmd`, so a host that supplies its own split (warden's `[split]
-# cmd = "amux --term"`) and a frame started in a plain terminal share ONE scratch shell.
-# term.conf's respawn hook keeps the shell alive across `exit`, as in a frame. A term
-# started this way has no frame to die with — `_amux_kill` reaps it by dir regardless,
-# and `--probe` ignores it (a shell is not a session). The command string is a separate
-# function so the selftest can pin the wiring without attaching a client.
+# `_amux_term_ensure` + attached by the same `_amux_frame_left_cmd`, so a host that
+# supplies its own split (warden's `[split] cmd = "amux --term"`) and a frame started in
+# a plain terminal share ONE scratch column, top shells included. term.conf's respawn
+# hook keeps the scratch shell alive across `exit`, as in a frame. A term started this
+# way has no frame to die with — `_amux_kill` reaps it by dir regardless, and `--probe`
+# ignores it (a shell is not a session). The command string is a separate function so
+# the selftest can pin the wiring without attaching a client.
 _amux_term_cmd() { # [session]
-  local session
-  if [ $# -gt 0 ] && [ -n "$1" ]; then session=$(_amux_sanitize_session "$1"); else session=$(_amux_default_session_name); fi
-  _amux_frame_left_cmd "$(_amux_term_sock)" "$AGENTMUX_TMUX/term.conf" "${session}-term"
+  _amux_frame_left_cmd "$(_amux_term_sock)" "$AGENTMUX_TMUX/term.conf" "$(_amux_term_session_base "$@")-term"
 }
 _amux_term() {
   _amux_warm_launch_caches
+  local _sz cols lines
+  # Build (if absent) at the real terminal size less the term's own status line — the
+  # window the client below is about to attach — so the column's percentages hold.
+  _sz=$(_amux_tty_size); cols=${_sz%% *}; lines=${_sz##* }
+  [ "$lines" -gt 1 ] && lines=$((lines - 1))
+  _amux_term_ensure "$(_amux_term_session_base "$@")" "$cols" "$lines"
   local cmd; cmd=$(_amux_term_cmd "$@")
   eval "exec $cmd"
 }
@@ -772,20 +840,16 @@ _amux_frame() {
   # consumers as a SESSION OPTION below, never exported — see the header comment.
   local tsock; tsock=$(_amux_term_sock)
 
-  # Optional left-column vertical split (empty = off) and its top-region pane count.
-  # Resolved up front so the staleness check below knows the expected pane count.
-  local top top_panes; top=$(_amux_frame_top_height); top_panes=$(_amux_frame_top_panes)
-
   # A frame that has lost its right (agent) pane is useless — reattaching it just
   # shows a full-width terminal. The agent pane runs with remain-on-exit, so a
   # detached/killed agent leaves a DEAD pane rather than vanishing; count only
   # LIVE panes (#{pane_dead}=0) so such a frame still reads as stale and gets
-  # rebuilt. Expected: 2 live panes (agent + bottom scratch), plus $top_panes more
-  # when the left split is on (so a single top pane still wants 3).
+  # rebuilt. Expected: exactly 2 live panes (agent + the scratch column) — the left
+  # column's optional top shells are panes INSIDE the term session, not the frame's.
   if tmux -L "$sock" has-session -t "=$fsess" 2>/dev/null; then
-    local npanes want; want=2; [ -n "$top" ] && want=$((2 + top_panes))
+    local npanes
     npanes=$(tmux -L "$sock" list-panes -t "$fsess" -F '#{pane_dead}' 2>/dev/null | grep -c '^0$')
-    [ "${npanes:-0}" -lt "$want" ] && tmux -L "$sock" kill-session -t "=$fsess" 2>/dev/null
+    [ "${npanes:-0}" -lt 2 ] && tmux -L "$sock" kill-session -t "=$fsess" 2>/dev/null
   fi
 
   if ! tmux -L "$sock" has-session -t "=$fsess" 2>/dev/null; then
@@ -812,11 +876,17 @@ _amux_frame() {
     # terminal). tmux distributes a *resize* equally across panes, so a frame born
     # at tmux's detached 80-col default would skew the ratio when it later attaches
     # to a wider terminal; sizing it correctly up front keeps the left at $left%.
-    # Read the size from the controlling terminal (`stty size` → "rows cols");
-    # `tput cols` reports the terminfo default under command substitution.
-    _sz=$(stty size </dev/tty 2>/dev/null); lines=${_sz%% *}; cols=${_sz##* }
-    case "$cols" in ''|*[!0-9]*) cols=0 ;; esac
-    case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
+    _sz=$(_amux_tty_size); cols=${_sz%% *}; lines=${_sz##* }
+    # The scratch column is built (if absent) on the TERM socket before the frame
+    # exists, so its own top/bottom layout is sized for the pane it will land in: the
+    # left of the `-l right%` split (tmux gives the new pane cols*right/100, minus the
+    # 1-col divider), less the frame's status line and the term's own. Unreadable
+    # size → 0/0 → tmux defaults (the same fallback as the frame itself).
+    local tcols=0 tlines=0
+    if [ "$cols" -gt 0 ] && [ "$lines" -gt 2 ]; then
+      tcols=$(( cols - (cols * right) / 100 - 1 )); tlines=$(( lines - 2 ))
+    fi
+    _amux_term_ensure "$session" "$tcols" "$tlines"
     # Left pane = persistent scratch terminal (own socket); right pane = amux.
     # Pass -x/-y only when the real size was readable; otherwise let tmux default.
     local nsargs=(new-session -d -s "$fsess" -c "$PWD")
@@ -832,8 +902,7 @@ _amux_frame() {
     # keeps the pane; the frame's pane-died hook (frame_reattach.sh) re-attaches
     # it while the term session still exists. @amux_role tells the hook which
     # session/socket to check. Per-pane, not -g: only these nested-tmux panes
-    # should survive their command exiting — the optional top scratch shell is a
-    # plain shell with no detach footgun, so it's left untagged and closes normally.
+    # should survive their command exiting.
     tmux -L "$sock" set -p -t "$left_pid" remain-on-exit on
     tmux -L "$sock" set -p -t "$left_pid" @amux_role term
     # Optional frame prefix override ([frame] prefix); default is in frame.conf.
@@ -860,22 +929,6 @@ _amux_frame() {
     # socket. A real kill stays dead instead of being resurrected.
     tmux -L "$sock" set -p -t "$agent_pid" remain-on-exit on
     tmux -L "$sock" set -p -t "$agent_pid" @amux_role agent
-    # Optional vertical split of the LEFT column into top/bottom (plain shells in
-    # the new TOP region). `-b` inserts the new pane ABOVE left_pid, so the scratch
-    # terminal (with its tab bar) stays at the BOTTOM. Done AFTER the agent split so
-    # the agent keeps spanning full height; `-l` sizes the new (top) pane to $top%.
-    if [ -n "$top" ]; then
-      local top_pid i
-      top_pid=$(tmux -L "$sock" split-window -v -b -t "$left_pid" -l "${top}%" -c "$PWD" -P -F '#{pane_id}')
-      # Stack the top region into $top_panes equal-height plain shells (all full width
-      # of the left column, stacked above the scratch terminal). Always split the same
-      # top pane, giving each new pane 100/i % of it as i counts down from $top_panes
-      # to 2 — `-l N%` is a percentage of the pane being split, so the shrinking top
-      # pane leaves ~equal rows within the top region. top_panes=1 → no splits.
-      for (( i = top_panes; i >= 2; i-- )); do
-        tmux -L "$sock" split-window -v -t "$top_pid" -l "$((100 / i))%" -c "$PWD"
-      done
-    fi
     # Start focus ([frame] focus): agent (right) by default, or the left scratch
     # column. Done last so it wins over wherever the splits left the active pane.
     case "$focus" in
@@ -2460,6 +2513,41 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     rm -rf "$_tk_dir"
   else
     echo "SKIP: frame-less term kill test (tmux not found)"
+  fi
+  # --- The term session carries the [frame] left-column layout ITSELF: left_vertical_split /
+  #     left_top_panes build plain shells ABOVE the scratch pane, inside the term server, when
+  #     the session is CREATED. One builder serves both hosts — a frame's left pane and a
+  #     standalone --term (warden's split) attach the same pre-built column — so the layout
+  #     can never be "frame-only" again. Built detached at a caller-supplied window size.
+  if command -v tmux >/dev/null 2>&1; then
+    _tl_dir=$(mktemp -d); _tl_base=$(cd "$_tl_dir" && _amux_default_session_name)
+    _tl_cfg=$(mktemp /tmp/amux-termlayout-XXXXXX.toml)
+    _tl_panes() { tmux -L "$AGENTMUX_TERM_SOCKET" list-panes -t "=${_tl_base}-term" -F "$1" 2>/dev/null; }
+    # No split configured → a single scratch pane.
+    printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_tl_cfg"
+    rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+    ( cd "$_tl_dir" && AGENTMUX_CONFIG="$_tl_cfg" _amux_json_cache="" _amux_term_ensure "$_tl_base" 120 40 )
+    _assert "term_ensure: no split → one pane" "1" "$(_tl_panes '#{pane_id}' | wc -l | tr -d ' ')"
+    tmux -L "$AGENTMUX_TERM_SOCKET" kill-server 2>/dev/null
+    # Split on: a top region of 3 plain shells above the scratch pane = 4 panes.
+    printf '[frame]\nleft_vertical_split = 40\nleft_top_panes = 3\n[[agents]]\nname="a"\ncmd="x"\n' > "$_tl_cfg"
+    rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+    ( cd "$_tl_dir" && AGENTMUX_CONFIG="$_tl_cfg" _amux_json_cache="" _amux_term_ensure "$_tl_base" 120 40 )
+    _assert "term_ensure: split → 3 top shells + scratch" "4" "$(_tl_panes '#{pane_id}' | wc -l | tr -d ' ')"
+    # The scratch pane is the BOTTOM one and starts active, keeping term.conf's respawn-on-exit;
+    # the top shells are plain — they close on exit (per-pane remain-on-exit off).
+    _tl_rows=$(_tl_panes '#{pane_top} #{pane_active} #{remain-on-exit}' | sort -n)
+    _assert "term_ensure: bottom pane is the active scratch (respawns)" "1 on" \
+      "$(printf '%s\n' "$_tl_rows" | tail -1 | cut -d' ' -f2-)"
+    _assert "term_ensure: top shells close on exit" "off off off" \
+      "$(printf '%s\n' "$_tl_rows" | head -3 | cut -d' ' -f3 | paste -s -d ' ' -)"
+    # Idempotent: a second ensure finds the session and never re-splits it.
+    ( cd "$_tl_dir" && AGENTMUX_CONFIG="$_tl_cfg" _amux_json_cache="" _amux_term_ensure "$_tl_base" 120 40 )
+    _assert "term_ensure: idempotent on a live session" "4" "$(_tl_panes '#{pane_id}' | wc -l | tr -d ' ')"
+    tmux -L "$AGENTMUX_TERM_SOCKET" kill-server 2>/dev/null
+    rm -rf "$_tl_dir" "$_tl_cfg"; unset -f _tl_panes
+  else
+    echo "SKIP: term layout test (tmux not found)"
   fi
   if [ -n "$_tm_save" ]; then AGENTMUX_TERM_SOCKET="$_tm_save"; else unset AGENTMUX_TERM_SOCKET; fi
   # The old name is gone (renamed, no alias).
