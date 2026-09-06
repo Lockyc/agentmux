@@ -17,7 +17,13 @@ X threads. Agent web-fetch tooling cannot read either (YouTube returns the SPA f
 `x.com` fails TLS host verification), so a link here would be a dead end for the next
 agent exactly as it was for this one. Video transcripts were pulled with `yt-dlp
 --write-auto-subs` from channel `UC0gjVbm7HY5GzDTo5NbQruA` — note the handle in
-circulation (`@Mitchellh3`) does not resolve. Facts below are as of 2026-09-04.
+circulation (`@Mitchellh3`) does not resolve. Facts below are as of 2026-09-07.
+
+What *is* agent-fetchable, for the next status check (so it starts from the ledger below,
+not from a fresh web search): `mitchellh.com/writing/superlogical`, `superlogical.com`,
+press coverage (The Register, InfoWorld, XenoSpectrum's 2026-08-01 architecture write-up),
+and Hacker News through `hn.algolia.com/api/v1/items/<id>` — the site itself rate-limits,
+and the `hachyderm.io` mirrors of the X posts hang up.
 
 ## What Superlogical is doing
 
@@ -52,8 +58,28 @@ terminal multiplexer on libghostty. The parts that bear on amux, from the
 - **Feature velocity is an explicit part of the argument**, and tmux's lack of kitty
   graphics is the case study Hashimoto uses for it.
 
-No public code, protocol spec, license, price or date exists yet. Treat all of the above
-as design intent, not a shipped contract.
+Treat all of the above as design intent, not a shipped contract — nothing exists to adopt
+yet. The ledger below is the record of what has and hasn't happened; append to it rather
+than re-deriving the state from the web.
+
+### Status ledger
+
+- **2026-07-29** — company announced (`mitchellh.com/writing/superlogical`); the beta
+  waitlist opens at `superlogical.com`. Co-founders: Jack Pearkes (HashiCorp's first
+  employee), Alasdair Monk, Hector Simpson. US$10M seed led by Notable Capital with Amplify
+  Partners; angels include Patrick Collison, Tobi Lütke, Aaron Levie, Guillermo Rauch and
+  Armon Dadgar. This bears on the paid-product point in *What this changes here*: it is a
+  venture-scale hosted play, so the hosted server is the product and the lock-in risk, as
+  assumed there.
+- **2026-07-30 → 08-01** — the architecture devlog and X thread transcribed above.
+- **2026-08-30** — first public demo (an X video, mirrored on Hacker News as *Basic
+  Superlogical Demo*): the macOS app, basic functionality only, pitched on speed.
+  Hashimoto's clarifications alongside it: not macOS-only; the web client is "very
+  functional" and gets its own demo later; which platforms are stable enough for the
+  *initial* public release is still undecided.
+- **As of 2026-09-07** — still waitlist-only. No public code, protocol spec, license,
+  price, benchmarks or release date. The unlock named under *Not yet* (a published protocol
+  or client) has not fired.
 
 ## What this changes here
 
