@@ -39,8 +39,9 @@ that identifies a project therefore needs no normalisation of its own; it just r
 
 The term shard is also reachable **standalone** via `amux --term` (the frame's left pane, for a
 host that supplies its own split — warden's `[split] cmd = "amux --term"`), so a scratch
-terminal can exist with no frame; `_amux_kill`'s by-dir path reaps it regardless of a frame
-(the shard is per dir, so no same-basename guard is needed), and `--probe` never counts it.
+terminal can exist with no frame; `_amux_kill`'s by-dir path and `--frame-kill` both reap it
+regardless of a frame (the shard is per dir, so no same-basename guard is needed — `--frame-kill`
+is the one that leaves the agent running), and `--probe` never counts it.
 **The `[frame]` left-column layout (`left_vertical_split` / `left_top_panes`) is built INSIDE
 the term session** — `_amux_term_ensure`, at creation, called by both `--frame` and `--term`
 before either attaches — never as panes on the frame socket. The frame is a fixed two-pane

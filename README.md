@@ -113,7 +113,7 @@ Normal shell commands — type them at a prompt.
 | `amux --no-frame` | One-off plain launch when `[frame] default = true` is set (skips the frame) |
 | `amux --term [session]` | Attach (or create) this project's persistent scratch terminal **on its own** — the exact server and session a frame's left pane attaches, **including** the `[frame]` top-region shells (`left_vertical_split` / `left_top_panes` are built inside this session, not by the frame), for a host that supplies its own split (warden: `[split] cmd = "amux --term"` beside `cmd = "amux --no-frame"`). A frame started in a plain terminal and a warden pane therefore share one scratch column. Reaped by `--kill`; `--probe` ignores it (a shell is not a session) |
 | `amux --frames` | List active `--frame` wrappers (each lives on its own per-project tmux socket) |
-| `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal); the agent keeps running |
+| `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal) — or a frame-less scratch terminal started by `--term`; the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
 
 Set `[update] check = true` in `~/.agentmux/amux.toml` to enable a once-daily
@@ -286,7 +286,9 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
     wrapper; the agent survives, reattach later).
   - `amux --frames` — list active frames (no need to remember the socket).
   - `amux --frame-kill [session]` — tear down a frame: both the wrapper and its
-    left terminal (default: current dir's). The agent session keeps running.
+    left terminal (default: current dir's), or just the scratch terminal when no
+    frame is up (a `--term` in a warden split — the way to relaunch it with a
+    changed `[frame]` layout). The agent session keeps running.
   - `amux --kill [session]` — kill the whole project: the **agent** session plus
     its frame and terminal (default: current dir's). Use this instead of a raw
     `tmux kill-session` so nothing is left orphaned. `amux --sessions` lists the

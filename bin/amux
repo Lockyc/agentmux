@@ -1037,7 +1037,10 @@ _amux_frames() {
 # Kill a frame from the base terminal (default: the current dir's). Tears down the
 # wrapper (frame socket) AND its scratch terminal (term socket); the agent session
 # on the project's own agent socket is left running (kill it separately with
-# `tmux kill-session -t <session>`).
+# `tmux kill-session -t <session>`). A scratch terminal with NO frame (a `--term`
+# started for a warden split) is reaped the same way — it is the frame's terminal
+# whether or not a frame is up, and this is the one command that drops it without
+# taking the agent along (`--kill` does that). Refuses only when neither exists.
 _amux_frame_kill() {
   local arg base explicit=0
   # Sanitise the same way the frame was named (. and : → _) so an explicit arg or
@@ -1052,13 +1055,19 @@ _amux_frame_kill() {
   else
     fsock=$(_amux_frame_sock); tsock=$(_amux_term_sock)
   fi
+  local had_frame=0 had_term=0
   if [ -n "$fsock" ] && tmux -L "$fsock" has-session -t "=$fsess" 2>/dev/null; then
-    tmux -L "$fsock" kill-session -t "=$fsess" 2>/dev/null
-    [ -n "$tsock" ] && tmux -L "$tsock" kill-session -t "=$tsess" 2>/dev/null   # its scratch terminal
-    echo "killed frame '$fsess' + terminal '$tsess' (agent session, if any, still runs)"
-  else
-    echo "amux: no frame '$fsess' (try: amux --frames)" >&2; return 1
+    tmux -L "$fsock" kill-session -t "=$fsess" 2>/dev/null; had_frame=1
   fi
+  if [ -n "$tsock" ] && tmux -L "$tsock" has-session -t "=$tsess" 2>/dev/null; then
+    tmux -L "$tsock" kill-session -t "=$tsess" 2>/dev/null; had_term=1
+  fi
+  case "$had_frame$had_term" in
+    11) echo "killed frame '$fsess' + terminal '$tsess' (agent session, if any, still runs)" ;;
+    10) echo "killed frame '$fsess' (no scratch terminal was up; agent session, if any, still runs)" ;;
+    01) echo "killed terminal '$tsess' (no frame was up; agent session, if any, still runs)" ;;
+    *)  echo "amux: no frame '$fsess' and no scratch terminal '$tsess' (try: amux --frames)" >&2; return 1 ;;
+  esac
 }
 
 # Kill EVERY frame at once: tears down the whole frame server (all wrappers on the
@@ -1952,7 +1961,7 @@ amux [(-<flag> | <agent_name>)] [session_name]
                  left pane, for a host that supplies its own split (warden); shares the
                  shell with a frame, reaped by --kill, ignored by --probe
   --frames       list active frames (they live on a separate tmux socket)
-  --frame-kill   kill a frame [session] (default: current dir); agent keeps running
+  --frame-kill   kill a frame [session] + its scratch terminal, or a frame-less terminal (default: current dir); agent keeps running
   --frame-kill-all     kill ALL frames + scratch terminals at once; agents keep running
   --version      print version
   --help         this help
@@ -2548,6 +2557,31 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     rm -rf "$_tl_dir" "$_tl_cfg"; unset -f _tl_panes
   else
     echo "SKIP: term layout test (tmux not found)"
+  fi
+  # --- --frame-kill reaps a frame-LESS scratch terminal too (a --term started for a warden
+  #     split has no frame; it used to be reachable only through --kill, which takes the
+  #     agent with it, or a raw tmux kill-server). Both the by-dir default and the explicit
+  #     session-name form; the "no frame" refusal is reserved for nothing-to-kill.
+  if command -v tmux >/dev/null 2>&1; then
+    _fl_dir=$(mktemp -d); _fl_base=$(cd "$_fl_dir" && _amux_default_session_name)
+    _fl_mk() { ( cd "$_fl_dir" && env -u TMUX tmux -L "$AGENTMUX_TERM_SOCKET" -f "$AGENTMUX_TMUX/term.conf" \
+        new-session -d -s "${_fl_base}-term" -c "$_fl_dir" 2>/dev/null ); }
+    _fl_live() { tmux -L "$AGENTMUX_TERM_SOCKET" has-session -t "=${_fl_base}-term" 2>/dev/null; echo $?; }
+    _fl_mk
+    _fl_out=$(cd "$_fl_dir" && amux --frame-kill 2>&1); _fl_rc=$?
+    case "$_fl_out" in *"terminal '${_fl_base}-term'"*) _got=ok ;; *) _got="$_fl_out" ;; esac
+    _assert "frame-kill by dir reaps a frame-less term" "ok" "$_got"
+    _assert "frame-kill frame-less term exit" "0" "$_fl_rc"
+    _assert "frame-less term is gone after frame-kill" "1" "$(_fl_live)"
+    _fl_mk
+    _fl_out=$(amux --frame-kill "$_fl_base" 2>&1); _fl_rc=$?
+    case "$_fl_out" in *"terminal '${_fl_base}-term'"*) _got=ok ;; *) _got="$_fl_out" ;; esac
+    _assert "frame-kill by name reaps a frame-less term" "ok" "$_got"
+    _assert "frame-less term is gone after frame-kill by name" "1" "$(_fl_live)"
+    tmux -L "$AGENTMUX_TERM_SOCKET" kill-server 2>/dev/null
+    rm -rf "$_fl_dir"; unset -f _fl_mk _fl_live
+  else
+    echo "SKIP: frame-kill frame-less term test (tmux not found)"
   fi
   if [ -n "$_tm_save" ]; then AGENTMUX_TERM_SOCKET="$_tm_save"; else unset AGENTMUX_TERM_SOCKET; fi
   # The old name is gone (renamed, no alias).
