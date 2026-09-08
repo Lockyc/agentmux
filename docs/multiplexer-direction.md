@@ -178,7 +178,7 @@ That reframing settles several things that were previously arguable:
   is open, the client half is in libghostty, and (2026-09-02) the server is self-hosted
   and runs on Linux, so the lock-in risk is narrower than first assumed — the control
   plane, not the session host — and a seam contains it either way. A self-hosted server on
-  nucleus is also exactly the shape `amux @host` already assumes, which is why the seam,
+  your own remote host is also exactly the shape `amux @host` already assumes, which is why the seam,
   not a rewrite, is the right investment.
 - **Status rows and notes are chrome painted into a terminal grid.** In a client-owns-
   the-viewport model that chrome belongs to the client, which is where warden's sidebar,
