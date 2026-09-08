@@ -17,13 +17,20 @@ X threads. Agent web-fetch tooling cannot read either (YouTube returns the SPA f
 `x.com` fails TLS host verification), so a link here would be a dead end for the next
 agent exactly as it was for this one. Video transcripts were pulled with `yt-dlp
 --write-auto-subs` from channel `UC0gjVbm7HY5GzDTo5NbQruA` — note the handle in
-circulation (`@Mitchellh3`) does not resolve. Facts below are as of 2026-09-07.
+circulation (`@Mitchellh3`) does not resolve; the cookie-rotation warning `yt-dlp` prints is
+noise, the subtitles still land. Facts below are as of 2026-09-08.
 
 What *is* agent-fetchable, for the next status check (so it starts from the ledger below,
 not from a fresh web search): `mitchellh.com/writing/superlogical`, `superlogical.com`,
 press coverage (The Register, InfoWorld, XenoSpectrum's 2026-08-01 architecture write-up),
-and Hacker News through `hn.algolia.com/api/v1/items/<id>` — the site itself rate-limits,
-and the `hachyderm.io` mirrors of the X posts hang up.
+and Hacker News through `hn.algolia.com/api/v1/items/<id>` (`search_by_date?query=superlogical
+&tags=story` lists new mirrors) — the site itself rate-limits. **The X posts are readable
+through the Mastodon API, not the mirror pages**: `hachyderm.io/@mitchellh.rss` and the
+`/@mitchellh/<id>` pages hang up, but `curl` with a browser user-agent against
+`hachyderm.io/api/v1/accounts/lookup?acct=mitchellh` → `/api/v1/accounts/<id>/statuses`
+returns the cross-posted text, and each status's `media_attachments[].url` (on
+`media.hachyderm.io`) serves the attached charts, which carry no alt text and must be read
+as images. That route is how the 2026-09-02 numbers below were captured.
 
 ## What Superlogical is doing
 
@@ -54,7 +61,8 @@ terminal multiplexer on libghostty. The parts that bear on amux, from the
   is "architecturally identical" to a traditional multiplexer.
 - **The binary protocol is open.** "If it's not libghostty, it's still a binary protocol
   anyone can parse," and it lives predominantly in MIT-licensed libghostty. What the
-  company sells is the hosted server and control plane, not the wire format.
+  company sells is the control plane, not the wire format — and, per the 2026-09-02 server
+  devlog in the ledger, not the server either: that is self-hosted.
 - **Feature velocity is an explicit part of the argument**, and tmux's lack of kitty
   graphics is the case study Hashimoto uses for it.
 
@@ -69,17 +77,76 @@ than re-deriving the state from the web.
   employee), Alasdair Monk, Hector Simpson. US$10M seed led by Notable Capital with Amplify
   Partners; angels include Patrick Collison, Tobi Lütke, Aaron Levie, Guillermo Rauch and
   Armon Dadgar. This bears on the paid-product point in *What this changes here*: it is a
-  venture-scale hosted play, so the hosted server is the product and the lock-in risk, as
-  assumed there.
+  venture-scale play, so the paid layer is the lock-in risk, as assumed there — which layer
+  that is was narrowed on 2026-09-02, below.
 - **2026-07-30 → 08-01** — the architecture devlog and X thread transcribed above.
-- **2026-08-30** — first public demo (an X video, mirrored on Hacker News as *Basic
-  Superlogical Demo*): the macOS app, basic functionality only, pitched on speed.
-  Hashimoto's clarifications alongside it: not macOS-only; the web client is "very
-  functional" and gets its own demo later; which platforms are stable enough for the
-  *initial* public release is still undecided.
-- **As of 2026-09-07** — still waitlist-only. No public code, protocol spec, license,
-  price, benchmarks or release date. The unlock named under *Not yet* (a published protocol
-  or client) has not fired.
+- **2026-08-28** (X; the Hacker News mirror *Basic Superlogical Demo* is dated 08-30, and a
+  YouTube upload of the same three minutes, titled *Superlogical Pre-Alpha Demo*, followed
+  on 09-02) — first public demo: the macOS app, basic functionality only, pitched on speed.
+  What it shows: a sub-half-second cold launch into an interactive session, and the same
+  after quitting the client and reopening it against several live workloads (btop, htop,
+  a counter that kept counting while the client was closed); named sessions ("work"),
+  created and switched from the client; **native scrolling with a native scroll bar**, the
+  client-owns-the-viewport point made visible; vertical tabs exist alongside horizontal.
+  The server in the demo is local. Hashimoto's clarifications alongside it: not macOS-only;
+  the web client is "very functional" and gets its own demo later; which platforms are
+  stable enough for the *initial* public release is still undecided; and (08-30) "all the
+  terminal-specific work is going into libghostty so everyone can benefit, e.g. the
+  terminal binary snapshot."
+- **2026-09-02** — *Superlogical Server Memory Optimizations Overview* (X post with four
+  charts + an 11-minute devlog, YouTube `T5gV6anSt-4`). Two things it settles:
+  - **The server is self-hosted, not a service.** Hashimoto's words: "when I say server,
+    it's a fully self-hosted thing. It's not a service. It's built into the Mac app" — a
+    fresh install starts a local server invisibly, and the same server binary "runs
+    anywhere", Linux included. The stated vision is a server on every machine, host and
+    pod you have. So the paid layer is the control plane (accounts, sharing, remote
+    resolution), not the thing the PTYs run in; the *What this changes here* bullet on
+    lock-in is updated accordingly.
+  - **Benchmarks exist, and they are about memory at agent scale.** The scale argument:
+    agents spawn terminals and attach as clients in numbers no multiplexer was designed
+    for, so the target is "hundreds of people, hundreds of thousands of agents". Numbers
+    (macOS 26.6.2, Apple M4 Max, `phys_footprint`; zellij "default" is out-of-the-box,
+    "plugin-free" removes all plugins; lower is better):
+
+    | Measure | tmux 3.5a | Superlogical | zellij 0.45.0 plugin-free | zellij 0.45.0 default |
+    | --- | --- | --- | --- | --- |
+    | Server start, one session | 2.50 MiB | 10.6 MiB | 35.3 MiB | 53.6 MiB |
+    | Per empty 80×24 terminal | 15 KiB | 68 KiB | 2.30 MiB | 7.88 MiB |
+    | Per 80×24 terminal filled with 10,000 lines | 4.89 MiB | 407 KiB | 22.7 MiB | — |
+    | Per client connection, 50 filled terminals | 157 KiB | 85 KiB | 21.7 MiB | 1.56 GiB |
+
+    Hashimoto's own reading: tmux's empty states are "excellent" and he expects to match
+    them; Superlogical wins once terminals have content or clients attach; zellij's
+    per-client cost comes from its default tab/status bar being wasm plugins instantiated
+    per tab, one runtime each, and not reclaimed on close. The mechanisms behind the
+    Superlogical column, because two of them are libghostty capabilities rather than
+    server ones:
+    - **Terminal parking.** A terminal idle for 60 s on *PTY read* (typing into it does
+      not count) has its entire emulator state — screen, scrollback, modes — written to
+      disk as an encrypted **binary snapshot**, and is then kept alive only by a
+      file-descriptor watch. This happens with clients attached: ten idle shells in an
+      open app are ten parked terminals. Unparking a 64 MB compressed scrollback is quoted
+      at ~200 µs excluding disk, decoded streaming. A client attaching to a parked
+      terminal is served the snapshot straight from disk without unparking. The
+      snapshot/restore is libghostty's ("the only terminal technology within a multiplexer
+      that supports that"), which is the capability the 08-30 reply above says lands
+      upstream.
+    - **PTY parking.** Throughput comes from one blocking OS thread per PTY (re-verified:
+      pooling PTY fds into kqueue/epoll/io_uring costs measurable latency — Ghostty is the
+      reference). At server scale that thread is the expensive part, so an idle *or
+      unobserved* PTY is moved into a single evented poller (a 5–10 % throughput cost
+      taken only when no human is watching) and moved back on activity.
+    - **Client buffer parking.** The per-client pipeline buffers are freed once a client
+      goes idle after its initial sync and reallocated on the next burst.
+
+    The follow-ups he named for the same harness: IO throughput, CPU, security (the
+    snapshot encryption, "secrets in scrollback"), and GNU screen added as a comparison
+    (09-03, on request).
+- **As of 2026-09-08** — still waitlist-only. No public code, protocol spec, license,
+  price or release date; the only published numbers are the memory set above.
+  `superlogical.com`'s signup copy promises notice of the beta "and any OSS releases along
+  the way", so an open-source drop before the beta is on their roadmap, undated. The unlock
+  named under *Not yet* (a published protocol or client) has not fired.
 
 ## What this changes here
 
@@ -108,8 +175,11 @@ That reframing settles several things that were previously arguable:
   seam is what lets `zmx` or Superlogical's protocol drop in as a backend rather than
   force a rewrite, and it is cheapest to build now, while tmux is the only implementation.
   This is also the whole of the answer to Superlogical being a paid product: the protocol
-  is open and the client half is in libghostty, so the lock-in risk is the hosted server,
-  which a seam contains.
+  is open, the client half is in libghostty, and (2026-09-02) the server is self-hosted
+  and runs on Linux, so the lock-in risk is narrower than first assumed — the control
+  plane, not the session host — and a seam contains it either way. A self-hosted server on
+  nucleus is also exactly the shape `amux @host` already assumes, which is why the seam,
+  not a rewrite, is the right investment.
 - **Status rows and notes are chrome painted into a terminal grid.** In a client-owns-
   the-viewport model that chrome belongs to the client, which is where warden's sidebar,
   tab-row dots and presence indicators already live. Migrating it is the expensive half
