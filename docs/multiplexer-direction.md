@@ -18,7 +18,7 @@ X threads. Agent web-fetch tooling cannot read either (YouTube returns the SPA f
 agent exactly as it was for this one. Video transcripts were pulled with `yt-dlp
 --write-auto-subs` from channel `UC0gjVbm7HY5GzDTo5NbQruA` — note the handle in
 circulation (`@Mitchellh3`) does not resolve; the cookie-rotation warning `yt-dlp` prints is
-noise, the subtitles still land. Facts below are as of 2026-09-08.
+noise, the subtitles still land. Facts below are as of 2026-09-09.
 
 What *is* agent-fetchable, for the next status check (so it starts from the ledger below,
 not from a fresh web search): `mitchellh.com/writing/superlogical`, `superlogical.com`,
@@ -142,8 +142,33 @@ than re-deriving the state from the web.
     The follow-ups he named for the same harness: IO throughput, CPU, security (the
     snapshot encryption, "secrets in scrollback"), and GNU screen added as a comparison
     (09-03, on request).
-- **As of 2026-09-08** — still waitlist-only. No public code, protocol spec, license,
-  price or release date; the only published numbers are the memory set above.
+- **2026-09-08** — *Superlogical Remote Sessions Pre-Alpha Demo* (X post + a 6-minute
+  YouTube video, `PdwTjSBW6Y8`; transcript pulled the same way as the others). The first
+  look at the remote path, and it answers the `amux @host` question more sharply than the
+  09-02 "runs anywhere" line did:
+  - **The server replaces sshd, it does not tunnel through it.** The multiplexer server is
+    named **Rex** in the demo. Adding a remote host (from the client's command palette) makes
+    the server perform "a full SSH-style system login" — it shows up in `who`, the login
+    shell and per-user limits apply — and Hashimoto runs the demo VPS "with no SSH on this
+    machine at all". Identity comes from the transport: the demo connects over Tailscale and
+    `whoami` reports the Tailscale identity, the hops taken, and the user being acted as; a
+    server-side mapping decides who may act as whom (root included), and pre-existing SSH
+    keys are honoured as a method.
+  - **One connection, many terminals.** Splits on the remote host ride the same connection.
+    Every new session gets a generated two-word name (`drifting-cedar`), renamable; sessions
+    and their kill propagate to every attached client at once, and quitting and reopening the
+    client lands back in the last session, local or remote.
+  - **Mosh-shaped transport, details withheld.** "A lot of the architectural similarities as
+    Mosh", "not everything Mosh does", explicitly not ready to describe the protocol or
+    transport. The pitch is a cross-country server that feels local.
+  - **A CLI is injected into every session**, local and remote (`whoami`, session create /
+    kill by id); and a **go-to-directory** palette action (⌘⇧G) opens a new terminal in a
+    chosen directory, with the directory listing served over the remote connection too — the
+    mechanism is deferred to a future architecture devlog. The stated design rule is that
+    everything local works remote and vice versa.
+- **As of 2026-09-09** — still waitlist-only. No public code, protocol spec, license,
+  price or release date; the only published numbers are the memory set above, and the
+  remote transport and auth model are shown but not specified.
   `superlogical.com`'s signup copy promises notice of the beta "and any OSS releases along
   the way", so an open-source drop before the beta is on their roadmap, undated. The unlock
   named under *Not yet* (a published protocol or client) has not fired.
@@ -179,7 +204,10 @@ That reframing settles several things that were previously arguable:
   and runs on Linux, so the lock-in risk is narrower than first assumed — the control
   plane, not the session host — and a seam contains it either way. A self-hosted server on
   your own remote host is also exactly the shape `amux @host` already assumes, which is why the seam,
-  not a rewrite, is the right investment.
+  not a rewrite, is the right investment. The 2026-09-08 remote demo sharpens what the seam has
+  to own: Superlogical's server *is* the login (no sshd on the host, identity from the transport),
+  so remote resolution is a backend's concern, not an ssh hop amux composes in front of one —
+  `amux @host`'s ssh assumption belongs behind the seam, not above it.
 - **Status rows and notes are chrome painted into a terminal grid.** In a client-owns-
   the-viewport model that chrome belongs to the client, which is where warden's sidebar,
   tab-row dots and presence indicators already live. Migrating it is the expensive half
