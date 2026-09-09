@@ -18,7 +18,8 @@ X threads. Agent web-fetch tooling cannot read either (YouTube returns the SPA f
 agent exactly as it was for this one. Video transcripts were pulled with `yt-dlp
 --write-auto-subs` from channel `UC0gjVbm7HY5GzDTo5NbQruA` — note the handle in
 circulation (`@Mitchellh3`) does not resolve; the cookie-rotation warning `yt-dlp` prints is
-noise, the subtitles still land. Facts below are as of 2026-09-09.
+noise, the subtitles still land. The ledger's last entry carries the as-of date for
+everything below it.
 
 What *is* agent-fetchable, for the next status check (so it starts from the ledger below,
 not from a fresh web search): `mitchellh.com/writing/superlogical`, `superlogical.com`,
@@ -166,9 +167,12 @@ than re-deriving the state from the web.
     chosen directory, with the directory listing served over the remote connection too — the
     mechanism is deferred to a future architecture devlog. The stated design rule is that
     everything local works remote and vice versa.
-- **As of 2026-09-09** — still waitlist-only. No public code, protocol spec, license,
-  price or release date; the only published numbers are the memory set above, and the
-  remote transport and auth model are shown but not specified.
+- **As of 2026-09-10** — still waitlist-only. (Re-checked that day against every route named
+  at the top of this file — Mastodon statuses, the YouTube channel listing, `mitchellh.com/writing`,
+  HN by date, `superlogical.com`: nothing Superlogical since the 09-08 remote demo above.)
+  No public code, protocol spec, license, price or release date; the only published numbers
+  are the memory set above, and the remote transport and auth model are shown but not
+  specified.
   `superlogical.com`'s signup copy promises notice of the beta "and any OSS releases along
   the way", so an open-source drop before the beta is on their roadmap, undated. The unlock
   named under *Not yet* (a published protocol or client) has not fired.
