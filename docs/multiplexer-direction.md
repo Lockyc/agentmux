@@ -167,7 +167,7 @@ than re-deriving the state from the web.
     chosen directory, with the directory listing served over the remote connection too — the
     mechanism is deferred to a future architecture devlog. The stated design rule is that
     everything local works remote and vice versa.
-- **As of 2026-09-10** — still waitlist-only. (Re-checked that day against every route named
+- **As of 2026-09-11** — still waitlist-only. (Re-checked 09-10 and 09-11 against every route named
   at the top of this file — Mastodon statuses, the YouTube channel listing, `mitchellh.com/writing`,
   HN by date, `superlogical.com`: nothing Superlogical since the 09-08 remote demo above.)
   No public code, protocol spec, license, price or release date; the only published numbers
