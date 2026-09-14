@@ -167,12 +167,35 @@ than re-deriving the state from the web.
     chosen directory, with the directory listing served over the remote connection too — the
     mechanism is deferred to a future architecture devlog. The stated design rule is that
     everything local works remote and vice versa.
-- **As of 2026-09-11** — still waitlist-only. (Re-checked 09-10 and 09-11 against every route named
+- **2026-09-14** — *Superlogical Pre-Alpha Demo: CLI* (YouTube `9fcfDF8SBnc`, 7½ minutes;
+  not cross-posted to Mastodon as of 09-15, and no HN mirror). The CLI binary is **`rex`**,
+  the same name as the server. Its data model, as shown: a **session** holds **windows**
+  (tabs), a window holds **blocks**, and each block has a type (`terminal` is the only one
+  shown), an id and a label (`shell` is the default label). What the demo does with it:
+  - **Create and arrange from outside the client.** `rex` creates a named session running a
+    command, adds a labelled block to it (it lands as a split), and **moves** a block relative
+    to another ("move nvim below shell") without disturbing the running process; `rex block
+    close` and session kill work too. Every change shows up at once on every connected client.
+  - **Scripting primitives.** `wait` blocks until a named block's process completes; a
+    `--keep-open` flag keeps the finished block on screen (by default it disappears).
+  - **Introspection.** `inspect` on a session reports its id, label, focused window, window
+    count and **connected clients** (the CLI and the Mac app each count as one); block listing
+    and block inspect return ids, types, labels and metadata.
+  - **Every block exposes its own methods and events.** A terminal block's `process` method
+    returns the child process and, separately, the **foreground process** (a shell running
+    nvim reports both), or exit information once it has exited. A per-session **event stream**
+    emits client-connected, block size-changed, block-closed, layout-changed and, from the
+    terminal block itself, **child-exited**.
+  - **More than the GUI exposes.** Per the help output: send input, simulate key presses and
+    mouse movement, and capture the screen as text, HTML or other formats. Hashimoto's claim is
+    that anything the graphical client does, the CLI does, plus more; he pitches it at editors
+    and agent tools.
+- **As of 2026-09-15** — still waitlist-only. (Re-checked 09-15 against every route named
   at the top of this file — Mastodon statuses, the YouTube channel listing, `mitchellh.com/writing`,
-  HN by date, `superlogical.com`: nothing Superlogical since the 09-08 remote demo above.)
+  HN by date, `superlogical.com`: the 09-14 CLI demo above is the only new item.)
   No public code, protocol spec, license, price or release date; the only published numbers
-  are the memory set above, and the remote transport and auth model are shown but not
-  specified.
+  are the memory set above, the remote transport and auth model are shown but not
+  specified, and the CLI is demoed but not documented.
   `superlogical.com`'s signup copy promises notice of the beta "and any OSS releases along
   the way", so an open-source drop before the beta is on their roadmap, undated. The unlock
   named under *Not yet* (a published protocol or client) has not fired.
@@ -219,7 +242,9 @@ That reframing settles several things that were previously arguable:
 
 **Not yet:** removing the agent tmux layer. It is blocked on the chrome migration above
 and on a backend that provides the ledger's open/close events; revisit once the seam
-exists and warden renders at least the note row. Nothing here argues for adopting
+exists and warden renders at least the note row. Superlogical's demoed per-session event
+stream (2026-09-14: block-closed, child-exited, client-connected) is the shape that second
+condition asks for, but it is demoed, not published. Nothing here argues for adopting
 Superlogical — there is no artifact to adopt. The unlock is a published protocol or
 client.
 
