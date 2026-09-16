@@ -168,7 +168,7 @@ than re-deriving the state from the web.
     mechanism is deferred to a future architecture devlog. The stated design rule is that
     everything local works remote and vice versa.
 - **2026-09-14** — *Superlogical Pre-Alpha Demo: CLI* (YouTube `9fcfDF8SBnc`, 7½ minutes;
-  not cross-posted to Mastodon as of 09-15, and no HN mirror). The CLI binary is **`rex`**,
+  cross-posted to X/Mastodon the same day, no HN mirror). The CLI binary is **`rex`**,
   the same name as the server. Its data model, as shown: a **session** holds **windows**
   (tabs), a window holds **blocks**, and each block has a type (`terminal` is the only one
   shown), an id and a label (`shell` is the default label). What the demo does with it:
@@ -190,9 +190,9 @@ than re-deriving the state from the web.
     mouse movement, and capture the screen as text, HTML or other formats. Hashimoto's claim is
     that anything the graphical client does, the CLI does, plus more; he pitches it at editors
     and agent tools.
-- **As of 2026-09-15** — still waitlist-only. (Re-checked 09-15 against every route named
+- **As of 2026-09-17** — still waitlist-only. (Re-checked 09-17 against every route named
   at the top of this file — Mastodon statuses, the YouTube channel listing, `mitchellh.com/writing`,
-  HN by date, `superlogical.com`: the 09-14 CLI demo above is the only new item.)
+  HN by date, `superlogical.com`: nothing after the 09-14 CLI demo above.)
   No public code, protocol spec, license, price or release date; the only published numbers
   are the memory set above, the remote transport and auth model are shown but not
   specified, and the CLI is demoed but not documented.
