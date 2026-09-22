@@ -1152,7 +1152,7 @@ TOML
   _rm_roster_link="$(_rm_roster 0 linkhost --refresh | sort | tr '\n' ' ')"
   _assert "roster follows a symlinked root and lists a .git-file repo" \
     "$_rm_tp/roots/three/solid $_rm_tp/roots/three/wt " "$_rm_roster_link"
-  _rm_preflight 0 wt "" ; _assert "preflight resolves the same .git-file repo" "$_rm_tp/roots/three/wt" "$RM_DIR"
+  AGENTMUX_REMOTE_TEST_PROG="$_rm_t/amux" _rm_preflight 0 wt "" ; _assert "preflight resolves the same .git-file repo" "$_rm_tp/roots/three/wt" "$RM_DIR"
   export AGENTMUX_CONFIG="$_rm_cfg_saved"; _amux_json_cache=""
 
   # ---- roster json + liveness join ----

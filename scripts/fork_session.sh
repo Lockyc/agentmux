@@ -87,7 +87,7 @@ case "$1" in
       *socket_path*)
         # session_log.sh's _sl_ctx context query, answered FOR THE TARGET: that
         # is what lets `open @42` record @42 rather than the source window.
-        printf '/s/k\t6001\tproj\t%s\tw\t/tmp/proj\n' "$_t" ;;
+        printf '/s/k\0376001\037proj\037%s\037w\037/tmp/proj\n' "$_t" ;;
       *pane_current_path*)
         # fork_session.sh's own cwd query: -p -t <win> '#{pane_current_path}'
         echo "/tmp/proj" ;;

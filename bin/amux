@@ -2297,6 +2297,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   chmod +x "$_rfd/scripts/session_log.sh"
   _rf_run() {   # <config> <no_frame flag> → FRAME | PLAIN
     (
+      # An ambient $TMUX (the gate run from a tmux pane) must not trip the nesting
+      # guard; a test sets one on purpose through _RF_TMUX.
+      if [ -n "${_RF_TMUX:-}" ]; then TMUX=$_RF_TMUX; else unset TMUX; fi
       AGENTMUX_SCRIPTS="$_rfd/scripts"; AGENTMUX_CONFIG="$1"; _amux_json_cache=""
       _amux_restore_into()   { cat >/dev/null; }
       _amux_session_exists() { return 0; }
@@ -2315,9 +2318,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     "$(_rf_run "$_ufoff" "" | head -1)"
   # ...and refuses to nest inside tmux, as a bare plain launch does.
   _assert "--restore plain refuses inside tmux" "" \
-    "$(TMUX=/fake/sock,1,0 _rf_run "$_ufoff" "")"
+    "$(_RF_TMUX=/fake/sock,1,0 _rf_run "$_ufoff" "")"
   _assert "--restore frame branch keeps its own guard (not refused here)" "FRAME" \
-    "$(TMUX=/fake/sock,1,0 _rf_run "$_ufon" "")"
+    "$(_RF_TMUX=/fake/sock,1,0 _rf_run "$_ufon" "")"
   # --no-frame is a modifier consumed ahead of dispatch, so it composes with every
   # subcommand through amux()'s real argument parsing (landings stubbed).
   _nf_run() {
