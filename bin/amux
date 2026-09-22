@@ -1514,7 +1514,17 @@ _amux_probe() {
 # <base>-frame and <base>-term. Default target is the current dir's session; an
 # explicit arg is sanitised, and a trailing -frame/-term is stripped to the base.
 # Kills whichever of the three exist; errors only if none do.
+#
+# A leading internal `--suspend` (the `amux --suspend` entry point) keeps the
+# agent's windows RESTORABLE instead: no discard, and the shard goes down by
+# `kill-server`, never `kill-session`. kill-session unlinks every window first,
+# which fires the window-unlinked snapshot hook against a still-live, emptying
+# server and writes an empty sidecar — exactly a deliberate close. kill-server
+# fires no hook, so the sidecar keeps the live set and the dead shard reads as a
+# crash: `--probe` exits 3 and the next bare `amux` offers the restore picker.
 _amux_kill() {
+  local suspend=0
+  if [ "${1:-}" = "--suspend" ]; then suspend=1; shift; fi
   local arg base
   if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
   case "$arg" in
@@ -1540,21 +1550,26 @@ _amux_kill() {
   if [ "$by_dir" -eq 0 ]; then _asock=$(_amux_agent_socks | _amux_sock_hosting "$base"); fi
   if { [ "$by_dir" -eq 0 ] && [ -n "$_asock" ]; } \
      || { [ "$by_dir" -eq 1 ] && _amux_agent_session_is_mine "$base"; }; then
-    # Mark this agent shard's windows deliberately closed BEFORE tearing it down.
-    # The agent session is the only one on its per-project server, so kill-session
-    # kills the whole server — the window-unlinked snapshot hook (which is what
-    # empties the live-set sidecar on a graceful close) never runs. Without this the
-    # sidecar stays populated + the server goes dead, and crash recovery offers the
-    # deliberately-killed tab as if it had crashed. Query socket_path + pid on the
-    # resolved agent socket, then write an empty sidecar via session_log discard.
-    local _kl _kinfo _ksp _kpid TAB; TAB=$(printf '\t')
+    local _kl
     if [ "$by_dir" -eq 0 ]; then _kl="$_asock"; else _kl=$(_amux_agent_sock); fi
-    _kinfo=$(env -u TMUX tmux -L "$_kl" display-message -p "#{socket_path}${TAB}#{pid}" 2>/dev/null)
-    _ksp=${_kinfo%%"$TAB"*}; _kpid=${_kinfo##*"$TAB"}
-    [ -n "$_ksp" ] && [ -n "$_kpid" ] \
-      && "$AGENTMUX_SCRIPTS/session_log.sh" discard "$_ksp" "$_kpid" 2>/dev/null || true
-    if [ "$by_dir" -eq 0 ]; then tmux -L "$_asock" kill-session -t "=$base" 2>/dev/null
-    else _amux_atmux kill-session -t "=$base" 2>/dev/null; fi
+    if [ "$suspend" -eq 1 ]; then
+      # The agent session is the only one on its per-project shard, so kill-server
+      # takes down exactly this project (see the header for why not kill-session).
+      env -u TMUX tmux -L "$_kl" kill-server 2>/dev/null
+    else
+      # Mark this agent shard's windows deliberately closed BEFORE tearing it down.
+      # kill-session's window-unlinked hook would empty the sidecar too, but only
+      # asynchronously, racing the server's exit; discard declares the intent
+      # synchronously. Without an empty sidecar a dead server reads as a crash and
+      # recovery offers the deliberately-killed tab. Query socket_path + pid on the
+      # resolved agent socket, then write the empty sidecar via session_log discard.
+      local _kinfo _ksp _kpid TAB; TAB=$(printf '\t')
+      _kinfo=$(env -u TMUX tmux -L "$_kl" display-message -p "#{socket_path}${TAB}#{pid}" 2>/dev/null)
+      _ksp=${_kinfo%%"$TAB"*}; _kpid=${_kinfo##*"$TAB"}
+      [ -n "$_ksp" ] && [ -n "$_kpid" ] \
+        && "$AGENTMUX_SCRIPTS/session_log.sh" discard "$_ksp" "$_kpid" 2>/dev/null || true
+      env -u TMUX tmux -L "$_kl" kill-session -t "=$base" 2>/dev/null
+    fi
     parts="agent '$base'"
   fi
   if [ -n "$fsock" ] && { { [ "$by_dir" -eq 0 ] && tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; } \
@@ -1567,7 +1582,8 @@ _amux_kill() {
     parts="${parts:+$parts + }terminal '${base}-term'"
   fi
   if [ -n "$parts" ]; then
-    echo "killed $parts"
+    if [ "$suspend" -eq 1 ]; then echo "suspended $parts (restore with: amux)"
+    else echo "killed $parts"; fi
   else
     echo "amux: no session '$base' (try: amux --sessions)" >&2; return 1
   fi
@@ -1884,6 +1900,11 @@ amux() {
         _amux_kill "$@"
         return $?
         ;;
+      --suspend)
+        shift
+        _amux_kill --suspend "$@"
+        return $?
+        ;;
       --kill-all)
         _amux_kill_all
         return $?
@@ -1949,6 +1970,8 @@ amux [(-<flag> | <agent_name>)] [session_name]
                  With no explicit session: exit 3 if absent but a crashed session here is
                  restorable (a plain `amux` launch would offer the restore picker); else exit 1.
   --kill         kill an agent session [session] + its frame/term (default: current dir)
+  --suspend      like --kill, but keep the agent tabs restorable: --probe exits 3 and
+                 the next bare `amux` here offers the restore picker
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
   --reload       re-source agent.conf on every running agent server (apply config
                  changes without relaunching; a fresh launch picks them up on its own)
@@ -3096,6 +3119,47 @@ STUB
     AGENTMUX_AGENT_SOCKET=""; AGENTMUX_FRAME_SOCKET="$_dgfsave"
   else
     echo "SKIP: dir-guard test (tmux not found)"
+  fi
+
+  # --suspend vs --kill (real tmux + the real window-unlinked hook): --suspend must
+  # leave the dead shard's live-set sidecar POPULATED (restorable — the crash
+  # signature), --kill must leave it EMPTY (deliberate close). The hook is what
+  # makes kill-session unsafe for suspend, so it is installed exactly as
+  # agentmux.conf does.
+  if command -v tmux >/dev/null 2>&1; then
+    _ssave="$AGENTMUX_AGENT_SOCKET"; _ssdsave="${AGENTMUX_STATE_DIR:-}"
+    _ssstate=$(mktemp -d); export AGENTMUX_STATE_DIR="$_ssstate"
+    _sscwd="$PWD"; _ssroot=$(mktemp -d); mkdir -p "$_ssroot/sus"; cd "$_ssroot/sus" || true
+    for _ssmode in suspend kill; do
+      AGENTMUX_AGENT_SOCKET="amux-sus-$_ssmode-$$"
+      _amux_atmux new-session -d -s sus -c "$PWD" 2>/dev/null
+      _amux_atmux new-window -t sus 2>/dev/null
+      _amux_atmux set-option -t sus @amux_dir "$PWD" 2>/dev/null
+      _amux_atmux set-hook -g window-unlinked \
+        "run-shell \"$AGENTMUX_SCRIPTS/session_log.sh snapshot #{socket_path} #{pid}\"" 2>/dev/null
+      _ssinfo=$(_amux_atmux display-message -p '#{socket_path} #{pid}' 2>/dev/null)
+      # shellcheck disable=SC2086  # socket_path + pid, deliberately two words
+      "$AGENTMUX_SCRIPTS/session_log.sh" snapshot $_ssinfo
+      _sslf=$(ls "$_ssstate"/live/*-"${_ssinfo##* }".windows 2>/dev/null)
+      if [ "$_ssmode" = suspend ]; then _amux_kill --suspend >/dev/null 2>&1; else _amux_kill >/dev/null 2>&1; fi
+      _rc=$?
+      _assert "$_ssmode: exits 0" "0" "$_rc"
+      if _amux_atmux has-session -t "=sus" 2>/dev/null; then _got=alive; else _got=gone; fi
+      _assert "$_ssmode: agent session torn down" "gone" "$_got"
+      sleep 1   # let any async hook land before reading the sidecar
+      _got=$(grep -c . "$_sslf" 2>/dev/null)
+      if [ "$_ssmode" = suspend ]; then
+        _assert "suspend: sidecar keeps both windows (restorable)" "2" "$_got"
+      else
+        _assert "kill: sidecar emptied (deliberate close)" "0" "$_got"
+      fi
+      _amux_atmux kill-server 2>/dev/null
+    done
+    cd "$_sscwd" || true; rm -rf "$_ssroot" "$_ssstate"
+    AGENTMUX_AGENT_SOCKET="$_ssave"
+    if [ -n "$_ssdsave" ]; then export AGENTMUX_STATE_DIR="$_ssdsave"; else unset AGENTMUX_STATE_DIR; fi
+  else
+    echo "SKIP: --suspend test (tmux not found)"
   fi
 
   # --- restore integration (real tmux socket): prove _amux_restore_into actually

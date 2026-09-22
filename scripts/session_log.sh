@@ -328,9 +328,9 @@ _sl_snapshot() {  # <socket> <pid>
 
 # Mark a server's windows as DELIBERATELY closed by writing an EMPTY live-set
 # sidecar. Used by `amux --kill`: killing a per-project shard's only session tears
-# down the whole tmux server, so the window-unlinked snapshot hook never runs and
-# the sidecar keeps its last (populated) set — a dead server + populated sidecar
-# reads as a crash. An empty sidecar makes sl_dropped intersect every row against
+# down the whole tmux server, and the window-unlinked snapshot hook that would
+# empty the sidecar runs asynchronously, racing that exit — a dead server +
+# populated sidecar reads as a crash (which `amux --suspend` relies on). An empty sidecar makes sl_dropped intersect every row against
 # the empty set → nothing offered. This must WRITE an empty file, never delete it:
 # an ABSENT sidecar means "dead server predating this feature → offer ALL windows",
 # the opposite of what a deliberate kill wants.
