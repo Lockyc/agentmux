@@ -24,7 +24,7 @@ Clone the repo, open it in Claude Code, and run:
 /agentmux:install
 ```
 
-The command checks dependencies, runs the installer, and interactively wires your shell config, `~/.tmux.conf`, and Claude Code hooks. It then self-installs to `~/.claude/commands/` so `/agentmux:install` is available globally for future updates from any directory.
+The command checks dependencies, runs the installer, and interactively wires your shell config and Claude Code hooks. It then self-installs to `~/.claude/commands/` so `/agentmux:install` is available globally for future updates from any directory.
 
 ### Manual
 
@@ -55,20 +55,14 @@ fish (`~/.config/fish/config.fish`):
 source ~/.agentmux/shell/agentmux.fish
 ```
 
-**3. Add to your `~/.tmux.conf`:**
-```
-source-file ~/.agentmux/tmux/agentmux.conf
-```
+**3. Edit `~/.agentmux/amux.toml`** to define your agents (created from the example by the installer).
 
-**4. Edit `~/.agentmux/amux.toml`** to define your agents (created from the example by the installer).
-
-**5. Reload:**
+**4. Reload your shell:**
 ```bash
 source ~/.zshrc                  # or restart your shell
-tmux source ~/.tmux.conf         # or start a new tmux server
 ```
 
-**6. Launch your first session:**
+**5. Launch your first session:**
 ```bash
 amux
 ```
@@ -159,7 +153,10 @@ on its **own** tmux server that does **not** read your `~/.tmux.conf`. That isol
 is deliberate: a config that loads a plugin manager (TPM) would run its synchronous
 plugin load on every cold per-project launch and stall it for seconds. agentmux
 re-sets the sensible defaults itself (escape-time, focus-events, scrollback, mouse,
-clipboard), so nothing an agent pane needs is lost.
+clipboard), so nothing an agent pane needs is lost. Your own `~/.tmux.conf` needs no
+agentmux line. Adding `source-file ~/.agentmux/tmux/agentmux.conf` there is only for
+running Claude in plain tmux outside amux (tab states, notifications), and it installs
+amux's hooks and `prefix v`/`prefix N` bindings on that regular server.
 
 To add **your own** tmux settings on top — vi copy-mode, custom bindings, a different
 status style — drop them in an optional **per-role** overlay, each sourced **last** by
@@ -378,7 +375,7 @@ Per-directory overrides: `[amux.dirs."<path>"]` blocks, matched like an agent's 
 
 | Key | Default | What it does |
 |---|---|---|
-| `prefix` | your `~/.tmux.conf` prefix | Prefix for the amux session only (a session option). Must differ from the `[frame]` prefix — a colliding value is ignored with a warning, since the frame would shadow it. Cascades to `[amux.dirs]` |
+| `prefix` | tmux's `C-b` (or your `user.agent.tmux.conf` prefix) | Prefix for the amux session only (a session option). Must differ from the `[frame]` prefix — a colliding value is ignored with a warning, since the frame would shadow it. Cascades to `[amux.dirs]` |
 | `session_colour` | — (auto-assigned) | Pin this directory's status-bar colour by name (`amux --colours` lists them) and reserve it from the auto-assign pool. Only meaningful inside a `[amux.dirs."<path>"]` block. See [Session colours](#session-colours) |
 
 ### `[frame]` — the `--frame` side-terminal layout

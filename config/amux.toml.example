@@ -98,8 +98,9 @@ model   = "qwen2.5-14b-instruct"
 timeout = 45
 
 [amux]
-# The amux (agent) session runs on your default tmux socket and reads your own
-# ~/.tmux.conf, so its prefix is normally whatever you set there (usually C-b).
+# The amux (agent) session runs on its own per-project tmux server, which does not
+# read ~/.tmux.conf, so its prefix is tmux's default (C-b) unless your
+# ~/.agentmux/user.agent.tmux.conf sets one.
 # Set `prefix` here to override it per amux session only (a session option — it
 # never touches your other tmux sessions). Must differ from the [frame] prefix
 # below: --frame intercepts the frame prefix before the inner amux sees it, so a
