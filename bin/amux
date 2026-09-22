@@ -274,10 +274,11 @@ _amux_atmux() {
 # `has-session -t smithy` is TRUE when only `smithy-www` exists and the
 # subsequent attach joins the WRONG session (and the create-vs-attach decision is
 # wrong both ways). Prefixing the target with `=` forces EXACT matching. It is
-# honoured by has-session/attach-session/switch-client/kill-session and window
-# targets (`=sess:0`), but NOT by set-option (target left bare there — tmux still
-# tries exact-match first, and those calls only run once the exact session is
-# known to exist) nor by split-window/list-panes. Don't drop the `=`.
+# honoured by has-session/attach-session/switch-client/kill-session/list-panes/
+# list-windows and window targets (`=sess:0`), but NOT by set-option/show-options
+# (target left bare there — tmux still tries exact-match first, and those calls
+# only run once the exact session is known to exist) nor by a bare-session
+# split-window target (verified, tmux 3.7c). Don't drop the `=`.
 _amux_session_exists() { _amux_atmux has-session -t "=$1" 2>/dev/null; }
 
 # Newline-separated names of agentmux-managed sessions (@autoagent=1) across ALL
@@ -623,9 +624,11 @@ _amux_update() {
   fi
 }
 
-_amux_launch_window0() {
+_amux_launch_window0() { # <window-id> <agent>
   _amux_need style
-  local session="$1" agent="$2"
+  # Targets the window by ID, never `=<session>:0`: a user overlay setting
+  # `base-index 1` leaves no window 0, and every call below would miss silently.
+  local win="$1" agent="$2"
   local idx cmd
 
   idx=$(agentmux_find_by_name "$agent")
@@ -633,15 +636,15 @@ _amux_launch_window0() {
 
   cmd=$(agentmux_build_cmd "$idx")
 
-  _amux_atmux rename-window -t "=$session:0" "$agent"
+  _amux_atmux rename-window -t "$win" "$agent"
   # Explicit socket: this CLI process has no ambient $TMUX pointing at the
   # (possibly sharded) agent socket, so a bare tmux would style the default
   # socket instead — same reasoning as the session_log.sh open below.
-  agentmux_set_window_style "$agent" "$session:0" "$(_amux_agent_sock)"
-  _amux_atmux send-keys -t "=$session:0" "$cmd" Enter
+  agentmux_set_window_style "$agent" "$win" "$(_amux_agent_sock)"
+  _amux_atmux send-keys -t "$win" "$cmd" Enter
   # Explicit socket: this CLI process hasn't attached to the (possibly sharded)
   # agent session yet, so it has no ambient $TMUX pointing at it — see _sl_ctx.
-  "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "=$session:0" "$(_amux_agent_sock)" 2>/dev/null || true
+  "$AGENTMUX_SCRIPTS/session_log.sh" open "$agent" "$win" "$(_amux_agent_sock)" 2>/dev/null || true
 }
 
 # Print a paste-ready `colour =` field for an agent (testable; no I/O loop).
@@ -1075,16 +1078,18 @@ _amux_frame_kill() {
 # their own per-project sockets survive. Handy to refresh all frames after a
 # frame.conf change, since a frame only reads config when (re)created.
 _amux_frame_kill_all() {
-  local socks s any=0
-  socks=$(_amux_frame_socks)
-  for s in $socks; do
+  local socks tsocks s any=0
+  socks=$(_amux_frame_socks); tsocks=$(_amux_term_socks)
+  # A standalone `--term` (warden's split) is a live scratch terminal with no frame,
+  # and this command reaps it too — so it counts as something to kill.
+  for s in $socks $tsocks; do
     tmux -L "$s" list-sessions >/dev/null 2>&1 && { any=1; break; }
   done
   if [ "$any" -eq 0 ]; then
-    echo "amux: no active frames (try: amux --frames)" >&2; return 1
+    echo "amux: no active frames or scratch terminals (try: amux --frames)" >&2; return 1
   fi
   for s in $socks; do tmux -L "$s" kill-server 2>/dev/null; done
-  for s in $(_amux_term_socks); do tmux -L "$s" kill-server 2>/dev/null; done
+  for s in $tsocks; do tmux -L "$s" kill-server 2>/dev/null; done
   echo "killed all frames + scratch terminals (agent sessions, if any, still run)"
 }
 
@@ -1244,6 +1249,12 @@ _amux_sessions_json() {
 _amux_restore_into() {
   _amux_need style
   local cwd="$1" name="${2:-}" agent rcmd win created=0 exists=0
+  # A project dir that no longer exists has no shard to restore into — resolving one
+  # anyway would land on the INVOKING dir's shard. Skip the whole group.
+  if [ ! -d "$cwd" ]; then
+    echo "amux: skipping restore for $cwd — directory no longer exists" >&2
+    return 1
+  fi
   # Restore into the RESTORED project's shard, not the invoking process's $PWD
   # shard (bash dynamic scoping makes every _amux_atmux/_amux_session_exists
   # call inside this function honor this local override). A pre-set override
@@ -1262,12 +1273,13 @@ _amux_restore_into() {
   while IFS="$TAB" read -r agent rcmd; do
     [ -n "$agent" ] && [ -n "$rcmd" ] || continue
     if [ "$exists" = 0 ] && [ "$created" = 0 ]; then
-      _amux_atmux new-session -d -s "$name" -c "$cwd"
+      # By window ID, not `=$name:0` — see _amux_launch_window0 (base-index).
+      win=$(_amux_atmux new-session -d -s "$name" -c "$cwd" -P -F '#{window_id}')
       _amux_atmux set-option -t "$name" "@agent-mode" "$agent"
-      _amux_atmux rename-window -t "=$name:0" "$agent"
-      agentmux_set_window_style "$agent" "$name:0" "$(_amux_agent_sock)"
-      _amux_atmux send-keys -t "=$name:0" "$rcmd" Enter
-      win="=$name:0"; created=1
+      _amux_atmux rename-window -t "$win" "$agent"
+      agentmux_set_window_style "$agent" "$win" "$(_amux_agent_sock)"
+      _amux_atmux send-keys -t "$win" "$rcmd" Enter
+      created=1
     else
       win=$(_amux_atmux new-window -t "=$name" -c "$cwd" -P -F '#{window_id}' "$rcmd")
       _amux_atmux rename-window -t "$win" "$agent"
@@ -1464,6 +1476,15 @@ $c
     elif [ -n "$(_amux_use_frame "$no_frame")" ]; then
       _amux_frame
     else
+      # A plain attach is a plain launch's landing, so it takes a plain launch's
+      # nesting guard (the frame branch above carries its own) and its session
+      # configuration: _amux_restore_into sets only @autoagent/@amux_dir, so without
+      # the ensure the restored session attaches with no [amux] prefix, no bar pin,
+      # no @l1reserved and no note-row options. The trailing 1 keeps the restored
+      # window 0's @agent-mode rather than resetting it to the launch default.
+      _amux_nested_refuse "agent sessions" || return 1
+      local ragent; ragent=$(_amux_resolve_target | sed -n 1p)
+      _amux_ensure_agent_session "$ragent" "$pname" 1
       _amux_attach "$pname"
     fi
   fi
@@ -1553,9 +1574,16 @@ _amux_kill() {
     local _kl
     if [ "$by_dir" -eq 0 ]; then _kl="$_asock"; else _kl=$(_amux_agent_sock); fi
     if [ "$suspend" -eq 1 ]; then
-      # The agent session is the only one on its per-project shard, so kill-server
-      # takes down exactly this project (see the header for why not kill-session).
+      # kill-server takes down EVERY session on this shard, not just <base>: the shard
+      # is keyed on the launch dir, so `amux foo` run in the same dir shares it (see
+      # the header for why not kill-session). All of them become restorable, so name
+      # every one taken down rather than just the one asked for.
+      local _ksess
+      _ksess=$(env -u TMUX tmux -L "$_kl" list-sessions -F '#{session_name}' 2>/dev/null \
+               | sed "s/.*/'&'/" | paste -sd, - | sed 's/,/, /g')
       env -u TMUX tmux -L "$_kl" kill-server 2>/dev/null
+      [ -n "$_ksess" ] || _ksess="'$base'"
+      case "$_ksess" in *,*) parts="agents $_ksess" ;; *) parts="agent $_ksess" ;; esac
     else
       # Mark this agent shard's windows deliberately closed BEFORE tearing it down.
       # kill-session's window-unlinked hook would empty the sidecar too, but only
@@ -1569,8 +1597,8 @@ _amux_kill() {
       [ -n "$_ksp" ] && [ -n "$_kpid" ] \
         && "$AGENTMUX_SCRIPTS/session_log.sh" discard "$_ksp" "$_kpid" 2>/dev/null || true
       env -u TMUX tmux -L "$_kl" kill-session -t "=$base" 2>/dev/null
+      parts="agent '$base'"
     fi
-    parts="agent '$base'"
   fi
   if [ -n "$fsock" ] && { { [ "$by_dir" -eq 0 ] && tmux -L "$fsock" has-session -t "=${base}-frame" 2>/dev/null; } \
      || { [ "$by_dir" -eq 1 ] && _amux_frame_session_is_mine "${base}-frame"; }; }; then
@@ -1595,18 +1623,19 @@ _amux_kill() {
 # agentmux's own, like the frame/term sockets, so all three are torn down whole
 # via kill-server.
 _amux_kill_all() {
-  local names count fsocks have_frames=0 _fs _s
-  fsocks=$(_amux_frame_socks)
+  local names count fsocks tsocks have_frames=0 _fs _s
+  fsocks=$(_amux_frame_socks); tsocks=$(_amux_term_socks)
   names=$(_amux_agent_session_names)
   count=$(printf '%s' "$names" | grep -c . 2>/dev/null)
   # A configured socket NAME isn't proof of a live frame (an override with no
   # server behind it must still read as "no frames") — actually query each
-  # resolved socket, same as _amux_frames does.
-  for _fs in $fsocks; do
+  # resolved socket, same as _amux_frames does. Standalone `--term` scratch terminals count
+  # too: they are torn down below whether or not a frame exists.
+  for _fs in $fsocks $tsocks; do
     tmux -L "$_fs" list-sessions >/dev/null 2>&1 && { have_frames=1; break; }
   done
   if [ "$count" -eq 0 ] && [ "$have_frames" -eq 0 ]; then
-    echo "amux: no agent sessions or frames (try: amux --sessions)" >&2; return 1
+    echo "amux: no agent sessions, frames or scratch terminals (try: amux --sessions)" >&2; return 1
   fi
   printf 'kill %s agent session(s) + all frames/terminals? (y/N) ' "$count" >&2
   local reply; read -r reply
@@ -1625,7 +1654,7 @@ _amux_kill_all() {
     tmux -L "$_as" kill-server 2>/dev/null
   done
   for _s in $fsocks; do tmux -L "$_s" kill-server 2>/dev/null; done
-  for _s in $(_amux_term_socks); do tmux -L "$_s" kill-server 2>/dev/null; done
+  for _s in $tsocks; do tmux -L "$_s" kill-server 2>/dev/null; done
   echo "killed $count agent session(s) + all frames/terminals"
 }
 
@@ -1737,7 +1766,9 @@ _amux_legacy_notice() {
 # framed launch prompts in the plain terminal BEFORE the frame paints. This is the
 # ONE home for the create-session logic — both the plain path and _amux_frame call
 # it, so the plain path's selftests guard the frame path too.
-# Args: <agent> <session>. Uses $PWD for the socket shard, dir, and config.
+# Args: <agent> <session> [restored]. Uses $PWD for the socket shard, dir, and config.
+# [restored]=1: the session was just restored into, so its @agent-mode (set by
+# _amux_restore_into to the restored window 0's agent) is kept, not reset to <agent>.
 _amux_ensure_agent_session() {
   local agent_name="$1" name="$2"
 
@@ -1745,7 +1776,7 @@ _amux_ensure_agent_session() {
   # cwd). TTY-guarded (reads reply on fd 0, writes list/prompt on fd 2) so an
   # automated launch never blocks on read. If the user restores tabs, the session
   # now exists → the create branch below is skipped (window-0-replace falls out).
-  local _amux_auto_restored=0
+  local _amux_auto_restored="${3:-0}"
   if [ -t 0 ] && [ -t 2 ]; then
     _amux_restore_pick auto "$name"
   fi
@@ -1753,9 +1784,10 @@ _amux_ensure_agent_session() {
   # Exact-match check (see _amux_session_exists): without it, `name` would
   # prefix-match a longer existing session and we'd attach to the wrong one.
   if ! _amux_session_exists "$name"; then
-    _amux_atmux new-session -d -s "$name" -c "$PWD"
+    local _w0
+    _w0=$(_amux_atmux new-session -d -s "$name" -c "$PWD" -P -F '#{window_id}')
     _amux_atmux set-option -t "$name" "@agent-mode" "$agent_name"
-    _amux_launch_window0 "$name" "$agent_name"
+    _amux_launch_window0 "$_w0" "$agent_name"
   else
     # After an auto-restore, window 0 runs a RESTORED agent and _amux_restore_into
     # already set @agent-mode to it; don't clobber it with the launch default.
@@ -1777,10 +1809,12 @@ _amux_ensure_agent_session() {
   # Must be in THIS pre-attach batch: update_colors.sh reads @amux_note_row on the
   # client-attached hook, so a later write would be one attach too late.
   #
-  # SYMMETRIC, and that is load-bearing. This whole function runs on EVERY `amux`
-  # for the project, not only at creation, so an add-only emit meant `row = true`
-  # took effect on a mere re-attach while `row = false` could never turn a running
-  # session's row back off — stuck until `amux --kill`. `-u` on a session option
+  # SYMMETRIC, and that is load-bearing. This whole function runs on every plain
+  # `amux` launch or re-attach for the project (and on a framed one whenever the
+  # frame is (re)built — a healthy frame being reattached skips it), not only at
+  # creation, so an add-only emit meant `row = true` took effect on a mere re-attach
+  # while `row = false` could never turn a running session's row back off — stuck
+  # until `amux --kill`. `-u` on a session option
   # that was never set exits 0 (verified, tmux 3.7b), so the else branch is safe on
   # a session that never carried either option and cannot abort the rest of the
   # ';'-chained batch. @amux_note4 is the launch-time hint default — see
@@ -1811,6 +1845,12 @@ amux() {
   # own process (the shell wrappers `command`-invoke it), so this cd cannot move the
   # user's shell.
   _amux_canonicalise_pwd
+
+  # `--no-frame` is a MODIFIER, not a subcommand: consume every leading one here so it
+  # composes with whatever follows (`--no-frame --restore`, `--no-frame @host`, a plain
+  # launch). A dispatch case arm would see it only as $1, leaving whatever follows to
+  # be parsed as an agent/session name by the launch path.
+  while [ "${1:-}" = "--no-frame" ]; do no_frame=1; shift; done
 
   # Config choke point. 20 functions below read config, so loading it here — once,
   # ahead of dispatch — is what keeps `_amux_need config` off 20 call sites. `--probe`
@@ -1855,11 +1895,6 @@ amux() {
         _amux_term "$@"
         return $?
         ;;
-      --no-frame)
-        # Opt out of [frame] default for this run; fall through to a plain launch.
-        no_frame=1
-        shift
-        ;;
       --frames)
         _amux_frames
         return $?
@@ -1883,9 +1918,9 @@ amux() {
         ;;
       --restore)
         shift
-        # $no_frame carries a --no-frame typed EARLIER on this line (its case arm
-        # falls through rather than returning), so `amux --no-frame --restore` opts
-        # the attach below out of the frame exactly as it does a bare launch.
+        # $no_frame carries a --no-frame typed EARLIER on this line (consumed ahead of
+        # dispatch), so `amux --no-frame --restore` opts the attach below out of the
+        # frame exactly as it does a bare launch.
         if [ "${1:-}" = "--global" ]; then _amux_restore_pick global "" "$no_frame"
         else _amux_restore_pick explicit "" "$no_frame"; fi
         return $?
@@ -2267,12 +2302,37 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
       _amux_session_exists() { return 0; }
       _amux_frame()          { echo FRAME; }
       _amux_attach()         { echo PLAIN; }
+      _amux_ensure_agent_session() { echo "ENSURE $1 $3"; }
       printf 'a\n' | _amux_restore_pick explicit "" "$2" 2>/dev/null
     )
   }
   _assert "--restore honours [frame] default"        "FRAME" "$(_rf_run "$_ufon"  "")"
-  _assert "--restore --no-frame opts out"            "PLAIN" "$(_rf_run "$_ufon"  1)"
-  _assert "--restore plain when frame default unset" "PLAIN" "$(_rf_run "$_ufoff" "")"
+  _assert "--restore --no-frame opts out"            "PLAIN" "$(_rf_run "$_ufon"  1 | tail -1)"
+  _assert "--restore plain when frame default unset" "PLAIN" "$(_rf_run "$_ufoff" "" | tail -1)"
+  # The plain landing configures the session like a plain launch does (prefix, bar
+  # pin, note rows), keeping the restored window 0's @agent-mode (trailing 1).
+  _assert "--restore plain configures the session first" "ENSURE a 1" \
+    "$(_rf_run "$_ufoff" "" | head -1)"
+  # ...and refuses to nest inside tmux, as a bare plain launch does.
+  _assert "--restore plain refuses inside tmux" "" \
+    "$(TMUX=/fake/sock,1,0 _rf_run "$_ufoff" "")"
+  _assert "--restore frame branch keeps its own guard (not refused here)" "FRAME" \
+    "$(TMUX=/fake/sock,1,0 _rf_run "$_ufon" "")"
+  # --no-frame is a modifier consumed ahead of dispatch, so it composes with every
+  # subcommand through amux()'s real argument parsing (landings stubbed).
+  _nf_run() {
+    (
+      _amux_restore_pick() { echo "PICK $1 no_frame=$3"; }
+      _amux_remote()       { echo "REMOTE $*"; }
+      amux "$@" 2>&1
+    )
+  }
+  _assert "--no-frame --restore reaches the restore picker" "PICK explicit no_frame=1" \
+    "$(_nf_run --no-frame --restore)"
+  _assert "--no-frame --restore --global"                   "PICK global no_frame=1" \
+    "$(_nf_run --no-frame --restore --global)"
+  _assert "--no-frame @host dispatches remote, not a local session" "REMOTE @h proj" \
+    "$(_nf_run --no-frame @h proj)"
   rm -rf "$_rfd"; rm -f "$_ufon" "$_ufoff"
   _amux_json_cache=""
 
@@ -2490,9 +2550,25 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # --frame-kill-all with nothing live aborts cleanly (no false success from a
   # configured-but-dead socket name).
   _fka=$(amux --frame-kill-all 2>&1); _fkarc=$?
-  case "$_fka" in *"no active frames (try: amux --frames)"*) _got=ok ;; *) _got="bad:$_fka" ;; esac
+  case "$_fka" in *"no active frames or scratch terminals (try: amux --frames)"*) _got=ok ;; *) _got="bad:$_fka" ;; esac
   _assert "frame-kill-all empty msg"  "ok" "$_got"
   _assert "frame-kill-all empty exit" "1"  "$_fkarc"
+  # A standalone `--term` server with NO frame is still something --frame-kill-all
+  # (and --kill-all) reaps, so neither may answer "nothing to kill".
+  if command -v tmux >/dev/null 2>&1; then
+    _fkt_save="${AGENTMUX_TERM_SOCKET:-}"; _fka_asave="${AGENTMUX_AGENT_SOCKET:-}"
+    AGENTMUX_TERM_SOCKET="amux-selftest-fkterm-$$"; AGENTMUX_AGENT_SOCKET="amux-selftest-fkagent-$$"
+    for _fkcmd in --frame-kill-all --kill-all; do
+      env -u TMUX tmux -L "$AGENTMUX_TERM_SOCKET" -f /dev/null new-session -d -s fk-term 2>/dev/null
+      _fka=$(echo y | amux "$_fkcmd" 2>&1); _fkarc=$?
+      _assert "$_fkcmd: term-only server is not 'nothing to kill'" "0" "$_fkarc"
+      if tmux -L "$AGENTMUX_TERM_SOCKET" has-session 2>/dev/null; then _got=alive; else _got=reaped; fi
+      _assert "$_fkcmd: term-only server reaped" "reaped" "$_got"
+      tmux -L "$AGENTMUX_TERM_SOCKET" kill-server 2>/dev/null
+    done
+    if [ -n "$_fkt_save" ]; then AGENTMUX_TERM_SOCKET="$_fkt_save"; else unset AGENTMUX_TERM_SOCKET; fi
+    if [ -n "$_fka_asave" ]; then AGENTMUX_AGENT_SOCKET="$_fka_asave"; else unset AGENTMUX_AGENT_SOCKET; fi
+  fi
 
   # --help advertises the agent-session lifecycle commands + the renamed kill-all.
   case "$help" in *"--sessions"*) _got=present ;; *) _got=absent ;; esac
@@ -2657,6 +2733,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # block writes into the user's real ~/.agentmux.
   _rmt="$_st_tmpdir/remote"
   mkdir -p "$_rmt/roots/one/warden/.git" "$_rmt/roots/two/warden/.git"
+  # Canonical, because the launched amux canonicalises its $PWD (/tmp → /private/tmp
+  # on macOS) and the CWD assertions below compare against this spelling.
+  _rmt=$(cd "$_rmt" && env pwd -P)
   cat > "$_rmt/stub" <<'STUB'
 #!/bin/sh
 for a in "$@"; do last="$a"; done
@@ -3141,9 +3220,18 @@ STUB
       # shellcheck disable=SC2086  # socket_path + pid, deliberately two words
       "$AGENTMUX_SCRIPTS/session_log.sh" snapshot $_ssinfo
       _sslf=$(ls "$_ssstate"/live/*-"${_ssinfo##* }".windows 2>/dev/null)
-      if [ "$_ssmode" = suspend ]; then _amux_kill --suspend >/dev/null 2>&1; else _amux_kill >/dev/null 2>&1; fi
+      if [ "$_ssmode" = suspend ]; then
+        # A second session on the same shard (`amux other` run in this dir) goes down
+        # with the kill-server too, so the message must name it.
+        _amux_atmux new-session -d -s sus-other -c "$PWD" 2>/dev/null
+        _ssout=$(_amux_kill --suspend 2>&1)
+      else _ssout=$(_amux_kill 2>&1); fi
       _rc=$?
       _assert "$_ssmode: exits 0" "0" "$_rc"
+      if [ "$_ssmode" = suspend ]; then
+        _assert "suspend: names every session the shard took down" \
+          "suspended agents 'sus', 'sus-other' (restore with: amux)" "$_ssout"
+      fi
       if _amux_atmux has-session -t "=sus" 2>/dev/null; then _got=alive; else _got=gone; fi
       _assert "$_ssmode: agent session torn down" "gone" "$_got"
       sleep 1   # let any async hook land before reading the sidecar
@@ -3210,6 +3298,13 @@ STUB
       "$(jq -r 'select(.event=="resume")|.window_id' "$_rstate/sessions.jsonl" 2>/dev/null \
          | sort -u | grep -c . | tr -d ' ')"
     _amux_atmux kill-server 2>/dev/null
+    # A project dir that no longer exists is skipped with a warning — never restored
+    # into whatever shard the invoking dir resolves to. Unset the override so the
+    # shard really is derived (the fallback being guarded against).
+    _rgone="$_rdir/gone"
+    _rgout=$(unset AGENTMUX_AGENT_SOCKET; printf 'work\tsh -c :\n' | _amux_restore_into "$_rgone" 2>&1; echo "rc=$?")
+    case "$_rgout" in *"no longer exists"*"rc=1") _got=skipped ;; *) _got="bad:$_rgout" ;; esac
+    _assert "restore: missing project dir is skipped with a warning" "skipped" "$_got"
     rm -rf "$_rdir" "$_rstate"; AGENTMUX_AGENT_SOCKET="$_rsave"
     if [ -n "$_rsdsave" ]; then export AGENTMUX_STATE_DIR="$_rsdsave"; else unset AGENTMUX_STATE_DIR; fi
   else
@@ -3232,10 +3327,16 @@ STUB
     _w0sdsave="${AGENTMUX_STATE_DIR:-}"; _w0state=$(mktemp -d); export AGENTMUX_STATE_DIR="$_w0state"
     _w0cfg=$(mktemp); printf '[[agents]]\nname = "solo"\nlabel = "s"\ncolour = "green"\ncmd = ":"\n' > "$_w0cfg"
     AGENTMUX_CONFIG="$_w0cfg"; _amux_json_cache=""
-    _amux_atmux new-session -d -s w0proj -c /tmp
-    _amux_launch_window0 w0proj solo
+    _w0id=$(_amux_atmux new-session -d -s w0proj -c /tmp -P -F '#{window_id}')
+    _amux_launch_window0 "$_w0id" solo
     _assert "window0: @window-agent set on the agent shard" "solo" \
       "$(_amux_atmux show-options -wqv -t "=w0proj:0" @window-agent 2>/dev/null)"
+    # A user overlay's `base-index 1` leaves no window 0: the create path must still
+    # name, style and launch the session's FIRST window (targeted by id, not `:0`).
+    _amux_atmux set-option -g base-index 1
+    ( cd /tmp && _amux_ensure_agent_session solo w0base1 </dev/null ) 2>/dev/null
+    _assert "window0: base-index 1 still styles the first window" "1 solo" \
+      "$(_amux_atmux list-windows -t '=w0base1' -F '#{window_index} #{@window-agent}' 2>/dev/null | head -1)"
     _amux_atmux kill-server 2>/dev/null; rm -f "$_w0cfg"; rm -rf "$_w0state"
     AGENTMUX_AGENT_SOCKET="$_w0save"; AGENTMUX_CONFIG="$_w0cfgsave"; _amux_json_cache="$_w0cache"
     if [ -n "$_w0sdsave" ]; then export AGENTMUX_STATE_DIR="$_w0sdsave"; else unset AGENTMUX_STATE_DIR; fi
