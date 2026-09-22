@@ -73,7 +73,14 @@
 # the sidecar (rows not in it were closed before death → omitted); dead + no
 # sidecar (server predating this feature) → show all, the pre-sidecar behavior.
 
-TAB=$(printf '\t')
+_SL_SEPS=$(printf '\t\037')   # one fork for both: this runs on every invocation
+TAB=${_SL_SEPS%?}
+# The separator for a tmux context line (_sl_ctx), which is split by `read`. It
+# must NOT be TAB: tab is IFS WHITESPACE, so `read` collapses a run of tabs into
+# one delimiter and an empty field (a window renamed to "") silently shifts every
+# later field into its neighbour's variable. \037 (ASCII unit separator) is
+# non-whitespace, so each one delimits exactly one field, empty or not.
+_SL_US=${_SL_SEPS#?}
 
 _sl_state_dir() {
   printf '%s' "${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}"
@@ -85,7 +92,7 @@ _SL_LEDGER_NAME=sessions.jsonl
 _sl_ledger() { printf '%s/%s' "$(_sl_state_dir)" "$_SL_LEDGER_NAME"; }
 # Confirmed-dead (socket,pid) memo — one "socket|pid" per line.
 #
-# Server death is MONOTONIC: a (socket,pid) that failed a liveness probe can never
+# Server death is MONOTONIC: a (socket,pid) PROVEN dead by a probe can never
 # answer again, because the only way that pair returns is tmux reusing the pid on the
 # same socket — and that path logs a fresh `open`, which drops the memo entry (see
 # sl_open). Without this, every presence poll re-probed every dead server recorded for
@@ -113,7 +120,7 @@ _sl_append() {
   printf '%s\n' "$1" >> "$dir/sessions.jsonl" 2>/dev/null || true
 }
 
-# Emit tmux context for [target] as one TSV line. With no explicit target, fall
+# Emit tmux context for [target] as one $_SL_US-separated line. With no explicit target, fall
 # back to $TMUX_PANE (the pane THIS process runs in). A context-less
 # `display-message` resolves to the session's ACTIVE window, not our own — which
 # misattributes the resume hint to whatever window you happen to be viewing.
@@ -133,11 +140,13 @@ _sl_append() {
 _sl_ctx() {
   # SESSION_LOG_CTX overrides the tmux query for tests (mirrors the
   # SESSION_LOG_LIVE_* / SESSION_LOG_RESUME_MAP hooks), bypassing tmux entirely.
+  # The hook takes TAB-separated fields (readable in a test) and is translated to
+  # the real separator, so it exercises the same `read` the tmux answer does.
   if [ -n "${SESSION_LOG_CTX+x}" ]; then
-    printf '%s\n' "$SESSION_LOG_CTX"
+    printf '%s\n' "$SESSION_LOG_CTX" | tr '\t' '\037'
     return 0
   fi
-  fmt="#{socket_path}${TAB}#{pid}${TAB}#{session_name}${TAB}#{window_id}${TAB}#{window_name}${TAB}#{pane_current_path}"
+  fmt="#{socket_path}${_SL_US}#{pid}${_SL_US}#{session_name}${_SL_US}#{window_id}${_SL_US}#{window_name}${_SL_US}#{pane_current_path}"
   _t="${1:-${TMUX_PANE:-}}"
   _sock="${2:-}"
   if [ -n "$_sock" ]; then
@@ -156,7 +165,7 @@ _sl_ctx() {
 sl_open() {  # <agent> [target] [socket]
   _sl_enabled || return 0
   _agent="$1"; _target="${2:-}"; _sock="${3:-}"
-  IFS="$TAB" read -r _socket _pid _session _wid _wname _cwd <<EOF
+  IFS="$_SL_US" read -r _socket _pid _session _wid _wname _cwd <<EOF
 $(_sl_ctx "$_target" "$_sock")
 EOF
   # Require BOTH pid and window id: a display-message against a target that
@@ -204,14 +213,34 @@ _sl_load_dead() {
   _SL_DEAD="$_SL_NL$(cat "$_SL_DEAD_FILE" 2>/dev/null)$_SL_NL"
 }
 
+#
+# THREE-STATE: 0 = live, 1 = DEAD (proven), 2 = UNKNOWN. Dead is claimed — and
+# memoised, which makes it permanent — only on POSITIVE evidence: nothing is a
+# socket at that path any more, the socket refuses connections (tmux's own "no
+# server running on"), or a server answered with a different pid. Any other
+# failure — a fork that failed under load, a client/server protocol mismatch, a
+# permission error — says nothing about the server, and memoising it would
+# retire a live server for good: prune would then let it lose the argmax and
+# evict its history. Callers that ask "may I treat this as gone?" use
+# _sl_not_dead, under which UNKNOWN reads as live; it is re-probed next query.
 _sl_server_live() {  # <socket> <pid>
   if [ -n "${SESSION_LOG_LIVE_PIDS+x}" ]; then
     case " $SESSION_LOG_LIVE_PIDS " in *" $2 "*) return 0 ;; *) return 1 ;; esac
   fi
   # Memo hit → already proven dead, and death is monotonic (see _sl_dead_file). No fork.
   case "${_SL_DEAD:-}" in *"$_SL_NL$1|$2$_SL_NL"*) return 1 ;; esac
-  got=$(tmux -S "$1" display-message -p '#{pid}' 2>/dev/null) || { _sl_mark_dead "$1" "$2"; return 1; }
-  [ "$got" = "$2" ] || { _sl_mark_dead "$1" "$2"; return 1; }
+  if got=$(tmux -S "$1" display-message -p '#{pid}' 2>&1); then
+    [ "$got" = "$2" ] && return 0
+    case "$got" in ''|*[!0-9]*) return 2 ;; esac     # not a pid: no readable answer
+  else
+    case "$got" in *"no server running on"*) ;; *) [ -S "$1" ] && return 2 ;; esac
+  fi
+  _sl_mark_dead "$1" "$2"
+  return 1
+}
+_sl_not_dead() {  # <socket> <pid> — live OR unknown
+  _sl_server_live "$1" "$2"
+  [ $? -ne 1 ]
 }
 
 # Record a confirmed death. Append-only and best-effort: losing a write costs one
@@ -236,9 +265,12 @@ _sl_mark_dead() {  # <socket> <pid>
 # the only thing that separates the two states (verified against a real server:
 # windowless-but-alive answers `display-message -p '#{pid}'` with its pid and
 # `list-sessions` with rc=0 + no output; a dead one fails both):
-#   reachable + unqueryable → zero windows → succeed with an empty set;
-#   unreachable             → a set we genuinely cannot observe → fail, and the
+#   reachable + unqueryable + no sessions → zero windows → succeed, empty set;
+#   anything else           → a set we genuinely cannot observe → fail, and the
 #                             caller keeps what it already recorded.
+# "No sessions" is asked separately (`list-sessions`, rc 0 and no output) rather
+# than inferred from the list-windows failure: that failure is also what a
+# transient error on a server that still HAS windows looks like.
 # That asymmetry is deliberate: a wrongly-empty sidecar silently destroys the
 # crash-recovery data this whole feature exists for, so only POSITIVE evidence of
 # a live windowless server may empty it.
@@ -258,7 +290,9 @@ _sl_live_windows() {  # <socket> [pid]
   # _sl_server_live (not a bare socket probe) so a pid that no longer matches —
   # a DIFFERENT server now owning this socket — reads as unreachable and leaves
   # our dead server's recorded set alone.
-  _sl_server_live "$1" "$2"
+  _sl_server_live "$1" "$2" || return 1
+  _lw_s=$(tmux -S "$1" list-sessions 2>/dev/null) || return 1
+  [ -z "$_lw_s" ]
 }
 
 # Path to a server's live-set sidecar, keyed by (socket, pid) — NOT pid alone.
@@ -312,18 +346,34 @@ _sl_clear_dead() {  # <socket> <pid>
 # treat a 0-byte file (a writer killed mid-write — SIGKILL, power loss,
 # ENOSPC) as already-done and leave the presence poll reading an empty socket
 # path forever. `-s` self-heals that on the very next snapshot instead.
+#
+# LAST WRITER MUST HOLD A CURRENT VIEW. Two snapshots of one server can run at
+# once (a pane's sl_resume and a window-unlinked hook), and the one whose QUERY
+# is older can land its `mv` last — e.g. a view taken before @amux_resumable was
+# set — and nothing re-snapshots after it, so the sidecar stays stale and the
+# fast path answers a confident "no drop". So after publishing, re-query and
+# compare: a mismatch means the file holds someone's older view (or the state
+# moved), and the fresh query is published instead. A writer stops only once a
+# query taken AFTER its own publish matches the file, so whoever writes last has
+# verified what it left. Bounded, since a server under a burst of window events
+# converges through those events' own snapshots anyway.
 _sl_snapshot() {  # <socket> <pid>
   _sl_clear_dead "$1" "$2"
   _lf=$(_sl_live_file "$1" "$2"); _dir=${_lf%/*}
   mkdir -p "$_dir" 2>/dev/null || return 0
   _tmp="$_dir/.$2.$$.tmp"
-  if _sl_live_windows "$1" "$2" > "$_tmp" 2>/dev/null; then
-    mv "$_tmp" "$_lf" 2>/dev/null || rm -f "$_tmp"
-    _sockf="$_dir/${_lf##*/}.sock"
-    [ -s "$_sockf" ] || { printf '%s\n' "$1" > "$_sockf.$$.tmp" && mv "$_sockf.$$.tmp" "$_sockf"; } 2>/dev/null || true
-  else
-    rm -f "$_tmp"
-  fi
+  _sn=0
+  while _sl_live_windows "$1" "$2" > "$_tmp" 2>/dev/null; do
+    if [ "$_sn" -gt 0 ] && cmp -s "$_tmp" "$_lf"; then break; fi
+    mv "$_tmp" "$_lf" 2>/dev/null || break
+    if [ "$_sn" = 0 ]; then
+      _sockf="$_dir/${_lf##*/}.sock"
+      [ -s "$_sockf" ] || { printf '%s\n' "$1" > "$_sockf.$$.tmp" && mv "$_sockf.$$.tmp" "$_sockf"; } 2>/dev/null || true
+    fi
+    _sn=$((_sn + 1))
+    [ "$_sn" -lt 3 ] || break
+  done
+  rm -f "$_tmp"
 }
 
 # Mark a server's windows as DELIBERATELY closed by writing an EMPTY live-set
@@ -393,6 +443,11 @@ _sl_mtime() {  # <file>
 # Read line-by-line with `fromjson?` so a single torn/blank line (e.g. a
 # kill-server mid-append) is skipped, not fatal — the whole point is surviving
 # a crash, and a slurp (`-s`) aborts the entire roster on one bad line.
+# Columns are RAW, not @tsv: every consumer compares them byte-for-byte against
+# raw values (a queried cwd, a `notified` key, a socket path to hash) and emits
+# them to callers that expect the path itself, and @tsv's `\\` for a backslash
+# broke all of those. Only the three characters that would split the row (tab,
+# newline, CR) are escaped; a value holding one cannot round-trip TSV anyway.
 _sl_fold() {  # <ledger>
   [ -s "$1" ] || return 0
   jq -rRn '
@@ -404,7 +459,10 @@ _sl_fold() {  # <ledger>
         | ( map(select(.event=="resume")) | last ) as $r
         | [ $o.socket_path, ($o.server_pid|tostring), $o.window_id, $o.session,
             $o.window_name, $o.cwd, $o.agent, ($r.resume_cmd // ""),
-            (map(.ts) | max | tostring), ($r.fork_cmd // "") ] | @tsv )
+            (map(.ts) | max | tostring), ($r.fork_cmd // "") ]
+        | map(tostring | split("\t") | join("\\t") | split("\n") | join("\\n")
+                       | split("\r") | join("\\r"))
+        | join("\t") )
     | .[]
   ' "$1"
 }
@@ -763,9 +821,9 @@ _sl_pending_fast() {  # <cwd>
     [ -n "$_pf_sock" ] || return 2
     _pf_base=${_pf_f##*/}; _pf_base=${_pf_base%.windows}
     _pf_pid=${_pf_base##*-}
-    if _sl_server_live "$_pf_sock" "$_pf_pid"; then
+    if _sl_not_dead "$_pf_sock" "$_pf_pid"; then
       # LIVENESS IS NOT THE WHOLE DEADNESS TEST — the ledger path pairs it with the
-      # boot epoch (`_sl_server_live … && { -z "$_boot" || smax >= _boot; }`), and the
+      # boot epoch (`_sl_not_dead … && { -z "$_boot" || smax >= _boot; }`), and the
       # fast path must too. A reboot can hand a NEW tmux server the same pid on the
       # same socket path; it then answers our probe as if it were the dead one, and
       # `continue` here would silently drop a real drop — a collapse to 1 in the
@@ -901,19 +959,22 @@ sl_dropped() {
   # spawns load the machine that makes every later spawn slower. Max ts is computed over ALL
   # of a server's rows (m[]) while the scoped set is chosen by cwd (s[]), which is exactly
   # what the per-server awk did — scoping must not truncate a server's history.
+  # The scope reaches awk through ENVIRON, never `-v` (escape-processed: a cwd with
+  # a backslash would be compared mangled) — here and in the emitting pass below.
   case "$_scope" in
     --global | "")
       _servers=$(awk -F"$TAB" -v OFS="$TAB" '
         {k=$1 OFS $2; if($9+0>m[k]) m[k]=$9+0}
         END{for(k in m) print k, m[k]}' "$rows" | sort -u) ;;
     *)
-      _servers=$(awk -F"$TAB" -v OFS="$TAB" -v c="$_scope" '
+      _servers=$(SL_SCOPE="$_scope" awk -F"$TAB" -v OFS="$TAB" '
+        BEGIN{c=ENVIRON["SL_SCOPE"]}
         {k=$1 OFS $2; if($9+0>m[k]) m[k]=$9+0; if($6==c) s[k]=1}
         END{for(k in s) print k, m[k]}' "$rows" | sort -u) ;;
   esac
   printf '%s\n' "$_servers" | while IFS="$TAB" read -r socket pid smax; do
     [ -n "$pid" ] || continue
-    if _sl_server_live "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
+    if _sl_not_dead "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
       continue
     fi
     if [ "$_gate_new" = 1 ]; then
@@ -950,7 +1011,8 @@ sl_dropped() {
       printf 'P\t%s\t%s\n' "$_ag" "$_prog"
     done
     awk '{print "R\t" $0}' "$rows"
-  } | awk -F"$TAB" -v OFS="$TAB" -v scope="$_scope" "$_SL_SWAP_FN"'
+  } | SL_SCOPE="$_scope" awk -F"$TAB" -v OFS="$TAB" "$_SL_SWAP_FN"'
+      BEGIN { scope = ENVIRON["SL_SCOPE"] }
       $1=="S" { dead[$2 SUBSEP $3]=1; lw[$2 SUBSEP $3]=$4; next }
       $1=="P" { prog[$2]=$3; next }
       $1=="R" {
@@ -1037,7 +1099,7 @@ sl_dropped() {
 # sl_dropped does it (claude → claude-work), so the fork targets the right profile.
 sl_forkcmd() {  # [target]
   _sl_enabled || return 0
-  IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
+  IFS="$_SL_US" read -r _socket _pid _ _wid _ _ <<EOF
 $(_sl_ctx "${1:-}")
 EOF
   [ -n "$_pid" ] || return 0
@@ -1048,7 +1110,8 @@ EOF
       printf 'P\t%s\t%s\n' "$_ag" "$_prog"
     done
     _sl_fold "$_ledger" | awk '{print "R\t" $0}'
-  } | awk -F"$TAB" -v OFS="$TAB" -v s="$_socket" -v p="$_pid" -v w="$_wid" "$_SL_SWAP_FN"'
+  } | SL_S="$_socket" SL_P="$_pid" SL_W="$_wid" awk -F"$TAB" -v OFS="$TAB" "$_SL_SWAP_FN"'
+      BEGIN { s = ENVIRON["SL_S"]; p = ENVIRON["SL_P"]; w = ENVIRON["SL_W"] }
       $1=="P" { prog[$2]=$3; next }
       $1=="R" {
         if ($2!=s || $3!=p || $4!=w) next
@@ -1117,7 +1180,7 @@ sl_resume() {  # <label> <resume_cmd> [fork_cmd] [target] [socket]
   _sl_enabled || return 0
 
   # Miss (new label) or no usable env: fetch full context once for the record.
-  IFS="$TAB" read -r _socket _pid _ _wid _ _ <<EOF
+  IFS="$_SL_US" read -r _socket _pid _ _wid _ _ <<EOF
 $(_sl_ctx "$_rtarget" "$_rsock")
 EOF
   # Require the window id too, not just the pid: a display-message against a
@@ -1205,10 +1268,64 @@ sl_prune() {
   [ "${_lines:-0}" -gt "$_max" ] 2>/dev/null || return 0
 
   _dir=$(_sl_state_dir)
+  # ONE PRUNE AT A TIME — a lock among prunes only, never taken by an appender (the
+  # per-hook append path stays lock-free). Two prunes splicing one ledger would each
+  # copy a tail measured against a file the other has already replaced. A holder
+  # that died (a hook child killed with its server) leaves the dir behind, so an old
+  # lock is broken rather than honoured forever; the loser simply skips — the next
+  # launch over the cap prunes instead.
+  _plock="$_dir/.prune.lock"
+  if ! mkdir "$_plock" 2>/dev/null; then
+    _pl_mt=$(_sl_mtime "$_plock")
+    [ -n "$_pl_mt" ] && [ $(( $(date +%s) - _pl_mt )) -gt 120 ] 2>/dev/null || return 0
+    rm -rf "$_plock"; mkdir "$_plock" 2>/dev/null || return 0
+  fi
+  _sl_prune_run
+  rmdir "$_plock" 2>/dev/null
+  return 0
+}
+
+# Append whatever <file> gained past byte <prefix> onto <tmp> (the rewrite of that
+# prefix, staged in the SAME directory so the rename is atomic), then rename <tmp>
+# over <file>. This is what lets a rewrite coexist with lock-free appenders: the
+# rewrite only ever decides the fate of the bytes it READ, and every byte appended
+# since is carried over verbatim. The tail is copied straight into <tmp> (tee) so
+# nothing but the rename separates the copy from the publish; a write that still
+# reaches the OLD inode after that (an appender that opened it just before the
+# rename) is recovered through a hard link to it, afterwards. Everything carried
+# over is also left in <tail> for the caller. Fails soft: <file> is untouched.
+_sl_splice() {  # <file> <prefix-bytes> <tmp> <tail>
+  _sp_old="$3.old"
+  ln "$1" "$_sp_old" 2>/dev/null || _sp_old=""
+  if ! { tail -c +"$(($2 + 1))" "$1" | tee -a "$3" > "$4" && mv "$3" "$1"; } 2>/dev/null; then
+    rm -f "$3" "$4" ${_sp_old:+"$_sp_old"}
+    return 1
+  fi
+  if [ -n "$_sp_old" ]; then
+    _sp_n=$(( $2 + $(wc -c < "$4") ))
+    tail -c +"$((_sp_n + 1))" "$_sp_old" | tee -a "$1" >> "$4"
+    rm -f "$_sp_old"
+  fi
+  return 0
+}
+
+_sl_prune_run() {
   _boot=$(_sl_boot_epoch)
-  _rows=$(mktemp) || return 0
-  _sl_fold "$_ledger" > "$_rows"
-  if [ ! -s "$_rows" ]; then rm -f "$_rows"; return 0; fi
+  # Everything below decides the fate of THIS prefix of the ledger and no more:
+  # rows appended while the prune runs belong to servers the fold never saw, and
+  # are carried over untouched by _sl_splice. The rewrite is staged in the state
+  # dir so its rename lands on the same filesystem.
+  _snap="$_dir/.prune.$$.snap"
+  cat "$_ledger" > "$_snap" 2>/dev/null || { rm -f "$_snap"; return 0; }
+  # An append caught mid-write leaves a partial last line; cut the prefix at the
+  # last newline so that row travels whole in the tail instead of being split.
+  if [ -n "$(tail -c 1 "$_snap")" ]; then
+    sed '$d' "$_snap" > "$_snap.t" && mv "$_snap.t" "$_snap"
+  fi
+  _plen=$(wc -c < "$_snap" | tr -d ' ')
+  _rows=$(mktemp) || { rm -f "$_snap"; return 0; }
+  _sl_fold "$_snap" > "$_rows"
+  if [ ! -s "$_rows" ]; then rm -f "$_rows" "$_snap"; return 0; fi
 
   # SIDECAR INDEX — ONE awk over the whole glob, never a process per server. The
   # sidecar's identity is (socket, pid) but its FILENAME only carries
@@ -1219,7 +1336,7 @@ sl_prune() {
   # (socket, pid) in one pass. A companion-less sidecar is the one shape that
   # cannot be placed — it is emitted with an empty socket and handled as UNKNOWN
   # below, never guessed at.
-  _side=$(mktemp) || { rm -f "$_rows"; return 0; }
+  _side=$(mktemp) || { rm -f "$_rows" "$_snap"; return 0; }
   set -- "$_dir"/live/*.windows
   if [ -e "$1" ]; then
     awk -F"$TAB" -v OFS="$TAB" '
@@ -1252,13 +1369,13 @@ sl_prune() {
   # Per-server max ts (over ALL its rows, never scoped — that is the fact the boot
   # comparison needs), then the ONE liveness probe per server. `_sl_server_live` is
   # fork-free for every server already in the dead memo, which is the steady state.
-  _stat=$(mktemp) || { rm -f "$_rows" "$_side"; return 0; }
+  _stat=$(mktemp) || { rm -f "$_rows" "$_side" "$_snap"; return 0; }
   awk -F"$TAB" -v OFS="$TAB" '
     { k = $1 OFS $2; if ($9 + 0 > m[k]) m[k] = $9 + 0 }
     END { for (k in m) print k, m[k] }
   ' "$_rows" | while IFS="$TAB" read -r socket pid smax; do
     [ -n "$pid" ] || continue
-    if _sl_server_live "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
+    if _sl_not_dead "$socket" "$pid" && { [ -z "$_boot" ] || [ "$smax" -ge "$_boot" ] 2>/dev/null; }; then
       printf 'V\t%s\t%s\n' "$socket" "$pid"
     else
       printf 'X\t%s\t%s\n' "$socket" "$pid"
@@ -1266,7 +1383,7 @@ sl_prune() {
   done > "$_stat"
 
   _notmark="$_dir/notified"
-  _keepf=$(mktemp) || { rm -f "$_rows" "$_side" "$_stat"; return 0; }
+  _keepf=$(mktemp) || { rm -f "$_rows" "$_side" "$_stat" "$_snap"; return 0; }
   {
     cat "$_side" "$_stat"
     [ -s "$_notmark" ] && awk '{ print "N\t" $0 }' "$_notmark"
@@ -1339,15 +1456,23 @@ sl_prune() {
     ' > "$_keepf"
   _whole=$(awk -F"$TAB" '$1=="A"{print $2}' "$_keepf" | jq -R -s 'split("\n") | map(select(length>0))')
   _win=$(awk -F"$TAB" '$1=="W"{print $2}' "$_keepf" | jq -R -s 'split("\n") | map(select(length>0))')
-  _keep=$(awk -F"$TAB" '$1=="K"{print $2}' "$_keepf" | jq -R -s 'split("\n") | map(select(length>0))')
 
-  _tmp=$(mktemp) || { rm -f "$_rows" "$_side" "$_stat" "$_keepf"; return 0; }
+  _tmp="$_dir/.prune.$$.ledger"; _tailf="$_dir/.prune.$$.tail"
+  : > "$_tailf"
   jq -cRn --argjson whole "$_whole" --argjson win "$_win" '
     inputs | fromjson?
     | (.socket_path + "|" + (.server_pid|tostring)) as $k
     | ($k + "|" + (.window_id // "")) as $kw
     | select(($whole | index($k)) != null or ($win | index($kw)) != null)
-  ' "$_ledger" > "$_tmp" 2>/dev/null && mv "$_tmp" "$_ledger" || rm -f "$_tmp"
+  ' "$_snap" > "$_tmp" 2>/dev/null && _sl_splice "$_ledger" "$_plen" "$_tmp" "$_tailf" || {
+    # The ledger is untouched, so nothing below may act on the keep set either:
+    # the sweeps are only sound against the ledger they were computed with.
+    rm -f "$_tmp" "$_snap" "$_tailf" "$_rows" "$_side" "$_stat" "$_keepf"; return 0; }
+  rm -f "$_snap"
+  # Servers whose rows arrived after the prefix were never judged by this pass, so
+  # they count as kept for the `notified` trim and the sidecar sweep alike.
+  jq -rR 'fromjson? | "\(.socket_path)|\(.server_pid)"' "$_tailf" > "$_tailf.srv" 2>/dev/null
+  _keep=$( { awk -F"$TAB" '$1=="K"{print $2}' "$_keepf"; cat "$_tailf.srv"; } | jq -R -s 'split("\n") | map(select(length>0))')
 
   # Trim the `notified` marker the same way as the ledger: it grows one
   # "socket|pid|cwd" line per (server,cwd) offered (sl_dropped --mark appends,
@@ -1355,17 +1480,21 @@ sl_prune() {
   # KEEP set. Drops stale keys (and blank lines) so it self-cleans instead of
   # growing unbounded. It must stay in step with the ledger in BOTH directions: a
   # marker outliving its server would gate a server that no longer exists, and one
-  # dropped early would re-offer a ghost amux has already cleared.
+  # dropped early would re-offer a ghost amux has already cleared. Spliced like the
+  # ledger, so a `--mark` landing mid-prune survives.
   if [ -s "$_notmark" ]; then
-    _tmpn=$(mktemp) || _tmpn=""
-    if [ -n "$_tmpn" ]; then
+    _nsnap="$_dir/.prune.$$.nsnap"; _tmpn="$_dir/.prune.$$.notified"
+    if cat "$_notmark" > "$_nsnap" 2>/dev/null; then
+      _nlen=$(wc -c < "$_nsnap" | tr -d ' ')
       jq -Rrn --argjson keep "$_keep" '
         inputs | select(length>0)
         | . as $line
         | ($line | split("|")[0:2] | join("|")) as $sp
         | select($keep | index($sp) != null)
-      ' "$_notmark" > "$_tmpn" 2>/dev/null && mv "$_tmpn" "$_notmark" || rm -f "$_tmpn"
+      ' "$_nsnap" > "$_tmpn" 2>/dev/null &&
+        _sl_splice "$_notmark" "$_nlen" "$_tmpn" "$_nsnap.tail" || rm -f "$_tmpn"
     fi
+    rm -f "$_nsnap" "$_nsnap.tail"
   fi
 
   # Best-effort marker sweep: drop seen/<pid>-* for pids no longer in the ledger.
@@ -1395,20 +1524,36 @@ $mp
   # socket, which is the second failure above. A companion-less sidecar cannot be
   # placed, so it falls back to the pid and is RETAINED on a match: over-retention
   # is inert (a stale file), where a wrong delete is not.
+  #
+  # A server whose rows arrived AFTER the fold's prefix (the spliced tail) is one
+  # this pass never judged — typically a server that just launched — so its sidecar
+  # is spared exactly like a kept one. That set is complete: every writer appends
+  # its row BEFORE snapshotting, so a sidecar the glob saw has its row in either
+  # the prefix or the tail.
   if [ -s "$_side" ]; then
     awk -F"$TAB" '
-      FNR == NR { if ($1 == "K") { keep[$2] = 1; p = $2; sub(/.*\|/, "", p); kpid[p] = 1 } next }
+      FILENAME == ARGV[1] { if ($1 == "K") { keep[$2] = 1; p = $2; sub(/.*\|/, "", p); kpid[p] = 1 } next }
+      FILENAME == ARGV[2] { keep[$0] = 1; p = $0; sub(/.*\|/, "", p); kpid[p] = 1; next }
       $1 == "D" {
         if ($4 != "") { if (($4 "|" $3) in keep) next }
         else if ($3 in kpid) next
         print $2
       }
-    ' "$_keepf" "$_side" | while IFS= read -r m; do
+    ' "$_keepf" "$_tailf.srv" "$_side" | while IFS= read -r m; do
       [ -n "$m" ] && rm -f "$m" "$m.sock"
     done
   fi
+  # An orphan `.sock` — its `.windows` gone (removed under a snapshot that then
+  # wrote the companion, say) — is never matched above, which iterates `.windows`
+  # only. No writer creates a `.sock` before its `.windows`, and a `.windows` is
+  # never absent once written (it is replaced by rename or truncated in place), so
+  # a missing sibling is always an orphan.
+  for m in "$_dir"/live/*.windows.sock; do
+    [ -e "$m" ] || continue
+    [ -e "${m%.sock}" ] || rm -f "$m"
+  done
 
-  rm -f "$_rows" "$_side" "$_stat" "$_keepf"
+  rm -f "$_rows" "$_side" "$_stat" "$_keepf" "$_tailf" "$_tailf.srv"
 }
 
 # One-shot backfill of the sidecars already on disk, from the ledger.
@@ -1661,16 +1806,18 @@ _assert() {  # <desc> <expected> <actual>
 }
 
 # Stub tmux: canned display-message context, no real server needed. A `-S <socket>` call
-# (every _sl_server_live liveness probe / snapshot) returns no pid → the server reads DEAD,
+# (every _sl_server_live liveness probe / snapshot) answers the way a gone server does
+# ("no server running on", rc 1) → the server reads DEAD,
 # and when _SL_TEST_PROBED is set the socket is tallied there — the seam the scoping test
 # uses to see WHICH servers a query actually probes (inline-set like the SESSION_LOG_* hooks).
 tmux() {
   [ -n "${_SL_TEST_PROBED:-}" ] && [ "$1" = "-S" ] && printf '%s\n' "$2" >> "$_SL_TEST_PROBED"
+  [ "$1" = "-S" ] && [ "$3" = "display-message" ] && { echo "no server running on $2" >&2; return 1; }
   case "$1 $2" in
     "display-message -p")
       # honour an optional -t TARGET (ignored — fixed context) by shifting it off
       shift 2; [ "$1" = "-t" ] && shift 2
-      printf '/tmp/tmux-501/default\t4242\talpha\t@3\tclaude\t/tmp/work\n' ;;
+      printf '/tmp/tmux-501/default\t4242\talpha\t@3\tclaude\t/tmp/work\n' | tr '\t' '\037' ;;
     *) return 0 ;;
   esac
 }
@@ -2173,7 +2320,7 @@ rm -f "$seedk"
 #     command-substitution subshell that a counter var would not). ---
 rm -f "$ledger"; rm -rf "$AGENTMUX_STATE_DIR/seen"; mkdir -p "$AGENTMUX_STATE_DIR/seen"
 _ctxlog="$AGENTMUX_STATE_DIR/ctxlog"; : > "$_ctxlog"
-tmux() { echo x >> "$_ctxlog"; printf '/tmp/s\t7777\tsess\t@1\twin\t/w\n'; }
+tmux() { echo x >> "$_ctxlog"; printf '/tmp/s\t7777\tsess\t@1\twin\t/w\n' | tr '\t' '\037'; }
 export TMUX="/tmp/s,7777,0" TMUX_PANE="%9"
 printf 'lbl1|claude --resume lbl1|' > "$AGENTMUX_STATE_DIR/seen/7777-p9"   # pre-seed the env-keyed marker (full signature)
 sl_resume "lbl1" "claude --resume lbl1"                      # repeat label → dedup
@@ -2190,10 +2337,11 @@ _assert "fast path new label consulted tmux"   "yes" "$([ "$(grep -c x "$_ctxlog
 unset TMUX TMUX_PANE
 # restore the canonical stub for the blocks that follow
 tmux() {
+  [ "$1" = "-S" ] && [ "$3" = "display-message" ] && { echo "no server running on $2" >&2; return 1; }
   case "$1 $2" in
     "display-message -p")
       shift 2; [ "$1" = "-t" ] && shift 2
-      printf '/tmp/tmux-501/default\t4242\talpha\t@3\tclaude\t/tmp/work\n' ;;
+      printf '/tmp/tmux-501/default\t4242\talpha\t@3\tclaude\t/tmp/work\n' | tr '\t' '\037' ;;
     *) return 0 ;;
   esac
 }
@@ -2459,7 +2607,7 @@ _assert "sl_open logged its own open"             "1" "$(grep -c '"server_pid":4
 #     query (which tmux resolves to the ACTIVE window → resume misattribution).
 #     NOTE: redefines the tmux stub to capture args — keep this block LAST. ---
 _captured=""
-tmux() { _captured="$*"; printf '/s/x\t1\tsess\t@9\twin\t/w\n'; }
+tmux() { _captured="$*"; printf '/s/x\t1\tsess\t@9\twin\t/w\n' | tr '\t' '\037'; }
 TMUX_PANE='%7' _sl_ctx >/dev/null
 case "$_captured" in *"-t %7"*) _got=yes ;; *) _got=no ;; esac
 _assert "no-target ctx uses \$TMUX_PANE" "yes" "$_got"
@@ -3398,6 +3546,191 @@ _mig_out2=$(AGENTMUX_STATE_DIR="$_mig_dir" sl_migrate)
 _assert "t5: second run is a no-op" "migrate: enriched=0 sock=0 legacy_left=1" "$_mig_out2"
 _assert "t5: second run changes no bytes" "$_mig_after" "$(_mig_manifest)"
 rm -rf "$_mig_dir"
+
+# ============ audit hardening: each block runs in its own throwaway state dir and
+#     stubs tmux itself (the canned stub is gone by here), so none of them can
+#     reach a real server or the user's state. ============
+_ah_prev_sd=$AGENTMUX_STATE_DIR
+
+# --- an EMPTY context field must not shift its neighbours. Tab is IFS whitespace,
+#     so a tab-separated `read` collapsed the empty window name and handed the cwd to
+#     _wname; the context line is \037-separated for that reason. ---
+AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
+tmux() { return 0; }
+_ignore=$(SESSION_LOG_LIVE_WINDOWS="@4" \
+  SESSION_LOG_CTX="/s/e${TAB}5151${TAB}sess${TAB}@4${TAB}${TAB}/w/empty-name" sl_open claude)
+_assert "empty window_name: cwd lands in cwd" "/w/empty-name" \
+  "$(jq -r '.cwd' "$AGENTMUX_STATE_DIR/sessions.jsonl" 2>/dev/null)"
+_assert "empty window_name: window_name stays empty" "" \
+  "$(jq -r '.window_name' "$AGENTMUX_STATE_DIR/sessions.jsonl" 2>/dev/null)"
+unset -f tmux; rm -rf "$AGENTMUX_STATE_DIR"
+
+# --- a BACKSLASH in a cwd must survive every path byte-for-byte: the fold's columns
+#     are raw (not @tsv, which doubles the backslash) and the scope reaches awk via
+#     ENVIRON (not -v, which escape-processes `\b` into a backspace). ---
+AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
+_bs_cwd='/w/a\b'
+cat > "$AGENTMUX_STATE_DIR/sessions.jsonl" <<'JSON'
+{"ts":100,"event":"open","socket_path":"/s/bs","server_pid":6161,"session":"s","window_id":"@1","window_name":"claude","cwd":"/w/a\\b","agent":"work"}
+{"ts":101,"event":"resume","socket_path":"/s/bs","server_pid":6161,"window_id":"@1","label":"bs1","resume_cmd":"claude --resume bs1"}
+JSON
+mkdir -p "$AGENTMUX_STATE_DIR/live"
+_bs_lf=$(_sl_live_file /s/bs 6161)
+printf '@1\t%s\twork\t1\n' "$_bs_cwd" > "$_bs_lf"; printf '/s/bs\n' > "$_bs_lf.sock"
+_bs_q() { SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_dropped "$@"; }
+_assert "backslash cwd: fast path answers (not deferred)" "0" \
+  "$(SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 _sl_pending_fast "$_bs_cwd"; echo $?)"
+_assert "backslash cwd: fast path says pending" "1" "$(_bs_q --pending "$_bs_cwd" | grep -c .)"
+_assert "backslash cwd: ledger fallback agrees" "1" \
+  "$(AMUX_PENDING_NO_FAST=1 _bs_q --pending "$_bs_cwd" | grep -c .)"
+_assert "backslash cwd: dropped <cwd> emits the raw cwd" "$_bs_cwd" "$(_bs_q "$_bs_cwd" | cut -f2)"
+_assert "backslash cwd: --global emits the raw cwd" "$_bs_cwd" "$(_bs_q --global | cut -f2)"
+_ignore=$(_bs_q --mark "$_bs_cwd")
+_assert "backslash cwd: --mark writes the raw key" "1" \
+  "$(grep -cxF "/s/bs|6161|$_bs_cwd" "$AGENTMUX_STATE_DIR/notified" 2>/dev/null)"
+_assert "backslash cwd: --mark consumes (fast path)" "0" "$(_bs_q --pending "$_bs_cwd" | grep -c .)"
+_assert "backslash cwd: --mark consumes (ledger path)" "0" \
+  "$(AMUX_PENDING_NO_FAST=1 _bs_q --pending "$_bs_cwd" | grep -c .)"
+rm -rf "$AGENTMUX_STATE_DIR"
+
+# --- liveness: DEAD is memoised only on positive evidence. Anything else is UNKNOWN
+#     (2) — read as live by every caller and re-probed next time — because a memoised
+#     death is permanent, and a live server wrongly retired loses its history to
+#     prune. A real server supplies a genuine socket file for the "socket still
+#     there" half. ---
+AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
+if command -v tmux >/dev/null 2>&1; then
+  _lv_tm="/tmp/sllv-$$"; mkdir -p "$_lv_tm"
+  TMUX_TMPDIR="$_lv_tm" command tmux -L lv -f /dev/null new-session -d -s lv 2>/dev/null
+  _lv_sock=$(TMUX_TMPDIR="$_lv_tm" command tmux -L lv display-message -p '#{socket_path}' 2>/dev/null)
+  _lv_pid=$(TMUX_TMPDIR="$_lv_tm" command tmux -L lv display-message -p '#{pid}' 2>/dev/null)
+  _lv_try() {  # <socket> <pid> → rc, after a fresh memo load
+    _sl_load_dead; _sl_server_live "$1" "$2"; echo $?
+  }
+  _lv_memo() { cat "$AGENTMUX_STATE_DIR/dead" 2>/dev/null | grep -cxF "$1|$2"; }
+  _assert "liveness: a real live server answers 0" "0" "$(_lv_try "$_lv_sock" "$_lv_pid")"
+  tmux() { echo "protocol version mismatch (client 8, server 9)" >&2; return 1; }
+  _assert "liveness: unexplained failure on a present socket is UNKNOWN" "2" "$(_lv_try "$_lv_sock" "$_lv_pid")"
+  tmux() { return 1; }                                  # a fork that failed: no output at all
+  _assert "liveness: silent failure on a present socket is UNKNOWN" "2" "$(_lv_try "$_lv_sock" "$_lv_pid")"
+  _assert "liveness: UNKNOWN is never memoised" "0" "$(_lv_memo "$_lv_sock" "$_lv_pid")"
+  _assert "liveness: UNKNOWN reads as not-dead" "0" "$(_sl_not_dead "$_lv_sock" "$_lv_pid"; echo $?)"
+  tmux() { echo 99999; }
+  _assert "liveness: a different pid is DEAD" "1" "$(_lv_try "$_lv_sock" "$_lv_pid")"
+  _assert "liveness: ...and memoised" "1" "$(_lv_memo "$_lv_sock" "$_lv_pid")"
+  tmux() { echo "no server running on $2" >&2; return 1; }
+  _assert "liveness: a refused connection is DEAD" "1" "$(_lv_try "$_lv_sock" 1)"
+  tmux() { echo "error connecting to $2 (No such file or directory)" >&2; return 1; }
+  _assert "liveness: a missing socket is DEAD" "1" "$(_lv_try "$_lv_tm/nosuch" 1)"
+  unset -f tmux
+  TMUX_TMPDIR="$_lv_tm" command tmux -L lv kill-server 2>/dev/null
+  rm -rf "$_lv_tm"
+fi
+
+# --- a list-windows failure on a LIVE server empties the sidecar only when the
+#     server positively has no sessions; one that still lists a session keeps its
+#     recorded set (a transient failure is not a last-window close). ---
+mkdir -p "$AGENTMUX_STATE_DIR/live"
+printf '@1\n@2\n' > "$(_sl_live_file /s/lw2 7171)"
+tmux() { case " $* " in *" list-windows "*) return 1 ;; *" list-sessions "*) echo "s: 2 windows" ;; esac; return 0; }
+SESSION_LOG_LIVE_PIDS="7171" _sl_snapshot /s/lw2 7171
+_assert "live server, list-windows failed, sessions remain: sidecar intact" "@1 @2" \
+  "$(tr '\n' ' ' < "$(_sl_live_file /s/lw2 7171)" | sed 's/ *$//')"
+unset -f tmux; unset SESSION_LOG_LIVE_PIDS
+rm -rf "$AGENTMUX_STATE_DIR"
+
+# --- snapshot race: a concurrent writer whose (older) view lands after ours must not
+#     be left as the final word. Simulated in a subshell: right after our publish the
+#     sidecar is overwritten with a stale view (resumable unset) — the other writer's
+#     late `mv` — while tmux itself reports the current one. ---
+AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
+_sr_fresh="@1${TAB}/w/r${TAB}work${TAB}1"; _sr_stale="@1${TAB}/w/r${TAB}work${TAB}"
+_sr_lf=$(_sl_live_file /s/race 8181)
+(
+  _sl_live_windows() { printf '%s\n' "$_sr_fresh"; }
+  # The other writer's late rename lands right after our first publish.
+  mv() {
+    command mv "$@" || return
+    [ "$2" = "$_sr_lf" ] && [ ! -f "$_sr_lf.hit" ] && { : > "$_sr_lf.hit"; printf '%s\n' "$_sr_stale" > "$_sr_lf"; }
+    return 0
+  }
+  _sl_snapshot /s/race 8181
+)
+_assert "snapshot race: a stale late write is replaced by the current view" "$_sr_fresh" "$(cat "$_sr_lf")"
+rm -rf "$AGENTMUX_STATE_DIR"
+
+# --- _sl_splice: the rewrite decides the fate of the prefix it read, and every byte
+#     appended since is carried over verbatim. ---
+AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
+_sp_f="$AGENTMUX_STATE_DIR/f"
+printf 'a\nb\n' > "$_sp_f"; printf 'b\n' > "$_sp_f.tmp"   # the rewrite of the 4-byte prefix
+printf 'c\n' >> "$_sp_f"                                  # appended after it was read
+_sl_splice "$_sp_f" 4 "$_sp_f.tmp" "$_sp_f.tail"
+_assert "splice: rewritten prefix + untouched tail" "b c" "$(tr '\n' ' ' < "$_sp_f" | sed 's/ *$//')"
+_assert "splice: reports the carried-over tail" "c" "$(cat "$_sp_f.tail")"
+_assert "splice: leaves no staging files" "f f.tail" "$(cd "$AGENTMUX_STATE_DIR" && echo *)"
+rm -rf "$AGENTMUX_STATE_DIR"
+
+# --- prune vs concurrent writers. Rows a new server appends WHILE a prune runs were
+#     never folded, so the prune must neither filter them out nor sweep that server's
+#     sidecar or its `notified` key; the stale runner-up is still pruned (control).
+#     The appends are injected from inside the liveness sweep, i.e. after the fold. ---
+AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
+_cp_d=$AGENTMUX_STATE_DIR; _cp_l="$_cp_d/sessions.jsonl"
+{ _pr_pair 100 /s/pa 100 @1 /w/p olda; _pr_pair 200 /s/pb 200 @1 /w/p newb; } > "$_cp_l"
+mkdir -p "$_cp_d/live"
+for _cp_sp in "/s/pa 100" "/s/pb 200" "/s/pn 300"; do
+  _cp_s=${_cp_sp% *}; _cp_p=${_cp_sp#* }
+  printf '@1\t/w/p\tclaude\t1\n' > "$(_sl_live_file "$_cp_s" "$_cp_p")"
+  printf '%s\n' "$_cp_s" > "$(_sl_live_file "$_cp_s" "$_cp_p").sock"
+done
+printf '/s/gone\n' > "$_cp_d/live/123-999.windows.sock"          # orphan companion
+(
+  _sl_server_live() {
+    if [ ! -f "$_cp_d/.injected" ]; then
+      : > "$_cp_d/.injected"
+      _pr_pair 400 /s/pn 300 @1 /w/n newn >> "$_cp_l"
+      printf '/s/pn|300|/w/n\n' >> "$_cp_d/notified"
+    fi
+    return 1
+  }
+  AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_BOOT_EPOCH=1 sl_prune
+)
+_assert "concurrent prune: the runner-up is pruned (control)" "0" "$(grep -c '"server_pid":100,' "$_cp_l")"
+_assert "concurrent prune: the winner survives" "2" "$(grep -c '"server_pid":200,' "$_cp_l")"
+_assert "concurrent prune: rows appended mid-prune survive" "2" "$(grep -c '"server_pid":300,' "$_cp_l")"
+_assert "concurrent prune: the new server's sidecar is spared" "1" \
+  "$([ -f "$(_sl_live_file /s/pn 300)" ] && echo 1 || echo 0)"
+_assert "concurrent prune: the runner-up's sidecar is swept (control)" "0" \
+  "$([ -f "$(_sl_live_file /s/pa 100)" ] && echo 1 || echo 0)"
+_assert "concurrent prune: the new server's notified key survives" "1" \
+  "$(grep -cxF '/s/pn|300|/w/n' "$_cp_d/notified" 2>/dev/null)"
+_assert "concurrent prune: an orphan .sock is swept" "0" \
+  "$([ -f "$_cp_d/live/123-999.windows.sock" ] && echo 1 || echo 0)"
+_assert "concurrent prune: a kept sidecar keeps its .sock" "1" \
+  "$([ -f "$(_sl_live_file /s/pb 200).sock" ] && echo 1 || echo 0)"
+_assert "concurrent prune: no staging files or lock left" "" \
+  "$(for _cp_f in "$_cp_d"/.prune*; do [ -e "$_cp_f" ] && echo "$_cp_f"; done)"
+rm -rf "$_cp_d"
+
+# --- the prune lock: a held (fresh) lock makes a second prune a no-op; a stale one is
+#     broken, so a holder that died cannot stop pruning for good. ---
+AGENTMUX_STATE_DIR=$(mktemp -d) || exit 1
+{ _pr_pair 100 /s/pa 100 @1 /w/p olda; _pr_pair 200 /s/pb 200 @1 /w/p newb; } > "$AGENTMUX_STATE_DIR/sessions.jsonl"
+mkdir "$AGENTMUX_STATE_DIR/.prune.lock"
+_ignore=$(AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_prune)
+_assert "prune lock: a held lock skips the prune" "2" \
+  "$(grep -c '"server_pid":100,' "$AGENTMUX_STATE_DIR/sessions.jsonl")"
+touch -t 200001010000 "$AGENTMUX_STATE_DIR/.prune.lock"
+_ignore=$(AGENTMUX_LOG_MAX_LINES=1 SESSION_LOG_LIVE_PIDS="" SESSION_LOG_BOOT_EPOCH=1 sl_prune)
+_assert "prune lock: a stale lock is broken" "0" \
+  "$(grep -c '"server_pid":100,' "$AGENTMUX_STATE_DIR/sessions.jsonl")"
+_assert "prune lock: released afterwards" "0" \
+  "$([ -d "$AGENTMUX_STATE_DIR/.prune.lock" ] && echo 1 || echo 0)"
+rm -rf "$AGENTMUX_STATE_DIR"
+
+AGENTMUX_STATE_DIR=$_ah_prev_sd; export AGENTMUX_STATE_DIR
+unset _ignore
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
