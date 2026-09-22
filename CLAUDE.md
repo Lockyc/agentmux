@@ -10,7 +10,7 @@ Configurable tmux agent launcher. Shell scripts only — no Python, Node, or oth
 Shell scripts only — split between bash, POSIX sh, and (for the fish integration) fish, by what each script needs:
 
 - **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `bin/amux`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `fork_session.sh`, `remote.sh`, `remote_attach.sh`).
-- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `clear_icon.sh`, `update_colors.sh`, `colours.sh`, `frame_reattach.sh`, `version_check.sh`, `session_log.sh`, `claude/{status,ctx,digest,goal}.sh`.
+- **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no source-time dependencies: `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `clear_icon.sh`, `update_colors.sh`, `colours.sh`, `frame_reattach.sh`, `version_check.sh`, `session_log.sh`, `notes.sh`, `tmux_version.sh`, `claude/{status,ctx,digest,goal}.sh`.
 - **fish** (`shell/agentmux.fish`) — the fish-shell integration only. It is a thin wrapper around `bin/amux` plus a `complete` line; it never sources bash libs (fish can't). All real logic stays in `bin/amux`.
 
 When adding a script, pick the shell by that rule, not by default. `toml2json` + `jq` are the only runtime dependencies. Don't introduce new ones.
@@ -149,7 +149,7 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 | `scripts/<agent>/` | Pattern for future agent adapters (e.g. `scripts/gemini/`) |
 | `shell/agentmux.sh` | bash/zsh integration: thin `amux` wrapper + zsh completion |
 | `shell/agentmux.fish` | fish-shell integration (thin wrapper + completion) |
-| `tmux/agentmux.conf` | tmux snippet sourced from `~/.tmux.conf` |
+| `tmux/agentmux.conf` | The agent behaviour (status rows, hooks, bindings, terminal features) — sourced by `agent.conf` on every agent socket; optionally also from `~/.tmux.conf` for Claude run outside amux |
 | `tmux/frame.conf` | `amux --frame` outer wrapper config (own socket; no `~/.tmux.conf`) |
 | `tmux/term.conf` | The scratch terminal's config — a frame's left pane and `--term` alike (own socket; persistent; the `[frame]` top shells are panes of this session) |
 | `tmux/agent.conf` | Agent socket config, loaded via `-f` by `_amux_atmux` (sources `agentmux.conf`; no `~/.tmux.conf`/TPM). Keeps a cold per-project agent server fast |
