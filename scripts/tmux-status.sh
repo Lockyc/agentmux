@@ -21,8 +21,7 @@
 # = "<hash of tmux socket>-<pane number>". The socket hash folds in server
 # identity so two tmux servers' colliding %0/%1 pane numbers (guaranteed under
 # `amux --frame`, where the agent runs a second tmux deep) don't clobber each
-# other. summary_rows.sh MUST derive the same runtime dir + key or it can't find
-# these files — keep the two in lockstep (it takes #{socket_path} as an arg).
+# other.
 # <runtime>/agentmux-status-<pane_key>.txt   done/now/next summary (status lines 1-3; each working hook)
 # <runtime>/agentmux-diag-<pane_key>.txt     pipeline diagnostic shown when no summary yet
 # <runtime>/<agent_name>-subject-<pane_key>.txt  stable subject label (derived once, re-anchored on shift)
@@ -64,17 +63,19 @@ runtime_dir="${XDG_RUNTIME_DIR:-/tmp/agentmux-$(id -u)}"
 mkdir -p -m 0700 "$runtime_dir" 2>/dev/null
 # If the dir already existed and isn't ours, a co-tenant squatted the predictable
 # per-uid path first; writing our summaries/locks there would hand them the very
-# leak the 0700 dir is meant to prevent. Fall back to a private mktemp dir (GNU
-# stat first, BSD second — see the mtime footgun). The reader can't guess a mktemp
-# path, so the resolved dir is published below via @amux_runtime_dir.
-_rd_owner=$(stat -c %u "$runtime_dir" 2>/dev/null || stat -f %u "$runtime_dir" 2>/dev/null || echo -1)
-[ "$_rd_owner" = "$(id -u)" ] || runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/agentmux.XXXXXX" 2>/dev/null) || exit 0
-# Publish the resolved dir so summary_rows.sh (the reader, run from agentmux.conf
-# via tmux #()) uses exactly this path instead of re-deriving it from its own
-# environment — #() does NOT inherit $XDG_RUNTIME_DIR (the same reason the socket
-# is passed to it). Read there as #{@amux_runtime_dir}. Global: the dir is per-uid,
-# identical for every pane on this server.
-tmux set-option -g @amux_runtime_dir "$runtime_dir" 2>/dev/null
+# leak the 0700 dir is meant to prevent. Fall back to a dir under the user's own
+# cache home: private, and STABLE across hooks — the per-pane files (throttle
+# stamp, subject, notify lock) only work if every hook finds the same dir. Not
+# ours either → skip the summary work. (GNU stat first, BSD second — see the
+# mtime footgun.)
+_rd_owned() {
+  [ "$(stat -c %u "$1" 2>/dev/null || stat -f %u "$1" 2>/dev/null || echo -1)" = "$(id -u)" ]
+}
+if ! _rd_owned "$runtime_dir"; then
+  runtime_dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/runtime"
+  mkdir -p "$runtime_dir" 2>/dev/null && chmod 0700 "$runtime_dir" 2>/dev/null
+  _rd_owned "$runtime_dir" || exit 0
+fi
 # pane_key folds the tmux socket identity (first comma-field of $TMUX) into the
 # pane number so two servers can't collide (see header). Whitelist-safe: cksum
 # digits + '-' + pane digits. Empty $TMUX (not inside tmux) → bare pane number.

@@ -24,8 +24,8 @@
 # Arg: <dead-pane-id> (a %-prefixed tmux pane id, never contains spaces).
 
 # tmux on another socket with TMUX cleared, so it talks to that socket rather
-# than the frame socket we're invoked under. An empty socket = the real default
-# socket (where the agent lives in production).
+# than the frame socket we're invoked under. An empty socket (a pane with no
+# @amux_agent_socket) falls back to the default socket.
 sock_tmux() {
   _s=$1; shift
   # TMUX= scopes an empty TMUX to this one command (SC1007: intentional, not a typo).
