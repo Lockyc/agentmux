@@ -145,12 +145,12 @@ All of these are pressed **after the prefix** (`C-b` by default).
 | Press | Effect |
 |---|---|
 | `prefix c` | New tab — auto-launches the current `@agent-mode` agent (tmux's built-in new-window key; agentmux just hooks it to launch the agent) |
-| `prefix x` | Close the current tab. In an agentmux session's last pane it respawns + relaunches the agent instead of destroying the session; everywhere else it's tmux's kill-pane |
+| `prefix x` | Close the current tab. On an agentmux session's last tab it opens a fresh agent tab first (as `prefix c` would), so the session survives; everywhere else it's tmux's kill-pane |
 | `prefix d` | Detach — leave the session running and return to your shell |
 | `prefix m` | Cycle `@agent-mode` through your defined agents (agentmux sessions only) |
 | `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched. agentmux already knows the session id and which wrapper to launch it with, so there is nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
 | `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
-| `prefix N` | Toggle this tab's three summary rows between the AI summary and notes 1-3. In notes mode, **click any of those rows** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). While the AI summary is showing, rows 1-3 are click-inert (a click does nothing) — press `prefix N` first. The optional fourth row (see [The always-on note row](#the-always-on-note-row)) is unaffected by this toggle and clickable either way. Notes are per-tab and live in memory: they survive `prefix x`, but not a crash, `amux --kill`, or a reboot. The AI summary keeps updating underneath, so toggling back shows a current one |
+| `prefix N` | Toggle this tab's three summary rows between the AI summary and notes 1-3. In notes mode, **click any of those rows** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). While the AI summary is showing, rows 1-3 are click-inert (a click does nothing) — press `prefix N` first. The optional fourth row (see [The always-on note row](#the-always-on-note-row)) is unaffected by this toggle and clickable either way. Notes are per-tab and live in memory: closing the tab (`prefix x`), a crash, `amux --kill`, or a reboot drops them. The AI summary keeps updating underneath, so toggling back shows a current one |
 
 ### Customizing tmux (per-role overlays)
 
