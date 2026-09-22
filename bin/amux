@@ -496,7 +496,7 @@ _amux_frame_prefix() {
 }
 
 # Resolve the per-session prefix for the amux (agent) session: [amux] prefix,
-# dir-scoped. Empty output = leave the user's own ~/.tmux.conf prefix untouched.
+# dir-scoped. Empty output = leave the server's prefix (tmux's default, or the user overlay's) untouched.
 #
 # Collision guard: the --frame wrapper runs amux in its right pane and intercepts
 # its OWN prefix before the inner amux ever sees it, so an [amux] prefix equal to

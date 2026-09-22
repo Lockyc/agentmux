@@ -174,7 +174,8 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
   `curl -fsSL …/install.sh | bash`. Needs `git` (install/update only).
 - **`/agentmux:install`** (`.claude/commands/agentmux/install.md`) — interactive. Runs
   `install.sh`, migrates an old copy-install (backup → clone → restore `amux.toml`),
-  and wires shell config, `~/.tmux.conf`, the Claude Code hooks, and `[llm]`/`[update]`.
+  and wires shell config, the Claude Code hooks, and `[llm]`/`[update]` (and offers to
+  remove a leftover agentmux line from `~/.tmux.conf`).
 
 **Invariant:** whenever you change what gets installed or wired, update **both**
 `install.sh` and `install.md` — they drift silently otherwise.

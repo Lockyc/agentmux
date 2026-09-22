@@ -123,7 +123,7 @@ Use AskUserQuestion with a **multi-select** question:
 Mark as "Recommended" those not already detected as wired. Also mark **AI summary status lines** as Recommended if either LLM endpoint was detected running in step 3.
 
 - **Shell config** — wires the agentmux source line into your shell config: `~/.zshrc`/`~/.bashrc` (bash/zsh) and/or `~/.config/fish/config.fish` (fish)
-- **tmux config** — appends `source-file ~/.agentmux/tmux/agentmux.conf` to `~/.tmux.conf`
+- **tmux config cleanup** — offer this only when `tmux:wired`: removes the old `source-file ~/.agentmux/tmux/agentmux.conf` line from `~/.tmux.conf`. amux's own servers load that file themselves; in `~/.tmux.conf` it only serves Claude run in plain tmux outside amux, and it installs amux's hooks and `prefix v`/`prefix N` bindings on the user's regular tmux server. Not Recommended if the user runs Claude outside amux.
 - **Claude Code hooks** — wires tab-state emojis and AI summary triggers into `~/.claude/settings.json`
 - **AI summary status lines** — configures the local LLM endpoint that powers the live `done / now / next` status bar
 
@@ -147,18 +147,11 @@ test -f ~/.agentmux/shell/agentmux.fish; and source ~/.agentmux/shell/agentmux.f
 
 Report, per shell wired, whether the line was already present or newly added.
 
-### 7. Wire tmux config (if selected)
+### 7. tmux config
 
-Read `~/.tmux.conf` (create it if it doesn't exist). If `source-file ~/.agentmux/tmux/agentmux.conf` is not already present, append:
+Never add an agentmux line to `~/.tmux.conf`. If **tmux config cleanup** was selected, remove the `source-file ~/.agentmux/tmux/agentmux.conf` line (and an `# agentmux` comment directly above it) from `~/.tmux.conf`, and report what was removed. Hooks already installed on a running regular tmux server stay until that server restarts.
 
-```
-# agentmux
-source-file ~/.agentmux/tmux/agentmux.conf
-```
-
-Report whether the line was already present or newly added.
-
-Then mention the optional tmux overlays: agentmux's own servers (agent, `--frame`
+In every case, mention the optional tmux overlays: agentmux's own servers (agent, `--frame`
 wrapper, scratch terminal) run isolated and do **not** read `~/.tmux.conf`. A user
 who wants their own tmux settings there (vi copy-mode, custom bindings, status
 style) uses **per-role** overlays, each sourced last so their settings override
@@ -266,14 +259,13 @@ Read `$REPO_DIR/VERSION` to get the installed version string.
 
 **Installed**
 - agentmux vX.X.X → `~/.agentmux/` ✓  (substitute actual version from VERSION file)
-- List each wired item (shell config / tmux config / hooks / LLM) with its target file and status (wired / already present / skipped)
+- List each wired item (shell config / tmux config cleanup / hooks / LLM) with its target file and status (wired / already present / skipped)
 
 **Reload**
 Only include commands that are actually relevant:
 ```bash
 source ~/.zshrc                    # if zsh/bash config was wired
 source ~/.config/fish/config.fish  # if fish config was wired (or start a new fish shell)
-tmux source ~/.tmux.conf           # if tmux config was wired (or start a new tmux server)
 ```
 Restart Claude Code if hooks were wired — hooks take effect on the next session start.
 
