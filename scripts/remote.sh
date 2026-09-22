@@ -144,6 +144,14 @@ _RM_TRANSPORT_KINDS="ssh et mosh"
 # and a separate non-interactive builder would drift the moment one of the
 # ControlMaster or keepalive options changed.
 #
+# A batch call is ALWAYS ssh, whatever the host's transport. et and mosh are
+# terminal emulators: mosh redraws its output as screen updates and et types the
+# command into a remote pty (CRLF line endings), so a reply parsed line by line
+# (`RM_OK<TAB>…`, one path per roster line, the sessions JSON) arrives mangled.
+# Both authenticate over ssh to the same target, so ssh is always reachable
+# wherever they are. The kind is still validated first, so an unknown transport
+# stays rc 2 on the batch path too.
+#
 # ssh options, each load-bearing:
 #   -t                     force a tty; tmux cannot attach without one
 #   ControlMaster=auto     multiplex — preflight, roster refresh and reconnect
@@ -178,12 +186,18 @@ _rm_transport_argv() {
       RM_ARGV=(et "$target" -c "$cmd")
       ;;
     mosh)
-      RM_ARGV=(mosh "$target" -- "$cmd")
+      # mosh-server execs the words after `--` as argv, with no shell, so the
+      # command string needs one of its own.
+      RM_ARGV=(mosh "$target" -- sh -c "$cmd")
       ;;
     *)
       return 2
       ;;
   esac
+  if [ "$batch" = "--batch" ] && [ "$kind" != ssh ]; then
+    _rm_transport_argv ssh "$target" "$cmd" --batch
+    return $?
+  fi
   return 0
 }
 
@@ -258,6 +272,11 @@ _rm_prog_for_host() {
 # this host's roots" and `amux @host <TAB>` completed nothing.
 _RM_MAX_PROJECT_DEPTH=4
 
+# Remote-side sh helpers shared by the preflight and roster scripts.
+# `tilde` expands a leading `~` or `~/` and nothing else.
+# shellcheck disable=SC2016  # expanded by the REMOTE shell
+_RM_REMOTE_FNS='tilde() { case $1 in "~") printf %s "$HOME" ;; "~/"*) printf %s "$HOME/${1#"~/"}" ;; *) printf %s "$1" ;; esac; }'
+
 # _rm_preflight_script <project> <path> <roots-newline>
 # The sh program run on the remote. Prints exactly one line:
 #   RM_OK<TAB><abs-dir><TAB><amux-version>
@@ -276,24 +295,21 @@ _RM_MAX_PROJECT_DEPTH=4
 # -maxdepth is not POSIX but is universal on GNU and BSD find. `-quit`/-printf
 # are NOT — macOS remotes lack them — so this pipes to head instead.
 #
-# `d=$(eval printf %s "$path")` and the matching line over each root are an
-# EVAL ON PURPOSE: `~` is expanded by the shell, not by the filesystem, so a
-# configured `roots = ["~/Developer/work"]` or an `@host:~/tmp/x` target is a
-# literal tilde until something evaluates it — and it must be the REMOTE shell
-# that does, since the remote home is frequently not the local one. Note the
-# asymmetry with the _rm_shquote calls above, which is what makes this easy to
-# miss on the next edit: those quote the value so the remote shell takes it
-# LITERALLY, and then this line deliberately evaluates it again. So the value
-# is not inert here, and `$(…)` in it would run on the remote too. No security
-# boundary is crossed by any of its three sources — the user's own argv
-# (`@host:<path>`), their own amux.toml (`roots`), and a row of the picker, whose
-# paths are that same host's own `find` output — and the user already has a shell
-# on that host, so nothing here reaches further than they already can. Anything
-# that widens the sources past "this user, this host" has to revisit this line.
+# Paths and roots go through the remote-side `tilde` helper (_RM_REMOTE_FNS),
+# never `eval`: a configured `roots = ["~/Developer/work"]` or an
+# `@host:~/tmp/x` target is a literal tilde that the REMOTE shell must expand
+# (the remote home is not the local one), while a space, quote or `$` in a path
+# — a picker row is that host's own `find` output — must survive verbatim.
+# Roots are resolved with `pwd -P` so every path printed here and by the roster
+# is physical, matching the `@amux_dir` a remote session records; that
+# directory join is what lights the picker's liveness dot. Names are compared
+# exactly after `find -name`, which would otherwise treat the typed name as a
+# glob.
 _rm_preflight_script() {
   local project="$1" path="$2" roots="$3" prog="$4"
   # shellcheck disable=SC2016  # $-vars below are for the REMOTE shell, not us
   printf '%s\n' \
+    "$_RM_REMOTE_FNS" \
     "project=$(_rm_shquote "$project")" \
     "path=$(_rm_shquote "$path")" \
     "roots=$(_rm_shquote "$roots")" \
@@ -301,9 +317,9 @@ _rm_preflight_script() {
     'TAB=$(printf "\t")' \
     'err() { printf "RM_ERR%s%s%s%s\n" "$TAB" "$1" "$TAB" "$2"; exit 0; }' \
     'if [ -n "$path" ]; then' \
-    '  d=$(eval printf %s "$path")' \
+    '  d=$(tilde "$path")' \
     '  [ -d "$d" ] || err nodir "no such directory on the remote: $path"' \
-    '  dir=$(cd "$d" && pwd)' \
+    '  dir=$(cd "$d" && pwd -P)' \
     'else' \
     '  [ -n "$project" ] || err notfound "no project given"' \
     '  [ -n "$roots" ]   || err noroots "host has no roots = [...] configured"' \
@@ -311,9 +327,9 @@ _rm_preflight_script() {
     '  IFS="' \
     '"' \
     '  for r in $roots; do' \
-    '    r=$(eval printf %s "$r")' \
-    '    [ -d "$r" ] || continue' \
+    '    r=$(cd "$(tilde "$r")" 2>/dev/null && pwd -P) || continue' \
     '    for c in $(find "$r" -maxdepth "$depth" -type d -name "$project" 2>/dev/null); do' \
+    '      [ "${c##*/}" = "$project" ] || continue' \
     '      [ -e "$c/.git" ] || continue' \
     '      n=$((n+1)); found="$found$c' \
     '"' \
@@ -488,23 +504,20 @@ _rm_offer_bootstrap() {
 # directory preflight searches for — that +1 is the whole reason the depth has
 # one home instead of a literal in each script. See _RM_MAX_PROJECT_DEPTH.
 #
-# `r=$(eval printf %s "$r")` is the same deliberate eval as in
-# _rm_preflight_script: a configured root is written with `~`, which only a
-# shell expands, and it must be the REMOTE one. The `_rm_shquote` above makes
-# the roots list arrive literally and this line then evaluates it, so despite
-# the quoting the value is NOT inert. Read that function's header for the full
-# note; the roots come from the invoking user's own amux.toml.
+# A `.git` FILE counts too (a worktree or submodule), as it does for preflight's
+# `[ -e "$c/.git" ]`, so the picker lists exactly what `amux @host <name>`
+# resolves. Roots are expanded and resolved as in _rm_preflight_script.
 _rm_roster_script() {
   local roots="$1"
   printf '%s\n' \
+    "$_RM_REMOTE_FNS" \
     "roots=$(_rm_shquote "$roots")" \
     "depth=$(( _RM_MAX_PROJECT_DEPTH + 1 ))" \
     'IFS="' \
     '"' \
     'for r in $roots; do' \
-    '  r=$(eval printf %s "$r")' \
-    '  [ -d "$r" ] || continue' \
-    '  find "$r" -maxdepth "$depth" -type d -name .git -prune -print 2>/dev/null' \
+    '  r=$(cd "$(tilde "$r")" 2>/dev/null && pwd -P) || continue' \
+    '  find "$r" -maxdepth "$depth" -name .git \( -type d -prune -o -type f \) -print 2>/dev/null' \
     'done | sed "s#/\.git\$##" | sort -u'
 }
 
@@ -582,13 +595,15 @@ _rm_roster_json() {
   # reason as the roster's `grep '^/'` above. Without this a single `echo` in the
   # user's ~/.bashrc fails the `[`-prefix test below and every project silently
   # loses its liveness dot, with nothing reporting an error.
+  # An rc line that itself starts with `[` (`[nvm] loaded`) would open the
+  # capture early, so the capture must also parse as a JSON array.
   sess="$(printf '%s\n' "$sess" | sed -n '/^\[/,$p')"
-  case "$sess" in
-    '['*) : ;;
-    # A remote amux predating --sessions-json (Task 1) simply has no liveness to
-    # report. Degrade to dots-off rather than failing the whole roster.
-    *) sess='[]' ;;
-  esac
+  while [ -n "$sess" ] && ! printf '%s' "$sess" | jq -e 'type == "array"' >/dev/null 2>&1; do
+    sess="$(printf '%s\n' "$sess" | sed '1d' | sed -n '/^\[/,$p')"
+  done
+  # A remote amux predating --sessions-json simply has no liveness to report.
+  # Degrade to dots-off rather than failing the whole roster.
+  [ -n "$sess" ] || sess='[]'
   printf '%s\n' "$paths" | jq -R -s --argjson s "$sess" '
     split("\n") | map(select(length > 0)) | map({
       name: (split("/") | last),
@@ -756,6 +771,16 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   _assert "et argv" "et bench -c" "${RM_ARGV[0]} ${RM_ARGV[1]} ${RM_ARGV[2]}"
   _rm_transport_argv mosh "bench" "sh -c 'true'"
   _assert "mosh argv" "mosh bench --" "${RM_ARGV[0]} ${RM_ARGV[1]} ${RM_ARGV[2]}"
+  # mosh-server execs argv with no shell, so the command string gets one.
+  _assert "mosh wraps the command in sh -c" "sh|-c|sh -c 'true'" "${RM_ARGV[3]}|${RM_ARGV[4]}|${RM_ARGV[5]}"
+  # A batch call is always ssh: et/mosh emulate a terminal and mangle a reply
+  # parsed line by line.
+  _rm_transport_argv et "bench" "true" --batch
+  _assert "et batch argv is ssh -n" "ssh -n" "${RM_ARGV[0]} ${RM_ARGV[1]}"
+  _rm_transport_argv mosh "bench" "true" --batch
+  _assert "mosh batch argv is ssh -n" "ssh -n" "${RM_ARGV[0]} ${RM_ARGV[1]}"
+  _rm_transport_argv bogus "bench" "x" --batch
+  _assert "unknown transport rejected on the batch path" "2" "$?"
   _rm_transport_argv bogus "bench" "x"
   _assert "unknown transport rejected" "2" "$?"
   # _rm_transport_argv's rc 2 is the ONE validator; _RM_TRANSPORT_KINDS is only
@@ -831,6 +856,10 @@ TOML
   _rm_t="$_RM_TEST_DIR/preflight"
   mkdir -p "$_rm_t/roots/one/warden/.git" "$_rm_t/roots/one/lector/.git" \
            "$_rm_t/roots/two/warden/.git" "$_rm_t/plain"
+  # The fixture's physical path. Roots below are configured through $_rm_t, which
+  # sits under /tmp — a symlink on macOS — so every resolved dir, and the dir a
+  # remote session records, is the pwd -P form of it.
+  _rm_tp="$(cd "$_rm_t" && pwd -P)"
   # A repo at the OUTER EDGE of _RM_MAX_PROJECT_DEPTH — the depth a root set one
   # directory above the usual layout produces (`roots = ["~"]` over
   # ~/Developer/<host>/<owner>/<repo>). Both remote scripts must reach it, and
@@ -838,12 +867,13 @@ TOML
   # this is the fixture that catches the two bounds drifting apart: with a bare
   # `-maxdepth 4` in each, preflight resolved this repo and the roster did not,
   # leaving it launchable by name but absent from the picker and completion.
-  _rm_deep="$_rm_t/roots/one"
+  _rm_deep="$_rm_t/roots/one"; _rm_deep_p="$_rm_tp/roots/one"
   _rm_i=1
   while [ "$_rm_i" -lt "$_RM_MAX_PROJECT_DEPTH" ]; do
-    _rm_deep="$_rm_deep/d$_rm_i"; _rm_i=$((_rm_i + 1))
+    _rm_deep="$_rm_deep/d$_rm_i"; _rm_deep_p="$_rm_deep_p/d$_rm_i"; _rm_i=$((_rm_i + 1))
   done
   _rm_deep="$_rm_deep/edgerepo"
+  _rm_deep_p="$_rm_deep_p/edgerepo"
   mkdir -p "$_rm_deep/.git"
   cat > "$_rm_t/stub" <<'STUB'
 #!/bin/sh
@@ -880,12 +910,12 @@ TOML
 
   _rm_preflight 0 warden "" ; _rm_pf=$?
   _assert "preflight resolves a project" "0" "$_rm_pf"
-  _assert "preflight dir" "$_rm_t/roots/one/warden" "$RM_DIR"
+  _assert "preflight dir" "$_rm_tp/roots/one/warden" "$RM_DIR"
   _assert "preflight version" "9.9.9" "$RM_VERSION"
 
   # Half one of the depth agreement: preflight reaches the edge repo.
   _rm_preflight 0 edgerepo "" ; _assert "preflight resolves at the depth bound" "0" "$?"
-  _assert "preflight edge dir" "$_rm_deep" "$RM_DIR"
+  _assert "preflight edge dir" "$_rm_deep_p" "$RM_DIR"
 
   _rm_preflight 0 nosuch "" ; _assert "preflight notfound rc" "1" "$?"
   _assert "preflight notfound code" "notfound" "$RM_ERRCODE"
@@ -905,7 +935,15 @@ TOML
   # An explicit path skips root resolution entirely — including for a dir that
   # is not a git repo and could never appear in the roster.
   _rm_preflight 0 "" "$_rm_t/plain" ; _assert "explicit path rc" "0" "$?"
-  _assert "explicit path dir" "$_rm_t/plain" "$RM_DIR"
+  _assert "explicit path dir" "$_rm_tp/plain" "$RM_DIR"
+  # A path is expanded for a leading ~ only, never evaluated: a space, a quote
+  # or a $ in it must reach the directory test verbatim.
+  mkdir -p "$_rm_t/it's my \$dir"
+  _rm_preflight 0 "" "$_rm_t/it's my \$dir" ; _assert "path with space, quote and \$ rc" "0" "$?"
+  _assert "path with space, quote and \$ dir" "$_rm_tp/it's my \$dir" "$RM_DIR"
+  _rm_preflight 0 "" "~" ; _assert "~ expands to the remote HOME" "$(cd ~ && pwd -P)" "$RM_DIR"
+  # A project name is matched exactly, never as a find glob.
+  _rm_preflight 0 'ward*' "" ; _assert "a glob name does not resolve" "notfound" "$RM_ERRCODE"
   _rm_preflight 0 "" "$_rm_t/nope" ; _assert "explicit missing path rc" "1" "$?"
   _assert "explicit missing path code" "nodir" "$RM_ERRCODE"
 
@@ -1096,6 +1134,27 @@ TOML
   AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_roster 4 emptyhost --refresh >/dev/null 2>&1
   _assert "an unreachable host still fails" "1" "$?"
 
+  # A symlinked root is followed, and a worktree/submodule (.git FILE) is a
+  # project in the roster exactly as preflight resolves it.
+  mkdir -p "$_rm_t/roots/three/solid/.git" "$_rm_t/roots/three/wt"
+  printf 'gitdir: /elsewhere\n' > "$_rm_t/roots/three/wt/.git"
+  ln -s "$_rm_t/roots/three" "$_rm_t/linkroot"
+  # Its own config file: the parsed-config disk cache is keyed on path + mtime
+  # in whole seconds, so a second append to hosts.toml within the same second
+  # would be served the stale parse.
+  cat > "$_rm_t/linkhosts.toml" <<TOML
+[[hosts]]
+name  = "linkhost"
+ssh   = "l"
+roots = ["$_rm_t/linkroot"]
+TOML
+  _rm_cfg_saved="$AGENTMUX_CONFIG"; export AGENTMUX_CONFIG="$_rm_t/linkhosts.toml"; _amux_json_cache=""
+  _rm_roster_link="$(_rm_roster 0 linkhost --refresh | sort | tr '\n' ' ')"
+  _assert "roster follows a symlinked root and lists a .git-file repo" \
+    "$_rm_tp/roots/three/solid $_rm_tp/roots/three/wt " "$_rm_roster_link"
+  _rm_preflight 0 wt "" ; _assert "preflight resolves the same .git-file repo" "$_rm_tp/roots/three/wt" "$RM_DIR"
+  export AGENTMUX_CONFIG="$_rm_cfg_saved"; _amux_json_cache=""
+
   # ---- roster json + liveness join ----
   # Liveness comes from ONE remote --sessions-json call covering every project,
   # never one probe per project: a per-project round trip is a network call
@@ -1105,7 +1164,7 @@ TOML
 #!/bin/sh
 case "\$1" in
   --version) echo 9.9.9 ;;
-  --sessions-json) printf '%s\n' '[{"name":"warden","dir":"$_rm_t/roots/one/warden","agent":"work","windows":2,"attached":true}]' ;;
+  --sessions-json) printf '%s\n' '[{"name":"warden","dir":"$_rm_tp/roots/one/warden","agent":"work","windows":2,"attached":true}]' ;;
 esac
 SESS
   chmod +x "$_rm_t/amux"
@@ -1134,6 +1193,16 @@ SESS
     "$(printf '%s' "$_rm_cj" | jq -e 'type == "array"' >/dev/null 2>&1 && echo ok)"
   _assert "a chatty remote rc does not silently kill liveness" "true" \
     "$(printf '%s' "$_rm_cj" | jq -r '.[] | select(.name=="warden") | .live')"
+  # rc noise that itself starts with `[` must not open the JSON capture early.
+  printf '#!/bin/sh
+echo "[nvm] loaded"
+for a in "$@"; do last="$a"; done
+exec sh -c "$last"
+' > "$_rm_t/bracketchatty"
+  chmod +x "$_rm_t/bracketchatty"
+  _rm_bj="$(AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/bracketchatty" _rm_roster_json 0 fake)"
+  _assert "a [-prefixed rc line does not kill liveness" "true" \
+    "$(printf '%s' "$_rm_bj" | jq -r '.[] | select(.name=="warden") | .live')"
   # A host with no repos must reach the picker as a valid EMPTY array, which is
   # what makes its "no projects found under this host's roots" branch reachable
   # at all — rather than a failed call reported as "could not list projects".

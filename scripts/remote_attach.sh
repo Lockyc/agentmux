@@ -193,12 +193,13 @@ _ra_hold() {
 # directories" in the exact case the picker exists for, and named the WRONG repo
 # in no case at all only because preflight refuses rather than guesses. The dir
 # is already resolved and absolute here; handing it back verbatim can't
-# re-collide. Whitespace in it is quoted, since the point is that this pastes.
+# re-collide. Anything a shell would reinterpret is quoted, since the point is
+# that this pastes.
 _ra_give_up() {
   local host="$1" dir="$2" target
   target="@$host:$dir"
   case "$target" in
-    *[[:space:]]*) target="'$target'" ;;
+    *[!A-Za-z0-9@:/._~+=,-]*) target="$(_rm_shquote "$target")" ;;
   esac
   printf '\namux: gave up reconnecting to %s.\n' "$host" >&2
   printf '      Your session is still running there — nothing was lost.\n' >&2
@@ -269,7 +270,9 @@ if [ "${REMOTE_ATTACH_SELFTEST:-}" = "1" ]; then
   _assert() { if [ "$3" = "$2" ]; then pass=$((pass+1)); echo "PASS: $1"
               else fail=$((fail+1)); echo "FAIL: $1 — expected '$2' got '$3'"; fi; }
 
-  _ra_t="$(mktemp -d)"
+  # pwd -P: the remote scripts report physical paths, and mktemp may sit under
+  # a symlink (macOS /var -> /private/var).
+  _ra_t="$(mktemp -d)" && _ra_t="$(cd "$_ra_t" && pwd -P)" && [ -n "$_ra_t" ] || { echo "FAIL: no temp dir" >&2; exit 1; }
   trap 'rm -rf "$_ra_t"' EXIT
   export AGENTMUX_REMOTE_BACKOFF=0        # no real sleeping in tests
   export AGENTMUX_REMOTE_MAX_ATTEMPTS=5   # bound the loop
@@ -436,6 +439,9 @@ STUB
   _assert "give up quotes a target with whitespace" "1" \
     "$(_ra_give_up buildbox "/srv/my projects/warden" 2>&1 \
        | grep -Fc "amux '@buildbox:/srv/my projects/warden'")"
+  _assert "give up quotes a target with a quote and a \$" "1" \
+    "$(_ra_give_up buildbox "/srv/it's \$x" 2>&1 \
+       | grep -Fc "amux '@buildbox:/srv/it'\\''s \$x'")"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD STUB_COUNT
 
