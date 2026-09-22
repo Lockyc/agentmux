@@ -112,6 +112,7 @@ run_selftest fork_session        env FORK_SESSION_SELFTEST=1        bash scripts
 run_selftest remote              env REMOTE_SELFTEST=1              bash scripts/remote.sh
 run_selftest remote_attach       env REMOTE_ATTACH_SELFTEST=1       bash scripts/remote_attach.sh
 run_selftest notes               env NOTES_SELFTEST=1               sh scripts/notes.sh
+run_selftest tmux_version        env TMUX_VERSION_SELFTEST=1        sh scripts/tmux_version.sh
 
 # --- 4. mouse-click suite (tests/mouse) ------------------------------------
 # NOTES_SELFTEST covers scripts/notes.sh except the click itself (it invokes

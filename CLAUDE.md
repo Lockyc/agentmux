@@ -358,6 +358,7 @@ VERSION_CHECK_SELFTEST=1     sh scripts/version_check.sh
 COLOURS_SELFTEST=1           sh scripts/colours.sh
 UPDATE_COLORS_SELFTEST=1     sh scripts/update_colors.sh
 FRAME_REATTACH_SELFTEST=1    sh scripts/frame_reattach.sh
+TMUX_VERSION_SELFTEST=1      sh scripts/tmux_version.sh
 ```
 
 `summarise.sh` also has an optional live-LM smoke test that hits the configured endpoint and asserts the prompt rules survive (third-party scope, anti-invention). Manual only — skips silently if the LM is unreachable:
