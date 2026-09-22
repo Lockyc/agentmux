@@ -541,7 +541,6 @@ The 3-row status bar shows a rolling `done / now / next` summary of the active s
 
 **Requirements:**
 - A local OpenAI-compatible LLM endpoint with a small non-reasoning instruct model loaded (e.g. LM Studio at `localhost:1234` with `qwen2.5-14b-instruct`, or Ollama at `localhost:11434`)
-- `agentmux.conf` sourced in `~/.tmux.conf`
 - Claude Code hooks wired (above) — the `working` hook triggers the summariser
 
 The coloured status bar and 3 extra summary rows only appear in `amux` sessions (`@autoagent=1`). Plain tmux sessions are left unstyled with a single status line.

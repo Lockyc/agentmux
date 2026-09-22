@@ -225,7 +225,8 @@ hits the notes feature's silent-failure paths (mitigated by the `command-prompt`
 message in `notes.sh`'s `click`, but still discovered at click time, not install time).
 
 **Fix when acted on:** add a version check — e.g. in `install.sh`, or an `amux --doctor`-
-style command — comparing `tmux -V` against the documented minimum, and warn (not hard-fail,
+style command — reusing `scripts/tmux_version.sh`'s `_amux_tmux_capable` (the one home of the
+floor and the `tmux -V` parse) — and warn (not hard-fail,
 since most of agentmux works fine on an older tmux) when it's under 3.6.
 
 **Trigger to revisit:** another feature raises the minimum further, or a user reports

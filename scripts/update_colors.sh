@@ -15,7 +15,7 @@
 # anyone else, which is what keeps live sessions' colours stable.
 #
 # Fired by the client-attached / session-created / client-session-changed hooks in
-# .tmux.conf. Each fire reconciles every coloured session, but reconciliation only
+# tmux/agentmux.conf. Each fire reconciles every coloured session, but reconciliation only
 # ASSIGNS sessions that lack a stored @l1idx (newcomers, or one whose creation hook
 # raced); already-assigned sessions are repainted from their frozen slot, never
 # reshuffled. A static `set -g status-style` is pointless; this overrides it per
@@ -137,7 +137,7 @@ _amux_apply_colour() {
   tmux set -t "$s" status-style "bg=colour${bg},fg=colour${fg}"
 
   # Summary rows (status-format[1..3]) get a shade of the same hue (@l2bg/@l2fg),
-  # derived purely from bg+fg — see _amux_l2bg. Consumed by .tmux.conf.
+  # derived purely from bg+fg — see _amux_l2bg. Consumed by tmux/agentmux.conf.
   bg2=$(_amux_l2bg "$bg" "$fg")
 
   if [ -n "$bg2" ]; then
