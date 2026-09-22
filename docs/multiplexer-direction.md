@@ -190,10 +190,10 @@ than re-deriving the state from the web.
     mouse movement, and capture the screen as text, HTML or other formats. Hashimoto's claim is
     that anything the graphical client does, the CLI does, plus more; he pitches it at editors
     and agent tools.
-- **As of 2026-09-21** — still waitlist-only. (Re-checked 09-21 against every route named
+- **As of 2026-09-22** — still waitlist-only. (Re-checked 09-22 against every route named
   at the top of this file — Mastodon statuses, the YouTube channel listing, `mitchellh.com/writing`,
   HN by date, `superlogical.com`: nothing after the 09-14 CLI demo above. The one post since,
-  2026-09-17 — detecting programs whose requested colours clash with the active theme and
+  2026-09-17 (plus a 09-21 reply on the same feature) — detecting programs whose requested colours clash with the active theme and
   hue-rotating them into it via Oklab — names no product and is terminal-emulator work, so read
   it as libghostty/Ghostty unless a later source attributes it to the Superlogical client; it
   changes nothing here either way.)
