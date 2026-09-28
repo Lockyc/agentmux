@@ -76,7 +76,7 @@ amux
 - `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in amux.toml)
 - A notification-aware host terminal (optional — for `--notify` alerts; the hook emits a standard OSC 777 desktop-notification escape, surfaced by hosts like [warden](https://github.com/lockyc/warden) or Ghostty)
 
-Working *on* agentmux additionally wants `shellcheck` (the linter) and `expect` (the pty driver for the status-bar click test suite, `bash tests/mouse/run.sh`). Both are development-only — neither is needed to use agentmux.
+Working *on* agentmux additionally wants `shellcheck` and `expect` — see [Development](#development).
 
 ## Usage
 
@@ -110,6 +110,8 @@ Normal shell commands — type them at a prompt.
 | `amux --frames` | List active `--frame` wrappers (each lives on its own per-project tmux socket) |
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal) — or a frame-less scratch terminal started by `--term`; the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
+| `amux --version` | Print the installed agentmux version |
+| `amux --help` | Print usage |
 
 Set `[update] check = true` in `~/.agentmux/amux.toml` to enable a once-daily
 check that notifies (notify-only) when a newer agentmux is available on GitHub.
@@ -208,7 +210,7 @@ pane beside amux in the right. It's a nested tmux on its own **per-project** soc
 (`agentmux-frame-<hash>`, session `<session>-frame`), so amux runs completely unchanged
 on the right. There are **three status bars**: a thin full-width outer bar (the
 frame, showing the project + clock), and a per-pane bar under each side — the left
-terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
+terminal's own tab bar and amux's.
 
 - The **left pane is its own dedicated tmux** on a separate per-project `agentmux-term-<hash>` socket
   (config `tmux/term.conf`): its own tab bar, and it **never dies** — exit the
@@ -263,7 +265,7 @@ terminal's own tab bar and amux's. (Requires tmux ≥ 3.1 for the `-l %` split.)
   per-field, falling back to the base `[frame]` values. e.g. a taller split that
   starts focused on the terminal in one project:
   ```toml
-  [frame.dirs."~/Developer/github.com/lockyc/agentmux"]
+  [frame.dirs."~/Developer/github.com/you/myproject"]
   left_vertical_split = 30
   focus = "terminal"
   ```
@@ -352,7 +354,7 @@ The new agent appears in the `prefix m` cycle immediately (no reload needed).
 
 ## Configuration reference
 
-Every key `~/.agentmux/amux.toml` reads, grouped per level. `config/amux.toml.example` is the annotated tour; these tables are the complete list. Env overrides are named where one exists.
+Every key `~/.agentmux/amux.toml` reads, grouped per level (`AGENTMUX_CONFIG` points agentmux at a different file). `config/amux.toml.example` is the annotated tour; these tables are the complete list. Env overrides are named where one exists.
 
 ### `[[agents]]` — one block per agent
 
@@ -487,7 +489,7 @@ To add e.g. a Gemini CLI adapter: create the adapter's `{status,ctx,digest}.sh` 
 | zsh | ✓ | ✓ | `shell/agentmux.sh` | `~/.zshrc` |
 | fish | ✓ | ✓ | `shell/agentmux.fish` | `~/.config/fish/config.fish` |
 
-Where completion is wired, it's backed by `amux --complete` — which prints the agent names and `-<flag>` shortcuts, one per line — and offered for the first argument only. (bash gets the command without completion; nothing stops you adding a `complete` script for it.)
+Where completion is wired, the first argument completes agent names and `-<flag>` shortcuts (`amux --complete`) plus `@host` tokens (`amux --complete-hosts`); the second completes a remote project after `@host` (`amux --complete-remote <host>`, from the local cache) or a live session name after `--kill`, `--suspend`, `--frame-kill`, `--probe`, or `attach` (`amux --complete-sessions`). Each prints one candidate per line. (bash gets the command without completion; nothing stops you adding a `complete` script for it.)
 
 ### Adding another shell
 
@@ -495,7 +497,7 @@ To support a shell that isn't listed (e.g. nushell, elvish, xonsh):
 
 1. Create `shell/agentmux.<shell>` — a thin wrapper, in that shell's own syntax, that:
    - resolves the launcher path (default `~/.agentmux/bin/amux`, overridable via the `AGENTMUX_BIN` env var) and defines an `amux` command forwarding all arguments to it;
-   - optionally registers a first-argument completion populated from `<launcher> --complete`.
+   - optionally registers completion from the four `--complete*` sources above.
 
    `shell/agentmux.sh` (bash/zsh) and `shell/agentmux.fish` (fish) are the reference implementations — both are only a few lines.
 2. Update **both** installers so the file ships and gets wired: `install.sh` (it's carried by the clone; add its source line to the printed instructions) and `.claude/commands/agentmux/install.md` (detection + wiring). They must stay in sync.
@@ -599,3 +601,13 @@ session_colour = "blue"
 ```
 
 A pinned colour is frozen for that directory and removed from the auto-assign pool entirely — no other project is ever assigned it, even when the pinned project isn't running. Run `amux --colours` for the bar colour names (this is the **session bar** palette, distinct from an agent's tab `colour`).
+
+## Development
+
+Needs `shellcheck` and `expect` (neither is needed to use agentmux).
+
+```sh
+just gate               # shellcheck + the test suite (test.sh)
+bash tests/mouse/run.sh # status-bar click tests (expect-driven pty)
+just bench              # session-log restore-scan timing
+```
