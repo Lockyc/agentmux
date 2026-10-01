@@ -1,9 +1,12 @@
 name: CI
 
 on:
+  # Release-time only, never per push: main advances only at a release.
+  # `just gate` is the local check; `gh workflow run ci.yml` runs this on demand.
   push:
-    branches: [dev, main]
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
