@@ -259,6 +259,9 @@ That reframing settles several things that were previously arguable:
   the-viewport model that chrome belongs to the client, which is where warden's sidebar,
   tab-row dots and presence indicators already live. Migrating it is the expensive half
   of removing the agent tmux layer, and is what makes that layer removable at all.
+  OSC 7501 (ledger, 2026-10-06) is the channel for it: the agent reports its own state to
+  whichever terminal hosts it, so the emitter belongs at the agent (a Claude Code hook, or
+  upstream), never in `tmux-status.sh` — status leaves tmux with the emitter, not through it.
 
 **Not yet:** removing the agent tmux layer. It is blocked on the chrome migration above
 and on a backend that provides the ledger's open/close events; revisit once the seam
