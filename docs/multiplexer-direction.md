@@ -190,19 +190,35 @@ than re-deriving the state from the web.
     mouse movement, and capture the screen as text, HTML or other formats. Hashimoto's claim is
     that anything the graphical client does, the CLI does, plus more; he pitches it at editors
     and agent tools.
-- **As of 2026-09-23** — still waitlist-only. (Re-checked 09-23 against every route named
-  at the top of this file — Mastodon statuses, the YouTube channel listing, `mitchellh.com/writing`,
-  HN by date, `superlogical.com`: nothing after the 09-14 CLI demo above. The one post since,
-  2026-09-17 (plus a 09-21 reply on the same feature) — detecting programs whose requested colours clash with the active theme and
-  hue-rotating them into it via Oklab — names no product and is terminal-emulator work, so read
-  it as libghostty/Ghostty unless a later source attributes it to the Superlogical client; it
-  changes nothing here either way.)
-  No public code, protocol spec, license, price or release date; the only published numbers
-  are the memory set above, the remote transport and auth model are shown but not
-  specified, and the CLI is demoed but not documented.
-  `superlogical.com`'s signup copy promises notice of the beta "and any OSS releases along
-  the way", so an open-source drop before the beta is on their roadmap, undated. The unlock
-  named under *Not yet* (a published protocol or client) has not fired.
+- **2026-10-05** — *Public testing is beginning* (`superlogical.com/updates/public-testing-beginning`).
+  The product is named **Rex** — the server and CLI names from 09-08/09-14 are the product's.
+  Invites go to the mailing list in growing waves, the whole list "in less than a month";
+  testing is **macOS app only** (it self-hosts its own Rex server and connects to other Rex
+  servers). Rex servers already run on Linux and Windows and clients exist for iOS, Linux and
+  Windows "at varying stages of readiness", outside the test. ~50 private testers before this.
+  Pricing: "Rex is and will always be free" — no account, fully self-hostable, no data seen; the
+  Rex clients and servers "are not going to be directly monetized". The commercialization plan
+  is unannounced, promised before the stable release, which will be a contact-free download.
+  Still no public code, wire-protocol spec or license.
+- **2026-10-06** — **OSC 7501, the Program Status Protocol** (spec rev 0.2 at
+  `superlogical.com/rex/docs/build/program-status`, rationale at
+  `mitchellh.com/writing/program-status-osc7501`). The first *published* protocol, but a terminal
+  escape sequence, not the Rex wire protocol: a program reports its own state to the terminal
+  over the pty — `OSC 7501 ; state=…:kind=…:app=…:progress=…:msg=<b64> ST`. States `idle` /
+  `working` / `done` / `blocked` (`kind=permission|question|auth`) / `error`, plus `clear`; each
+  report replaces its record whole; hierarchical `id`s (`build/test`) give a program several
+  records at once. `working`/`blocked` drop on process exit or the next OSC 133 A prompt;
+  `done`/`error` survive both until the terminal decides the user has seen them. Detection is the
+  `OSC 7501 ; ? ST` echo (send `CSI c` after it to avoid a timeout); terminfo `Pst` advertises it.
+  Implemented in **libghostty** and in Rex; proof-of-concept emitters exist (plugins/forks) for
+  Claude Code, Codex, Terraform and Homebrew, nothing upstreamed. Hashimoto's pitch is the
+  "agentic inbox" — he counts 250+ orchestrators guessing agent state from titles/screens
+  (Herdr's 16 Claude Code title-regex rules as the example) — which is exactly what amux's
+  probe and warden's attention/presence dots do today. Rex shows it as session-picker
+  indicators, spinners/blocked glyphs on unfocused tab headers, and a Lua
+  `terminal.program_status_changed` event; a push-to-mobile inbox is planned. Unlike OSC 9/777 it
+  is state, not a one-shot event, and the pty carries it over ssh and through containers with no
+  socket bridging — though through tmux it still needs passthrough per layer, like OSC 777.
 
 ## What this changes here
 
@@ -230,10 +246,10 @@ That reframing settles several things that were previously arguable:
   resolution — are not tmux-specific, but they currently assume tmux everywhere. The
   seam is what lets `zmx` or Superlogical's protocol drop in as a backend rather than
   force a rewrite, and it is cheapest to build now, while tmux is the only implementation.
-  This is also the whole of the answer to Superlogical being a paid product: the protocol
-  is open, the client half is in libghostty, and (2026-09-02) the server is self-hosted
-  and runs on Linux, so the lock-in risk is narrower than first assumed — the control
-  plane, not the session host — and a seam contains it either way. A self-hosted server on
+  This is also the whole of the answer to Superlogical being venture-funded: Rex's client and
+  server are free, self-hosted, account-free and not directly monetized (2026-10-05), so the
+  lock-in risk is whatever the unannounced commercial layer turns out to be — and a seam
+  contains it either way. A self-hosted server on
   your own remote host is also exactly the shape `amux @host` already assumes, which is why the seam,
   not a rewrite, is the right investment. The 2026-09-08 remote demo sharpens what the seam has
   to own: Superlogical's server *is* the login (no sshd on the host, identity from the transport),
@@ -248,9 +264,9 @@ That reframing settles several things that were previously arguable:
 and on a backend that provides the ledger's open/close events; revisit once the seam
 exists and warden renders at least the note row. Superlogical's demoed per-session event
 stream (2026-09-14: block-closed, child-exited, client-connected) is the shape that second
-condition asks for, but it is demoed, not published. Nothing here argues for adopting
-Superlogical — there is no artifact to adopt. The unlock is a published protocol or
-client.
+condition asks for, but it is demoed, not published. Rex is in invite-only macOS testing
+(2026-10-05), but with no published wire protocol or code there is still nothing a backend
+can target. The unlock is a published Rex protocol or open client.
 
 ## Inline images are not a tmux problem
 
