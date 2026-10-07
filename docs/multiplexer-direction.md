@@ -219,6 +219,22 @@ than re-deriving the state from the web.
   `terminal.program_status_changed` event; a push-to-mobile inbox is planned. Unlike OSC 9/777 it
   is state, not a one-shot event, and the pty carries it over ssh and through containers with no
   socket bridging — though through tmux it still needs passthrough per layer, like OSC 777.
+- **2026-10-07** — two X/Mastodon posts, no devlog.
+  - **OSC 7501 adoption, 24 h in:** integrated in Amp, Factory, TUIOS and libghostty; "verbal
+    support and in-progress PRs" from **Claude Code**, cmux, Codex, Herdr, OpenCode and Pi. A
+    Claude Code PR is the emitter amux would otherwise have to write as a hook — nothing has
+    shipped in Claude Code yet.
+  - **Rex server scalability** (alpha builds; Ubuntu 24.04, 16 CPUs, 64 GiB; two charts, read as
+    images): **10,000 active terminals in 3.85 GiB** anonymous RSS (server + all terminals, dash
+    shells, 1,000 numbered lines each), **1.16 GiB** once idle 60 s and snapshotted; 1,000
+    terminals ≈ 0.4 / 0.14 GiB. Bash instead of dash adds ~423 KiB per shell. Shell-command round
+    trip with 1,000 terminals open: median/p99 0.29/0.52 ms with none busy, 1.30/4.50 ms with 10
+    busy, 1.58/15.24 ms with 100 busy (`date` every 0.1 s; machine CPU 0.2 / 1.6 / 13.6 %). Target
+    is 100,000. Two mechanisms named: a C trampoline that unshares the fd table after fork (Linux
+    sizes it to the highest open fd's power of two — 512 KiB per terminal beyond ~5,000), and PTY
+    parking now triggering on **2 s** without read activity into a shared epoll thread (the 09-02
+    devlog described parking idle-or-unobserved PTYs; this is the concrete threshold). No
+    comparison against other multiplexers this time, deliberately.
 
 ## What this changes here
 
