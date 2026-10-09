@@ -265,7 +265,8 @@ than re-deriving the state from the web.
   - **No third-party Rex client is announced.** Rex's clients are its own libghostty-based apps.
     The 07-29 post says Ghostty's "mission, governance, license, technical goals, and roadmap do
     not change". "Ghostty is the client" is Hacker News speculation, not a statement from
-    Hashimoto. Neither his posts nor the docs have said anything since. The route into other
+    Hashimoto. Asked on Mastodon (08-30) whether it would be part of Ghostty rather than a
+    separate app, his whole answer was "Time will show". Nothing more is on record. The route into other
     terminals is libghostty: terminal-side pieces such as the binary snapshot are upstreamed
     there. Attaching from a terminal that doesn't speak the protocol is the architecture
     devlog's compatibility mode, which the docs don't cover.
@@ -275,7 +276,24 @@ than re-deriving the state from the web.
     multiplexers"), a snapshot-decode option to compress history (#14500, 10-01, C API
     `ghostty_snapshot_decoder_*`) and OSC 7501 (#14560). Those are the terminal-state halves a
     Rex client needs. The Rex wire protocol itself (attach, input, events) and any client code
-    are not in the repo.
+    are not in the repo. Ghostty main also re-labels `ghostty.h` "libghostty-internal", tailored
+    to the macOS app and "not designed for external use", and says external embedders should use
+    libghostty-vt. warden embeds `ghostty.h`.
+  - **Reception.** The July announcement drew 796 points and 406 comments on HN. Enthusiasm
+    centred on Hashimoto's track record and the Ghostty non-profit. Skepticism centred on VC money
+    for "a tmux clone", the investor list, and a pitch too vague to say what it builds. No Ghostty
+    conflict-of-interest worry surfaced. The October beta posts drew no HN discussion at all; beta
+    talk is on Discord, behind the invite. OSC 7501 got real debate (HN 141 points, Lobsters 35):
+    - Windows Terminal maintainers split, from "I trust the folks at ghostty to be sane" to
+      "smells like NIH".
+    - Cargo will wait for adoption.
+    - Critics called it AI-agent-specific, or argued for APC or systemd's OSC 3008 instead.
+    - No kitty, WezTerm, foot or iTerm2 maintainer has responded.
+    - The spec is at rev 0.3 (10-07: an absent `progress` now means indeterminate, and emitting
+      without feature detection is allowed).
+
+    Hashimoto (08-28): "we're not launching any hosted services". There's a Linux CLI server and
+    a NixOS module, and Tailscale is built into the server.
 
 ## What this changes here
 
