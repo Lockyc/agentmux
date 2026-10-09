@@ -211,8 +211,10 @@ than re-deriving the state from the web.
   records at once. `working`/`blocked` drop on process exit or the next OSC 133 A prompt;
   `done`/`error` survive both until the terminal decides the user has seen them. Detection is the
   `OSC 7501 ; ? ST` echo (send `CSI c` after it to avoid a timeout); terminfo `Pst` advertises it.
-  Implemented in **libghostty** and in Rex; proof-of-concept emitters exist (plugins/forks) for
-  Claude Code, Codex, Terraform and Homebrew, nothing upstreamed. Hashimoto's pitch is the
+  Implemented in Rex and in **libghostty-vt** (ghostty-org/ghostty#14560); the embedding API in
+  `ghostty.h` has no action for it, so the Ghostty app ignores it and warden can't see it.
+  Proof-of-concept emitters exist (plugins/forks) for Claude Code, Codex, Terraform and Homebrew,
+  nothing upstreamed. Hashimoto's pitch is the
   "agentic inbox" — he counts 250+ orchestrators guessing agent state from titles/screens
   (Herdr's 16 Claude Code title-regex rules as the example) — which is exactly what amux's
   probe and warden's attention/presence dots do today. Rex shows it as session-picker
@@ -267,6 +269,13 @@ than re-deriving the state from the web.
     terminals is libghostty: terminal-side pieces such as the binary snapshot are upstreamed
     there. Attaching from a terminal that doesn't speak the protocol is the architecture
     devlog's compatibility mode, which the docs don't cover.
+  - **What libghostty has, as of this check:** the binary snapshot format (#13534, 07-31, marked
+    experimental: "the format can and will change"; its stated uses include multiplexers),
+    PTY-stream continuation tracking for replay (#13544, 08-01, "for me, this is used for
+    multiplexers"), a snapshot-decode option to compress history (#14500, 10-01, C API
+    `ghostty_snapshot_decoder_*`) and OSC 7501 (#14560). Those are the terminal-state halves a
+    Rex client needs. The Rex wire protocol itself (attach, input, events) and any client code
+    are not in the repo.
 
 ## What this changes here
 
