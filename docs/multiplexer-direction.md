@@ -22,8 +22,9 @@ noise, the subtitles still land. The ledger's last entry carries the as-of date 
 everything below it.
 
 What *is* agent-fetchable, for the next status check (so it starts from the ledger below,
-not from a fresh web search): `mitchellh.com/writing/superlogical`, `superlogical.com`,
-press coverage (The Register, InfoWorld, XenoSpectrum's 2026-08-01 architecture write-up),
+not from a fresh web search): `mitchellh.com/writing/superlogical`, `superlogical.com`
+(new posts: `/updates/rss.xml`; the Rex docs serve raw Markdown at `/rex/docs/<page>.md`),
+the YouTube channel's feed (`youtube.com/feeds/videos.xml?channel_id=<id above>`), press coverage (The Register, InfoWorld, XenoSpectrum's 2026-08-01 architecture write-up),
 and Hacker News through `hn.algolia.com/api/v1/items/<id>` (`search_by_date?query=superlogical
 &tags=story` lists new mirrors) — the site itself rate-limits. **The X posts are readable
 through the Mastodon API, not the mirror pages**: `hachyderm.io/@mitchellh.rss` and the
@@ -235,6 +236,30 @@ than re-deriving the state from the web.
     parking now triggering on **2 s** without read activity into a shared epoll thread (the 09-02
     devlog described parking idle-or-unobserved PTYs; this is the concrete threshold). No
     comparison against other multiplexers this time, deliberately.
+- **2026-10-09** — status check: no new posts, videos or devlog since 10-07. Recorded here because
+  the ledger had missed it: the **Rex user docs are public** at `superlogical.com/rex/docs` (the
+  OSC 7501 spec is one page of them; the download itself is behind the invite login). They make
+  the 09-14 CLI demo a documented surface:
+  - **Self-describing server API.** `rex api list` / `describe` / `call`: named methods
+    (`session.create`, `session.view`, `session.new_split`, `block.close`, `*.set_label`, …),
+    each carrying a JSON Schema for input and output plus examples, and `--json` dumps the whole
+    catalogue "for generating bindings". Blocks expose methods of their own
+    (`com.superlogical.terminal.format` captures the screen, plus `.pwd` and `.title`). The CLI
+    and Lua (`rex.call`, `rex.session.*`, `rex.on`/`rex.wait`) are both derived from the
+    connected server's catalogue. Every id (`session:<uuid>`, `block:<uuid>`) is stable and never
+    reused; labels are mutable. Every terminal gets `REX_SESSION`/`REX_BLOCK`/`REX_SERVER` in its
+    environment, and `-S <host>` points a command at a remote server.
+  - **A published event list.** Session events (`window_*`, `block_created`/`block_closed`,
+    `client_connected`/`disconnected`/`connection_changed`, `session_view_changed`); terminal
+    events (`child_exited` with exit code, `pwd_changed`, `title_changed`, `bell`,
+    `process_changed` with the foreground process, `desktop_notification`, `progress_report`,
+    `clipboard_written`, `program_status_changed`/`removed`); server events (`session_created`/
+    `destroyed`, `client_joined`/`left`). `rex events --json` streams them as JSON lines.
+  - **Scripting contract.** `rex run|split --wait`, `rex wait --for <dur> <block>`, `--keep-open`,
+    and fixed exit codes (3 = target not found or ambiguous, 4 = server unreachable).
+  - What's still missing: the client↔server wire protocol, code and a license. The API is RPC
+    reached through the `rex` binary, `server.version` reports `0.1.0`, and a `method_not_found`
+    error is documented as the expected result when a server is older than the docs.
 
 ## What this changes here
 
@@ -282,10 +307,13 @@ That reframing settles several things that were previously arguable:
 **Not yet:** removing the agent tmux layer. It is blocked on the chrome migration above
 and on a backend that provides the ledger's open/close events; revisit once the seam
 exists and warden renders at least the note row. Superlogical's demoed per-session event
-stream (2026-09-14: block-closed, child-exited, client-connected) is the shape that second
-condition asks for, but it is demoed, not published. Rex is in invite-only macOS testing
-(2026-10-05), but with no published wire protocol or code there is still nothing a backend
-can target. The unlock is a published Rex protocol or open client.
+stream is the shape that second condition asks for, and the Rex docs now publish it (ledger,
+2026-10-09: `block_closed`, `terminal.child_exited`, `client_connected`, streamed by `rex
+events --json`). Server and binaries are still invite-only macOS testing (2026-10-05). So a
+backend is now *designable* against a documented API, by driving `rex` as a subprocess, but
+it can't be *built or tested* without an invite. The unlock is Rex being downloadable on the
+hosts amux runs on; a published wire protocol or open client would also let a backend skip
+the `rex` subprocess.
 
 ## Inline images are not a tmux problem
 
