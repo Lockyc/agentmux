@@ -260,6 +260,13 @@ than re-deriving the state from the web.
   - What's still missing: the client↔server wire protocol, code and a license. The API is RPC
     reached through the `rex` binary, `server.version` reports `0.1.0`, and a `method_not_found`
     error is documented as the expected result when a server is older than the docs.
+  - **No third-party Rex client is announced.** Rex's clients are its own libghostty-based apps.
+    The 07-29 post says Ghostty's "mission, governance, license, technical goals, and roadmap do
+    not change". "Ghostty is the client" is Hacker News speculation, not a statement from
+    Hashimoto. Neither his posts nor the docs have said anything since. The route into other
+    terminals is libghostty: terminal-side pieces such as the binary snapshot are upstreamed
+    there. Attaching from a terminal that doesn't speak the protocol is the architecture
+    devlog's compatibility mode, which the docs don't cover.
 
 ## What this changes here
 
