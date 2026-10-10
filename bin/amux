@@ -111,9 +111,6 @@ AGENTMUX_AGENT_SOCKET="${AGENTMUX_AGENT_SOCKET:-}"
 # server's frozen environment, so `amux --reload` re-reads the SAME dir the server was born
 # with regardless of the reloading client's env.
 export AGENTMUX_USER_DIR="${AGENTMUX_USER_DIR:-$HOME/.agentmux}"
-# Absolute path to this launcher (for --frame's right-pane re-invocation), resolved
-# once here from the same BASH_SOURCE the dirs above use.
-AGENTMUX_BIN="${AGENTMUX_BIN:-$_amux_bindir/${_amux_self##*/}}"
 
 # Single-quote a string for safe interpolation into an `sh -c` command line.
 _amux_shquote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -928,8 +925,9 @@ _amux_frame() {
     # tmux >= 3.1). split-window -h leaves the new right/agent pane focused.
     agent_pid=$(tmux -L "$sock" split-window -h -t "$fsess" -l "${right}%" -c "$PWD" -P -F '#{pane_id}' "$right_cmd")
     # Same accidental-detach guard for the agent pane (see the term pane above);
-    # @amux_role=agent points the hook at the agent session on the default
-    # socket. A real kill stays dead instead of being resurrected.
+    # @amux_role=agent points the hook at the agent session on the project's
+    # agent shard (published to the frame as @amux_agent_socket). A real kill
+    # stays dead instead of being resurrected.
     tmux -L "$sock" set -p -t "$agent_pid" remain-on-exit on
     tmux -L "$sock" set -p -t "$agent_pid" @amux_role agent
     # Start focus ([frame] focus): agent (right) by default, or the left scratch
@@ -1040,8 +1038,8 @@ _amux_frames() {
 # Kill a frame from the base terminal (default: the current dir's). Tears down the
 # wrapper (frame socket) AND its scratch terminal (term socket); the agent session
 # on the project's own agent socket is left running (kill it separately with
-# `tmux kill-session -t <session>`). A scratch terminal with NO frame (a `--term`
-# started for a warden split) is reaped the same way — it is the frame's terminal
+# `amux --kill`). A scratch terminal with NO frame (a `--term` started for a
+# warden split) is reaped the same way — it is the frame's terminal
 # whether or not a frame is up, and this is the one command that drops it without
 # taking the agent along (`--kill` does that). Refuses only when neither exists.
 _amux_frame_kill() {
@@ -2357,8 +2355,6 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # No `amux`/`--no-frame` token — guards against regressing to a second full launch.
   _rc=$(_amux_frame_right_cmd agentmux-agent-123 proj)
   _assert "frame right_cmd shape" "env -u TMUX tmux -L 'agentmux-agent-123' attach-session -t '=proj'" "$_rc"
-  case "$_rc" in *"--no-frame"*|*"$AGENTMUX_BIN"*) _got=regressed ;; *) _got=ok ;; esac
-  _assert "frame right_cmd has no second amux launch" "ok" "$_got"
 
   # _amux_frame_left_cmd: plain attach to the dedicated term socket (trailing
   # `-c <PWD>` varies, so assert the stable prefix).
