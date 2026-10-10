@@ -1129,6 +1129,7 @@ _amux_remote() {
   fi
 
   local kind; kind="$(_rm_transport_for_host "$hi")"
+  _rm_check_transport "$kind" || { echo "amux: $RM_ERRMSG (host $RM_HOST)" >&2; return 1; }
   [ "$kind" = mosh ] && _rm_mosh_warn "$RM_HOST"
   if ! command -v "$kind" >/dev/null 2>&1; then
     echo "amux: transport '$kind' is not installed locally (host $RM_HOST)" >&2
@@ -2769,6 +2770,11 @@ name  = "dup"
 ssh   = "dup"
 roots = ["$_rmt/roots/one", "$_rmt/roots/two"]
 agent = "work"
+
+[[hosts]]
+name      = "typo"
+ssh       = "typo"
+transport = "shh"
 TOML
   _rmt_save_cfg="$AGENTMUX_CONFIG"; _rmt_save_user="${AGENTMUX_USER_DIR:-}"
   _rmt_save_state="${AGENTMUX_STATE_DIR:-}"
@@ -2807,6 +2813,11 @@ TOML
   : > "$REMOTE_ARGS"; printf '2\n' | ( unset TMUX; _amux_remote "@dup" >/dev/null 2>&1 )
   _assert "picked row 2 launches in THAT row's dir" "CWD $_rmt/roots/two/warden" \
     "$(grep '^CWD ' "$REMOTE_ARGS")"
+
+  # A typo'd `transport =` is reported as unknown, never as a program to install.
+  _rmt_err=$( ( unset TMUX; _amux_remote "@typo" warden 2>&1 >/dev/null ) )
+  _assert "unknown transport is named as unknown, not uninstalled" "1" \
+    "$(printf '%s' "$_rmt_err" | grep -c 'unknown transport "shh"')"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG REMOTE_ARGS
   AGENTMUX_CONFIG="$_rmt_save_cfg"; _amux_json_cache=""
