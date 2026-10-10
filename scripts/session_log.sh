@@ -117,7 +117,7 @@ _sl_enabled() {
 _sl_append() {
   dir=$(_sl_state_dir)
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '%s\n' "$1" >> "$dir/sessions.jsonl" 2>/dev/null || true
+  printf '%s\n' "$1" >> "$dir/$_SL_LEDGER_NAME" 2>/dev/null || true
 }
 
 # Emit tmux context for [target] as one $_SL_US-separated line. With no explicit target, fall
