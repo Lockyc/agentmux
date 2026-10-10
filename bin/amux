@@ -481,19 +481,20 @@ _amux_note_opts() {
   fi
 }
 
-# The effective frame prefix for $PWD: [frame] prefix, or frame.conf's built-in
-# default when unset. The default is READ from frame.conf's `set -g prefix` line, not
+# The effective frame prefix for <dir> (default $PWD): [frame] prefix, or
+# frame.conf's built-in default when unset. The default is READ from frame.conf's `set -g prefix` line, not
 # restated here: this value only feeds the [amux]/[frame] collision guard, and a
 # second copy of the literal would let a changed frame.conf default pass a colliding
 # [amux] prefix through the guard silently (the frame then shadows it unwarned).
 _amux_frame_prefix() {
-  local p; p=$(agentmux_frame_field prefix "$PWD")
+  local p; p=$(agentmux_frame_field prefix "${1:-$PWD}")
   [ -z "$p" ] && p=$(sed -n 's/^set -g prefix \([^ ]*\).*/\1/p' "$AGENTMUX_TMUX/frame.conf")
   printf '%s' "$p"
 }
 
 # Resolve the per-session prefix for the amux (agent) session: [amux] prefix,
-# dir-scoped. Empty output = leave the server's prefix (tmux's default, or the user overlay's) untouched.
+# scoped to <dir> (default $PWD). Empty output = no session prefix: the session
+# inherits the server's (tmux's default, or the user overlay's).
 #
 # Collision guard: the --frame wrapper runs amux in its right pane and intercepts
 # its OWN prefix before the inner amux ever sees it, so an [amux] prefix equal to
@@ -501,15 +502,28 @@ _amux_frame_prefix() {
 # we warn and emit nothing — falling back to the user's default prefix (which the
 # frame passes straight through) beats setting a key the frame would shadow.
 _amux_prefix() {
-  local p f
-  p=$(agentmux_amux_field prefix "$PWD")
+  local p f d="${1:-$PWD}"
+  p=$(agentmux_amux_field prefix "$d")
   [ -z "$p" ] && return 0
-  f=$(_amux_frame_prefix)
+  f=$(_amux_frame_prefix "$d")
   if [ "$p" = "$f" ]; then
     echo "amux: [amux] prefix '$p' collides with the [frame] prefix; ignoring (the frame would shadow it inside --frame)" >&2
     return 0
   fi
   printf '%s' "$p"
+}
+
+# The [amux] prefix session option for <session>, resolved against <dir>, left in
+# _AMUX_PREFIX_OPTS for a ';'-chained batch — the same shape, two callers and
+# reason as _amux_note_opts. SYMMETRIC: an empty resolution (unset, or refused by
+# the collision guard) UNSETS the session prefix, so removing `[amux] prefix`, or
+# one that now collides, takes effect on a running session instead of the old
+# prefix staying active until --kill.
+_amux_prefix_opts() {
+  local _pos=$1 _pop
+  _pop=$(_amux_prefix "$2")
+  if [ -n "$_pop" ]; then _AMUX_PREFIX_OPTS=(set-option -t "$_pos" prefix "$_pop")
+  else _AMUX_PREFIX_OPTS=(set-option -u -t "$_pos" prefix); fi
 }
 
 # Pinned bar-colour slot for a directory, via [amux.dirs."<dir>"].session_colour.
@@ -1725,7 +1739,8 @@ _amux_reload_config_opts() {
     _dir=$(tmux -L "$_rs" show-options -qv -t "$_sess" @amux_dir 2>/dev/null)
     [ -n "$_dir" ] || continue
     _amux_note_opts "$_sess" "$_dir"
-    tmux -L "$_rs" "${_AMUX_NOTE_OPTS[@]}" 2>/dev/null
+    _amux_prefix_opts "$_sess" "$_dir"
+    tmux -L "$_rs" "${_AMUX_NOTE_OPTS[@]}" ';' "${_AMUX_PREFIX_OPTS[@]}" 2>/dev/null
   done <<EOF
 $(tmux -L "$_rs" list-sessions -F '#{?@autoagent,#{session_name},}' 2>/dev/null | grep .)
 EOF
@@ -1813,13 +1828,14 @@ _amux_ensure_agent_session() {
   # separate call is an exec + socket round-trip. ORDERING IS LOAD-BEARING:
   # @autoagent and @l1reserved must be set BEFORE the caller attaches (update_colors.sh
   # only paints @autoagent sessions; the reservation must be published pre-attach).
-  local _prefix _pin_slot _reserved
-  _prefix=$(_amux_prefix)
+  local _pin_slot _reserved
   _pin_slot=$(_amux_bar_pin_slot "$PWD")
   _reserved=$(_amux_bar_reserved)
   local -a _opts=(set-option -t "$name" "@autoagent" "1"
                   ';' set-option -t "$name" "@amux_dir" "$PWD")
-  [ -n "$_prefix" ]   && _opts+=(';' set-option -t "$name" prefix "$_prefix")
+  # Shared with `--reload`, and symmetric — see _amux_prefix_opts.
+  _amux_prefix_opts "$name" "$PWD"
+  _opts+=(';' "${_AMUX_PREFIX_OPTS[@]}")
   [ -n "$_pin_slot" ] && _opts+=(';' set-option -t "$name" @l1idx "$_pin_slot")
   # Must be in THIS pre-attach batch: update_colors.sh reads @amux_note_row on the
   # client-attached hook, so a later write would be one attach too late.
@@ -3022,6 +3038,16 @@ TOML
   printf '[amux]\nprefix = "C-f"\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "amux_prefix collide default" "" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_prefix 2>/dev/null)"
+  # _amux_prefix_opts: the launch/--reload emitter is SYMMETRIC — a refused (or
+  # absent) prefix unsets the session's, so a running session drops a stale one.
+  _assert "prefix_opts unsets when the prefix resolves empty" "set-option -u -t proj prefix" \
+    "$( (AGENTMUX_CONFIG="$_fw"; _amux_json_cache=""; _amux_prefix_opts proj /tmp/x 2>/dev/null
+         printf '%s' "${_AMUX_PREFIX_OPTS[*]}") )"
+  printf '[amux]\nprefix = "C-a"\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
+  rm -rf "$_selftest_cache/agentmux" 2>/dev/null
+  _assert "prefix_opts sets a resolved prefix" "set-option -t proj prefix C-a" \
+    "$( (AGENTMUX_CONFIG="$_fw"; _amux_json_cache=""; _amux_prefix_opts proj /tmp/x
+         printf '%s' "${_AMUX_PREFIX_OPTS[*]}") )"
 
   rm -f "$_fw"
 
