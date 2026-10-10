@@ -1215,8 +1215,8 @@ EOF
 # collapses to ONE dead server PER CWD — its final stage keeps `best[cwd]`, the
 # first server a ts-desc stream names for that cwd, and drops every row of the
 # cwd's other servers (see its LAST CRASH ONLY comment). So for each cwd, exactly
-# one dead server is ever emitted, and every older dead server that cwd ever had is unreachable dead weight the fold
-# still parses on every ledger-path poll. A time-based cutoff cannot see that: on
+# one dead server is ever emitted, and every older dead server that cwd ever had
+# is unreachable dead weight the fold still parses on every ledger-path poll. A time-based cutoff cannot see that: on
 # a real dir it left 246 servers across 47 cwds, ~200 of which no query could
 # name. What survives here instead:
 #   - every LIVE server, in full (it is still accumulating rows, and `forkcmd`
