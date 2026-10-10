@@ -29,7 +29,8 @@
 #                            2 = cannot answer → fall back to the ledger fold);
 #                            the subcommand itself always exits 0
 #   prune                    trim the ledger to what a query can still reach (every
-#                            live server, plus the newest dead one per cwd)
+#                            live server, plus per cwd the newest dead one and the
+#                            newest one not yet offered)
 #   snapshot <socket> <pid>  re-record a live server's window set (window-unlinked hook)
 #   discard  <socket> <pid>  mark a server's windows deliberately closed (empty
 #                            sidecar) — the amux --kill path, so a torn-down shard
@@ -814,8 +815,8 @@ _sl_pending_fast() {  # <cwd>
     # socket, so read the path back from the companion file and run the real
     # (tmux-based) liveness test — never kill -0, which cannot tell a reused pid
     # from the original server after a reboot. `read` is a builtin, so this costs
-    # no fork; a missing or empty companion (what _sl_discard leaves behind) means
-    # the liveness test cannot run at all, which is 2, not an error and not a "no".
+    # no fork; a missing or empty companion means the liveness test cannot run at
+    # all, which is 2, not an error and not a "no".
     _pf_sock=""
     [ -f "$_pf_f.sock" ] && IFS= read -r _pf_sock < "$_pf_f.sock" 2>/dev/null
     [ -n "$_pf_sock" ] || return 2
@@ -861,7 +862,7 @@ _sl_pending_fast() {  # <cwd>
 }
 
 # sl_dropped <cwd> | --global | --new <cwd>
-# Emit restorable DROPPED tabs from the SINGLE most recent crash — an agent tab
+# Emit restorable DROPPED tabs from the most recent crash PER CWD — an agent tab
 # (agent != shell, resume_cmd non-empty) on a DEAD server (pid no longer answers on its
 # socket, or its records predate boot), that was OPEN AT DEATH (in the live-set sidecar;
 # a dead server with no sidecar counts all its windows). One TSV row per tab:
@@ -870,8 +871,8 @@ _sl_pending_fast() {  # <cwd>
 # restored tab order; see the ordering comment on the final stage. The resume program is swapped in
 # from [[agents]] `resume` (work→claude-work) so the command targets the right profile.
 # LAST-CRASH SCOPING: the ledger accumulates every dead server between prunes; a
-# reboot-heavy machine would otherwise dump a whole backlog at once. So we keep only the
-# rows of the most-recently-active dead server (the crash you're recovering from) — the
+# reboot-heavy machine would otherwise dump a whole backlog at once. So per cwd we keep only
+# the rows of its most-recently-active dead server (the crash you're recovering from) — the
 # reachability sl_prune's keep set is built from — and DEDUP by
 # resume session id (the same session resumed across several server lifetimes, or in two
 # windows of one server, surfaces once). `<cwd>` filters to that dir; `--global` = no
@@ -1211,10 +1212,10 @@ EOF
 # Trim the ledger to what a QUERY CAN STILL REACH.
 #
 # THE KEEP SET IS THE QUERY'S OWN REACHABILITY, NOT A CALENDAR. `sl_dropped`
-# collapses to ONE dead server per answer — its final stage takes `NR==1` off a
-# ts-desc stream and drops every row of every other server (see its LAST CRASH
-# ONLY comment). So for each cwd, exactly one dead server is ever emitted, and
-# every older dead server that cwd ever had is unreachable dead weight the fold
+# collapses to ONE dead server PER CWD — its final stage keeps `best[cwd]`, the
+# first server a ts-desc stream names for that cwd, and drops every row of the
+# cwd's other servers (see its LAST CRASH ONLY comment). So for each cwd, exactly
+# one dead server is ever emitted, and every older dead server that cwd ever had is unreachable dead weight the fold
 # still parses on every ledger-path poll. A time-based cutoff cannot see that: on
 # a real dir it left 246 servers across 47 cwds, ~200 of which no query could
 # name. What survives here instead:
