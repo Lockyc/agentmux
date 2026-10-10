@@ -109,6 +109,17 @@ if [ "${SUMMARISE_SELFTEST:-}" = "1" ]; then
   [ "$got" = "all done." ] || { echo "selftest9 FAIL (trailing period preserved) got=[$got]" >&2; fail=1; }
   got=$( ( maxwords=30; printf 'now: fixing TipTapEditor focus' | _clean_para ) )
   [ "$got" = "now: fixing tip tap editor focus" ] || { echo "selftest_camel3 FAIL got=[$got]" >&2; fail=1; }
+  # The digest never rides curl's argv (ps exposes it to every user): a curl
+  # shim records its argv and stdin and answers with a canned completion.
+  _st=$(mktemp -d) || exit 1
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/argv"\ncat > "%s/stdin"\necho "{\\"choices\\":[{\\"message\\":{\\"content\\":\\"secret label\\"}}]}"\n' \
+    "$_st" "$_st" > "$_st/curl"
+  chmod +x "$_st/curl"
+  got=$(printf 'SECRETDIGEST words' | PATH="$_st:$PATH" SUMMARISE_SELFTEST='' "$0" 4 label)
+  [ "$got" = "secret label" ] || { echo "selftest_argv1 FAIL (shimmed request) got=[$got]" >&2; fail=1; }
+  grep -q SECRETDIGEST "$_st/argv" && { echo "selftest_argv2 FAIL (digest on curl argv)" >&2; fail=1; }
+  grep -q SECRETDIGEST "$_st/stdin" || { echo "selftest_argv3 FAIL (digest not in the stdin body)" >&2; fail=1; }
+  rm -rf "$_st"
   [ "$fail" = 0 ] && echo "selftest OK"
   exit "$fail"
 fi
@@ -148,14 +159,20 @@ fi
 # but LM Studio does not honour it (still 199 reasoning tokens, still empty).
 # Raising max_tokens is NOT the fix either: it buys output at the cost of the
 # model burning seconds thinking about a tmux label.
-body=$(jq -n --arg m "$model" --arg s "$sys" --arg u "$prompt" '{
+#
+# Transcript text never rides an argv: the digest (and the subject in $sys) are
+# the user's prompts, replies and commands, and a command line is readable by
+# every user on the box through ps for as long as the request runs. So the
+# digest reaches jq on stdin, $sys through the environment ($ENV), and the body
+# reaches curl on stdin (--data-binary @-).
+body=$(printf '%s' "$prompt" | AMUX_SUM_SYS="$sys" jq -Rsc --arg m "$model" '{
   model:$m, temperature:0, max_tokens:200, stream:false,
   reasoning_effort:"none",
-  messages:[{role:"system",content:$s},{role:"user",content:$u}]
+  messages:[{role:"system",content:$ENV.AMUX_SUM_SYS},{role:"user",content:.}]
 }') || exit 0
 
-resp=$(curl -s --max-time "$timeout" \
-  -H 'Content-Type: application/json' --data "$body" "$url" 2>/dev/null) || exit 0
+resp=$(printf '%s' "$body" | curl -s --max-time "$timeout" \
+  -H 'Content-Type: application/json' --data-binary @- "$url" 2>/dev/null) || exit 0
 
 # Strip raw control bytes before jq — a malformed/non-conformant response
 # body with unescaped control chars would otherwise break the parse. General

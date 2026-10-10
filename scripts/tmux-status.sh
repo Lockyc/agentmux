@@ -297,7 +297,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       # wrote). Bash "ran:" is intentionally NOT evidence here, since read-only
       # investigation is the failure shape this gate catches.
       # See scripts/strip_unbacked_done.sh for the full rationale.
-      [ -n "$p" ] && [ -x "$gate" ] && p=$("$gate" "$digest" "$p")
+      [ -n "$p" ] && [ -x "$gate" ] && p=$(printf "%s" "$digest" | "$gate" "$p")
       if [ -n "$p" ]; then
         printf "%s" "$p" > "$lf"
         rm -f "$df" 2>/dev/null

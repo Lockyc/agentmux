@@ -1,5 +1,5 @@
 #!/bin/sh
-# strip_unbacked_done.sh <digest> <summary>
+# strip_unbacked_done.sh <summary>   (digest on stdin)
 # Tool-evidence gate for stand-mode summaries: if the digest contains zero
 # file-MUTATION markers (the literal phrases "edited <file>" or "wrote <file>"
 # that digest.sh emits, anchored at segment boundaries), then any
@@ -160,13 +160,21 @@ if [ "${STRIP_UNBACKED_DONE_SELFTEST:-}" = "1" ]; then
   got=$(_gate "discussing scope / todo-done: shipped backfill / todo-now: writing tests" "subj. done: shipped backfill; now: writing tests")
   [ "$got" = "subj. done: shipped backfill; now: writing tests" ] || { echo "g5 FAIL (todo-done evidence stripped) got=[$got]" >&2; fail=1; }
 
+  # The CLI takes the digest on STDIN (never argv — ps exposes argv to every user).
+  got=$(printf 'edited a.sh' | STRIP_UNBACKED_DONE_SELFTEST='' sh "$0" "subj. done: a; now: b")
+  [ "$got" = "subj. done: a; now: b" ] || { echo "cli1 FAIL (stdin digest not read) got=[$got]" >&2; fail=1; }
+  got=$(printf 'ran: ls' | STRIP_UNBACKED_DONE_SELFTEST='' sh "$0" "subj. done: a; now: b")
+  [ "$got" = "subj. now: b" ] || { echo "cli2 FAIL got=[$got]" >&2; fail=1; }
+
   [ "$fail" = 0 ] && echo "selftest OK"
   exit "$fail"
 fi
 
-_dig=${1:-}
-_sum=${2:-}
+# The digest arrives on stdin, never argv: it is transcript text, and a command
+# line is readable by every user on the box through ps.
+_sum=${1:-}
 [ -n "$_sum" ] || exit 0
+_dig=$(cat)
 if _has_mutation "$_dig"; then
   printf '%s' "$_sum"
 else
