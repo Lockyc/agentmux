@@ -47,5 +47,7 @@ if [ -n "${ZSH_VERSION:-}" ]; then
       esac
     fi
   }
-  compdef _amux_zsh_complete amux
+  # compdef exists only once compinit has run; a shell sourcing this earlier
+  # would print "command not found: compdef" on every start.
+  if command -v compdef >/dev/null 2>&1; then compdef _amux_zsh_complete amux; fi
 fi
