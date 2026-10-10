@@ -115,9 +115,8 @@ timeout = 45
 
 # Pin a project's status-bar colour by name so it never changes and is removed
 # from the auto-assign pool — no other project gets it, even when this one is
-# closed. Without a pin, a session's bar colour is a stable hash of its name, but
-# two projects can collide and swap colours depending on launch order; a pin makes
-# it deterministic. This is the SESSION bar colour, distinct from an agent's tab
+# closed. Without a pin, a session's bar colour is a stable hash of its name, so
+# two projects whose names collide always share a colour; a pin separates them. This is the SESSION bar colour, distinct from an agent's tab
 # `colour` above. Run `amux --colours` for the bar colour names. e.g.:
 #
 # [amux.dirs."~/Developer/github.com/you/myproject"]
