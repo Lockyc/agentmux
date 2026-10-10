@@ -192,16 +192,16 @@ The six hooks to wire:
 1. Read `~/.claude/settings.json` (treat as `{}` if the file does not exist).
 2. For each of the six event names, check whether any entry in the current array already contains `agentmux` in its `command`. Skip that event if already wired.
 3. Append our entry to each un-wired event array (create the array if the key is absent).
-4. Write the merged result back with a single `jq` pipeline:
+4. Write the merged result back with a single `jq` pipeline, via `cat >` rather than `mv` so a symlinked `settings.json` stays a symlink:
 
 ```bash
-jq '.hooks.SessionStart += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh start"}]}]
+tmp=$(mktemp) && jq '.hooks.SessionStart += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh start"}]}]
   | .hooks.UserPromptSubmit += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh working"}]}]
   | .hooks.PostToolUse += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh working"}]}]
   | .hooks.Notification += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh notify"}]}]
   | .hooks.PermissionRequest += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh permission --notify '\''Claude is waiting for permission'\''"}]}]
   | .hooks.Stop += [{"hooks":[{"type":"command","command":"~/.agentmux/scripts/claude/status.sh done --notify '\''Claude has finished working'\''"}]}]' \
-  ~/.claude/settings.json > /tmp/settings-merged.json && mv /tmp/settings-merged.json ~/.claude/settings.json
+  ~/.claude/settings.json > "$tmp" && cat "$tmp" > ~/.claude/settings.json; rm -f "$tmp"
 ```
 
 Omit events that are already wired. If `~/.claude/settings.json` does not exist, seed with `echo '{"hooks":{}}' | jq ...`.
