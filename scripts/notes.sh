@@ -462,7 +462,7 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
   # shellcheck disable=SC2016
   ck row-session "$(_nt_row 'session|$0')"   ""
   ck row-empty   "$(_nt_row '')"             ""
-  # Only rows 1-3 exist.
+  # Only rows 1-4 exist.
   ck row-oob     "$(_nt_row amuxnote9)"      ""
   ck row-junk    "$(_nt_row amuxnoteX)"      ""
 
