@@ -5,8 +5,8 @@
 # callers are cosmetic tmux/hook code and must never see an error or block.
 # mode: "label" (default) = a terse ticket-style noun phrase ([a-z0-9 ]
 #       only, for the session subject); "stand" = a short lowercase
-#       done/now/next line (output written to /tmp/agentmux-status-<pane>.txt
-#       by the caller; displayed by summary_rows.sh).
+#       done/now/next line (the caller, tmux-status.sh, caches it in its
+#       per-uid runtime dir and pushes it as the pane's @amux_rowN options).
 # Backend: any OpenAI-compatible local endpoint (LM Studio, Ollama, etc.), a
 # small NON-reasoning instruct model (no key, no cost). Settings resolved by
 # llm-config.sh (env vars > [llm] in amux.toml > defaults).

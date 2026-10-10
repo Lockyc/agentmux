@@ -8,7 +8,8 @@
 # network and no remote box.
 #
 # bash 3.2-clean (macOS /bin/bash): no `local -A` / `declare -A`. bin/amux
-# sources this at launch and carries a selftest guard for it.
+# lazy-loads this on first remote use (`_amux_need remote`, via remote_attach.sh)
+# and carries a selftest guard for it.
 
 RM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/agentmux-config.sh
