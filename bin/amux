@@ -1111,9 +1111,10 @@ _amux_nested_refuse() {
 
 # _amux_remote <arg>... — the whole `amux @host [...]` flow.
 #
-# Land order: parse → resolve host → preflight (no tty; every unrecoverable
-# error surfaces here) → pick if needed → supervise. Nothing may retry before
-# preflight has succeeded once; see _ra_supervise.
+# Land order: parse → resolve host → validate transport → pick if needed (its
+# roster call is then the first network call, teed like preflight's) →
+# preflight (no tty; every unrecoverable error surfaces here) → supervise.
+# Nothing may retry before preflight has succeeded once; see _ra_supervise.
 _amux_remote() {
   _amux_need remote
   _amux_nested_refuse "@host" || return 1

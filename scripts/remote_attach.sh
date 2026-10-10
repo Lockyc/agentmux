@@ -243,9 +243,16 @@ _ra_pick_render() {
 # offering a choice it could not honour. Its caller sets RM_PATH, which preflight
 # already handles as the explicit-directory form.
 _ra_pick() {
-  local hi="$1" host="$2" json n sel
-  json="$(_rm_roster_json "$hi" "$host")" || {
-    printf 'amux: could not list projects on %s\n' "$host" >&2; return 1; }
+  local hi="$1" host="$2" json n sel jf
+  # Via a file, not $(), so the roster's RM_ERRMSG (the transport's own words)
+  # reaches the message below.
+  jf="$(mktemp "${TMPDIR:-/tmp}/amux-rm-pick.XXXXXX" 2>/dev/null)" || return 1
+  if ! _rm_roster_json "$hi" "$host" >"$jf"; then
+    rm -f "$jf"
+    printf 'amux: could not list projects on %s%s\n' "$host" "${RM_ERRMSG:+: $RM_ERRMSG}" >&2
+    return 1
+  fi
+  json="$(cat "$jf")"; rm -f "$jf"
   n="$(printf '%s' "$json" | jq 'length')"
   printf '\n  %s — %s project%s\n\n' "$host" "$n" \
     "$([ "$n" = 1 ] || printf s)" >&2

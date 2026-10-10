@@ -378,6 +378,45 @@ _rm_run() {
   "${RM_ARGV[@]}"
 }
 
+# _rm_run_teed <kind> <target> <cmd> — _rm_run with stdout captured into RM_OUT
+# and stderr TEED, never discarded; RM_DIAG gets the transport's last stderr line.
+# Returns the transport's status. Must run in the caller's shell (not inside a
+# $()) so RM_OUT/RM_DIAG reach it.
+#
+# Every non-interactive call whose failure the user must act on goes through
+# here. Discarding stderr collapses a refused key, an unknown host and a
+# host-key prompt into one indistinguishable "transport exited 255" — the caller
+# then has nothing to act on. Both halves of the tee matter: it stays on the
+# terminal, because ssh may be prompting for a host key or a passphrase and a
+# swallowed prompt reads as a hang, AND it is captured so the real message
+# reaches the caller's error. Same process-substitution shape as _ra_run_once,
+# for the same reason and with the same caveat noted there; stdout goes to a
+# file so the capture is not nested inside a $().
+_rm_run_teed() {
+  local outf errf st
+  RM_OUT=""; RM_DIAG=""
+  outf="$(mktemp "${TMPDIR:-/tmp}/amux-rm-out.XXXXXX" 2>/dev/null)" || outf=""
+  errf="$(mktemp "${TMPDIR:-/tmp}/amux-rm-err.XXXXXX" 2>/dev/null)" || errf=""
+  if [ -n "$outf" ] && [ -n "$errf" ]; then
+    _rm_run "$@" >"$outf" 2> >(tee -a "$errf" >&2)
+    st=$?
+    RM_OUT="$(cat "$outf" 2>/dev/null)"; rm -f "$outf"
+    RM_DIAG="$(_rm_last_err "$errf")"
+  else
+    [ -n "$outf" ] && rm -f "$outf"
+    [ -n "$errf" ] && rm -f "$errf"
+    RM_OUT="$(_rm_run "$@")"
+    st=$?
+  fi
+  return "$st"
+}
+
+# _rm_unreachable_msg <target> <status> — the one wording of a transport failure,
+# with the transport's own last stderr line (RM_DIAG) appended when there is one.
+_rm_unreachable_msg() {
+  printf 'could not reach %s (transport exited %s)%s' "$1" "$2" "${RM_DIAG:+: $RM_DIAG}"
+}
+
 # _rm_check_transport <kind> [target] — 0 if <kind> is a transport this file
 # can drive; otherwise sets RM_ERRCODE=badtransport + RM_ERRMSG and returns 1.
 # The check is _rm_transport_argv's OWN rc 2, not a second case statement
@@ -411,34 +450,11 @@ _rm_preflight() {
   roots="$(agentmux_host_roots "$hi")"
   prog="$(_rm_prog_for_host "$hi")"
   script="$(_rm_preflight_script "$project" "$path" "$roots" "$prog")"
-  # The transport's stderr is TEED, never discarded. Preflight is by design the
-  # place every unrecoverable error surfaces, so throwing it away collapsed a
-  # refused key, an unknown host and a host-key prompt into one indistinguishable
-  # "transport exited 255" — the caller then has nothing to act on. Both halves
-  # of the tee matter: it stays on the terminal, because ssh may be prompting for
-  # a host key or a passphrase and a swallowed prompt reads as a hang, AND it is
-  # captured so the real message reaches RM_ERRMSG. Same process-substitution
-  # shape as _ra_run_once, for the same reason and with the same caveat noted
-  # there; stdout goes to a file so the capture is not nested inside a $().
-  local outf errf diag=""
-  outf="$(mktemp "${TMPDIR:-/tmp}/amux-preflight-out.XXXXXX" 2>/dev/null)" || outf=""
-  errf="$(mktemp "${TMPDIR:-/tmp}/amux-preflight-err.XXXXXX" 2>/dev/null)" || errf=""
-  if [ -n "$outf" ] && [ -n "$errf" ]; then
-    _rm_run "$kind" "$target" "sh -c $(_rm_shquote "$script")" \
-      >"$outf" 2> >(tee -a "$errf" >&2)
-    st=$?
-    out="$(cat "$outf" 2>/dev/null)"; rm -f "$outf"
-    diag="$(_rm_last_err "$errf")"
-  else
-    [ -n "$outf" ] && rm -f "$outf"
-    [ -n "$errf" ] && rm -f "$errf"
-    out="$(_rm_run "$kind" "$target" "sh -c $(_rm_shquote "$script")")"
-    st=$?
-  fi
+  _rm_run_teed "$kind" "$target" "sh -c $(_rm_shquote "$script")"
+  st=$?; out="$RM_OUT"
   if [ "$st" -ne 0 ] || [ -z "$out" ]; then
     RM_ERRCODE="transport"
-    RM_ERRMSG="could not reach $target (transport exited $st)"
-    [ -n "$diag" ] && RM_ERRMSG="$RM_ERRMSG: $diag"
+    RM_ERRMSG="$(_rm_unreachable_msg "$target" "$st")"
     return 3
   fi
   out="$(printf '%s\n' "$out" | grep -E '^RM_(OK|ERR)' | tail -n1)"
@@ -549,7 +565,7 @@ _rm_roster_cache_file() {
 # project resolution both go live over the warm master, so a repo cloned a
 # minute ago is always reachable even when completion has not noticed it yet.
 _rm_roster() {
-  local hi="$1" host="$2" refresh="${3:-}" cache out
+  local hi="$1" host="$2" refresh="${3:-}" cache out st
   cache="$(_rm_roster_cache_file "$host")"
   if [ "$refresh" != "--refresh" ] && [ -s "$cache" ]; then
     cat "$cache"; return 0
@@ -558,8 +574,13 @@ _rm_roster() {
   target="$(agentmux_host_field "$hi" ssh)"
   kind="$(_rm_transport_for_host "$hi")"
   roots="$(agentmux_host_roots "$hi")"
-  out="$(_rm_run "$kind" "$target" \
-        "sh -c $(_rm_shquote "$(_rm_roster_script "$roots")")" 2>/dev/null)" || return 1
+  # Teed, not discarded: this is the first network call of a bare `amux @host`,
+  # so a refused key or an unknown host surfaces here or nowhere.
+  RM_ERRMSG=""
+  _rm_run_teed "$kind" "$target" "sh -c $(_rm_shquote "$(_rm_roster_script "$roots")")"
+  st=$?
+  [ "$st" -eq 0 ] || { RM_ERRMSG="$(_rm_unreachable_msg "$target" "$st")"; return 1; }
+  out="$RM_OUT"
   # Keep only absolute paths. The remote LOGIN shell parses our command, and bash
   # sources ~/.bashrc for a non-interactive ssh command — so anything the user's
   # rc file echoes lands on this same stdout, ahead of the find output, and a
@@ -590,11 +611,15 @@ _rm_roster() {
 # collide between same-basename projects, so a name join would light the dot on
 # the wrong repo.
 _rm_roster_json() {
-  local hi="$1" host="$2" target kind prog paths sess
+  local hi="$1" host="$2" target kind prog paths sess pf
   target="$(agentmux_host_field "$hi" ssh)"
   kind="$(_rm_transport_for_host "$hi")"
   prog="$(_rm_prog_for_host "$hi")"
-  paths="$(_rm_roster "$hi" "$host" --refresh)" || return 1
+  # Via a file, not $(): the roster's RM_ERRMSG must reach this shell (and so
+  # _ra_pick's message) when the host cannot be reached.
+  pf="$(mktemp "${TMPDIR:-/tmp}/amux-rm-roster.XXXXXX" 2>/dev/null)" || return 1
+  _rm_roster "$hi" "$host" --refresh >"$pf" || { rm -f "$pf"; return 1; }
+  paths="$(cat "$pf")"; rm -f "$pf"
   sess="$(_rm_run "$kind" "$target" \
          "sh -c $(_rm_shquote "$prog --sessions-json")" 2>/dev/null)"
   # Drop anything the remote login shell's rc printed ahead of the JSON — same
@@ -1001,7 +1026,7 @@ STUB
     "$(AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/denystub" \
        _rm_preflight 0 warden "" 2>&1 >/dev/null | grep -c 'Permission denied')"
   _assert "the capture files leave no residue" "0" \
-    "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'amux-preflight-*' 2>/dev/null | wc -l | tr -d ' ')"
+    "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'amux-rm-*' 2>/dev/null | wc -l | tr -d ' ')"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG
 
@@ -1139,6 +1164,11 @@ TOML
   _assert "empty roster is empty" "" "$_rm_roster_empty"
   AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_roster 4 emptyhost --refresh >/dev/null 2>&1
   _assert "an unreachable host still fails" "1" "$?"
+  # The roster is the first network call of a bare `amux @host`, so its failure
+  # must carry the transport's own words, as preflight's does.
+  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/denystub" _rm_roster 4 emptyhost --refresh >/dev/null 2>&1
+  _assert "an unreachable roster names the transport's error" "1" \
+    "$(printf '%s' "$RM_ERRMSG" | grep -c 'Permission denied (publickey)')"
 
   # A symlinked root is followed, and a worktree/submodule (.git FILE) is a
   # project in the roster exactly as preflight resolves it.
