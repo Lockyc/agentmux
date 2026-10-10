@@ -1513,6 +1513,11 @@ _amux_probe() {
   # CWD-derived (no explicit name → warden's call): honour the dir guard so a
   # basename collision with a different project can't light this dot.
   if [ "$by_dir" -eq 1 ]; then
+    # Warm the $PWD hash HERE, as a direct statement: the session guards below
+    # each resolve their socket in a $(), and a memo written inside one dies
+    # with it — so unwarmed, every guard re-forks cksum on warden's hottest poll.
+    # Not _amux_warm_launch_caches: that also reads config, which --probe must not.
+    _amux_pwd_hash >/dev/null
     _amux_agent_session_is_mine "$base" && return 0
     _amux_frame_session_is_mine "${base}-frame" && return 0
     # No live session — but a crashed one here may still be restorable. Exit 3 means
@@ -2389,6 +2394,15 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   esac
   _assert "pwd_hash recomputes when \$PWD != cached key" "recomputed" "$_got"
   unset _amux_pwd_hash_key _amux_pwd_hash_val
+  # The by-dir --probe hashes $PWD ONCE: its guards resolve sockets in $()s, so
+  # an unwarmed memo re-forks cksum per guard. A logging cksum shim counts forks.
+  _ph_t=$(mktemp -d); mkdir -p "$_ph_t/bin" "$_ph_t/proj"
+  printf '#!/bin/sh\necho x >> "%s/log"\nexec %s "$@"\n' "$_ph_t" "$(command -v cksum)" > "$_ph_t/bin/cksum"
+  chmod +x "$_ph_t/bin/cksum"
+  ( cd "$_ph_t/proj" && PATH="$_ph_t/bin:$PATH" _amux_probe ) >/dev/null 2>&1
+  _assert "by-dir --probe hashes \$PWD once" "1" \
+    "$(wc -l < "$_ph_t/log" 2>/dev/null | tr -d ' ')"
+  rm -rf "$_ph_t"
   AGENTMUX_FRAME_SOCKET="verbatim-xyz"
   _assert "frame_sock honours override verbatim" "verbatim-xyz" "$(_amux_frame_sock)"
   _assert "frame_socks honours override verbatim" "verbatim-xyz" "$(_amux_frame_socks)"
