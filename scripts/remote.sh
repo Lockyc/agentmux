@@ -61,14 +61,19 @@ _rm_parse_target() {
 # Quoting and the remote command
 # ---------------------------------------------------------------------------
 
-# _rm_shquote <string> — wrap in single quotes, escaping embedded ones as '\''.
+# _rm_shquote <string> — wrap in single quotes; an embedded ' becomes '"'"' and
+# a backslash becomes '"\\"', so NO backslash ever sits inside single quotes.
 #
-# Deliberately POSIX single-quoting rather than bash's `printf %q`: the command
-# is first parsed by the REMOTE user's LOGIN shell, which may be fish. bash, zsh
-# and fish all treat '…' literally and all accept the '\'' idiom, whereas %q
-# emits bash-specific forms ($'…') that fish mis-parses.
+# Deliberately POSIX quoting rather than bash's `printf %q`: the command is first
+# parsed by the REMOTE user's LOGIN shell, which may be fish, and %q emits
+# bash-specific forms ($'…') that fish mis-parses. The backslash rule is what
+# makes the output fish-safe when quoted TWICE (a quoted value inside a script
+# that is itself quoted for `sh -c`, as every remote call does): fish reads \'
+# and \\ as escapes even inside '…', so the familiar '\'' idiom, once quoted
+# again, leaves a \' inside single quotes that fish never closes. Double quotes
+# around a lone ' or \ mean the same thing in sh, bash, zsh and fish.
 _rm_shquote() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  printf "'%s'" "$(printf '%s' "$1" | sed -e "s/'/'\"'\"'/g" -e 's/\\/'\''"\\\\"'\''/g')"
 }
 
 # _rm_remote_cmd <dir> <prog> [<arg>...]
@@ -725,7 +730,8 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   # ---- quoting ----
   _assert "shquote plain" "'abc'" "$(_rm_shquote abc)"
   _assert "shquote space" "'a b'" "$(_rm_shquote 'a b')"
-  _assert "shquote single quote" "'it'\\''s'" "$(_rm_shquote "it's")"
+  _assert "shquote single quote" "'it'\"'\"'s'" "$(_rm_shquote "it's")"
+  _assert "shquote backslash" "'a'\"\\\\\"'b'" "$(_rm_shquote 'a\b')"
 
   # The escaping must survive a round trip through a REAL, SEPARATE shell
   # process — `_rm_shquote` exists specifically because the remote login shell
@@ -733,21 +739,28 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   # THIS bash process (the previous version of this test) proves nothing: eval
   # is itself bash and would happily accept bash-only escaping too. Adversarial
   # input covers every character `_rm_shquote`'s single-quoting has to defeat:
-  # single quotes, double quotes, backslashes, `$`, and backticks.
-  _rm_adv='it'"'"'s "tricky" \slash $var `cmd`'
+  # single quotes, double quotes, backslashes (doubled and trailing), `$`, and
+  # backticks. TWO levels is the shape every remote call has — a quoted value
+  # inside a script quoted again for `sh -c` — and the one fish used to break.
+  _rm_adv='it'"'"'s "tricky" \slash \\dbl $var `cmd` tail\'
   _rm_adv_q="$(_rm_shquote "$_rm_adv")"
+  _rm_adv_qq="sh -c $(_rm_shquote "printf '%s' $_rm_adv_q")"
   _assert "shquote round-trips through sh" "$_rm_adv" \
     "$(sh -c "printf '%s' $_rm_adv_q")"
+  _assert "shquote round-trips two levels through sh" "$_rm_adv" \
+    "$(sh -c "$_rm_adv_qq")"
   if command -v fish >/dev/null 2>&1; then
     _assert "shquote round-trips through fish" "$_rm_adv" \
       "$(fish -c "printf '%s' $_rm_adv_q")"
+    _assert "shquote round-trips two levels through fish" "$_rm_adv" \
+      "$(fish -c "$_rm_adv_qq")"
   else
     echo "SKIP: shquote round-trips through fish — fish not installed"
   fi
 
   # ---- remote command ----
   _assert "remote cmd cds and execs" \
-    "sh -c 'cd '\\''/srv/p'\\'' && exec \"\$HOME\"/.agentmux/bin/amux'" \
+    "sh -c 'cd '\"'\"'/srv/p'\"'\"' && exec \"\$HOME\"/.agentmux/bin/amux'" \
     "$(_rm_remote_cmd "/srv/p" '"$HOME"/.agentmux/bin/amux')"
   # $HOME must NOT be expanded locally — the remote home is the one that counts.
   _assert "remote cmd leaves \$HOME for the remote" "1" \

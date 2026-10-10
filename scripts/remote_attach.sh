@@ -448,7 +448,7 @@ STUB
        | grep -Fc "amux '@buildbox:/srv/my projects/warden'")"
   _assert "give up quotes a target with a quote and a \$" "1" \
     "$(_ra_give_up buildbox "/srv/it's \$x" 2>&1 \
-       | grep -Fc "amux '@buildbox:/srv/it'\\''s \$x'")"
+       | grep -Fc "amux '@buildbox:/srv/it'\"'\"'s \$x'")"
 
   unset AGENTMUX_REMOTE_TRANSPORT_CMD STUB_COUNT
 
