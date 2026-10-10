@@ -52,8 +52,9 @@ agent hook  →  scripts/claude/status.sh  →  scripts/tmux-status.sh  ─┬�
   (stand line), `agentmux-diag-*` (pipeline diagnostic), `<agent>-subject-*`
   (subject), `<agent>-substart-*` (digest start offset), `agentmux-sum-*.lock.d`
   (overlap lock), `agentmux-sum-*.ts` (refresh throttle stamp),
-  `agentmux-sum-*.drift` (sustained-drift counter). The `start` hook clears all
-  of them.
+  `agentmux-sum-*.drift` (sustained-drift counter), `agentmux-sum-*.gen`
+  (conversation generation). The `start` hook clears them and opens a new
+  generation, which a still-running refresh checks before every write.
 - **Restore goal line.** The `amux` restore picker shows a one-line goal under
   each recovered session. It does **not** read the live AI summary — those
   per-pane `/tmp` files are gone by restore time (dead server; the `start` hook
