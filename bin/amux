@@ -1977,8 +1977,8 @@ amux() {
         shift
         # Cache only — never a live call. Completion runs on every <TAB>, and a
         # network round trip there hangs the shell the moment a host is slow or
-        # unreachable. The picker is what refreshes it (_rm_roster_json is the
-        # one caller passing --refresh); a launch resolves live through preflight
+        # unreachable. The picker is what refreshes it (every _rm_roster call is
+        # live and rewrites the cache); a launch resolves live through preflight
         # and never touches the roster, so a repo cloned a minute ago is
         # launchable before completion has noticed it.
         _amux_need remote

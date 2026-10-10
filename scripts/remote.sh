@@ -551,7 +551,8 @@ _rm_roster_cache_file() {
   printf '%s/%s.roster' "$d" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_')"
 }
 
-# _rm_roster <host_index> <host> [--refresh] — one repo path per line.
+# _rm_roster <host_index> <host> — one repo path per line, always live; rewrites
+# the completion cache as a side effect.
 # Returns 1 only when the host could not be REACHED.
 #
 # An empty roster is a real, successful answer — a host whose roots exist but
@@ -565,11 +566,8 @@ _rm_roster_cache_file() {
 # project resolution both go live over the warm master, so a repo cloned a
 # minute ago is always reachable even when completion has not noticed it yet.
 _rm_roster() {
-  local hi="$1" host="$2" refresh="${3:-}" cache out st
+  local hi="$1" host="$2" cache out st
   cache="$(_rm_roster_cache_file "$host")"
-  if [ "$refresh" != "--refresh" ] && [ -s "$cache" ]; then
-    cat "$cache"; return 0
-  fi
   local target kind roots
   target="$(agentmux_host_field "$hi" ssh)"
   kind="$(_rm_transport_for_host "$hi")"
@@ -618,7 +616,7 @@ _rm_roster_json() {
   # Via a file, not $(): the roster's RM_ERRMSG must reach this shell (and so
   # _ra_pick's message) when the host cannot be reached.
   pf="$(mktemp "${TMPDIR:-/tmp}/amux-rm-roster.XXXXXX" 2>/dev/null)" || return 1
-  _rm_roster "$hi" "$host" --refresh >"$pf" || { rm -f "$pf"; return 1; }
+  _rm_roster "$hi" "$host" >"$pf" || { rm -f "$pf"; return 1; }
   paths="$(cat "$pf")"; rm -f "$pf"
   sess="$(_rm_run "$kind" "$target" \
          "sh -c $(_rm_shquote "$prog --sessions-json")" 2>/dev/null)"
@@ -1107,13 +1105,13 @@ TRACKING
   export AGENTMUX_CONFIG="$_rm_t/hosts.toml"; _amux_json_cache=""
   export AGENTMUX_STATE_DIR="$_rm_t/state"
   _assert "roster finds every repo" "edgerepo lector warden" \
-    "$(_rm_roster 0 fake --refresh | xargs -n1 basename | sort | tr '\n' ' ' | sed 's/ $//')"
+    "$(_rm_roster 0 fake | xargs -n1 basename | sort | tr '\n' ' ' | sed 's/ $//')"
   # Half two of the depth agreement, and the half that was broken: the roster
   # must list the very repo preflight resolved above. A repo preflight can launch
   # and the roster cannot see is invisible in the picker AND in completion —
   # discoverable only by already knowing its name.
   _assert "roster reaches the same depth preflight does" "1" \
-    "$(_rm_roster 0 fake --refresh | grep -Fc "$_rm_deep")"
+    "$(_rm_roster 0 fake | grep -Fc "$_rm_deep")"
   _assert "roster wrote a cache" "1" \
     "$([ -s "$(_rm_roster_cache_file fake)" ] && echo 1 || echo 0)"
 
@@ -1131,19 +1129,19 @@ exec sh -c "$last"
 CHATTY
   chmod +x "$_rm_t/chatty"
   _assert "a chatty remote rc does not become a roster row" "0" \
-    "$(AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/chatty" _rm_roster 0 fake --refresh \
+    "$(AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/chatty" _rm_roster 0 fake \
        | grep -vc '^/')"
   # Counts the PATH lines, not the total: a bare line count is satisfiable by the
   # wrong mix (one dropped repo plus one noise line), which is exactly what it
   # scored against the unfiltered version.
   _assert "a chatty remote rc still yields the real repos" "3" \
-    "$(AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/chatty" _rm_roster 0 fake --refresh \
+    "$(AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/chatty" _rm_roster 0 fake \
        | grep -c '^/')"
-  # The cache serves completion only. A stale entry must still be served
-  # (instant completion beats correct completion), but --refresh must bypass it.
+  # The cache serves completion only: the roster never reads it, and rewrites it.
   printf '/only/from/cache\n' > "$(_rm_roster_cache_file fake)"
-  _assert "roster serves the cache" "/only/from/cache" "$(_rm_roster 0 fake)"
-  _assert "--refresh bypasses the cache" "3" "$(_rm_roster 0 fake --refresh | wc -l | tr -d ' ')"
+  _assert "roster goes live past a stale cache" "3" "$(_rm_roster 0 fake | wc -l | tr -d ' ')"
+  _assert "roster rewrites the completion cache" "3" \
+    "$(wc -l < "$(_rm_roster_cache_file fake)" | tr -d ' ')"
 
   # An EMPTY roster is a successful answer, not a failure. Collapsing it into
   # rc 1 made "this host has no repos yet" indistinguishable from "this host is
@@ -1159,14 +1157,14 @@ ssh   = "e"
 roots = ["$_rm_t/roots/empty"]
 TOML
   _amux_json_cache=""
-  _rm_roster_empty="$(_rm_roster 4 emptyhost --refresh)"; _rm_roster_empty_rc=$?
+  _rm_roster_empty="$(_rm_roster 4 emptyhost)"; _rm_roster_empty_rc=$?
   _assert "empty roster succeeds" "0" "$_rm_roster_empty_rc"
   _assert "empty roster is empty" "" "$_rm_roster_empty"
-  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_roster 4 emptyhost --refresh >/dev/null 2>&1
+  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/deadstub" _rm_roster 4 emptyhost >/dev/null 2>&1
   _assert "an unreachable host still fails" "1" "$?"
   # The roster is the first network call of a bare `amux @host`, so its failure
   # must carry the transport's own words, as preflight's does.
-  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/denystub" _rm_roster 4 emptyhost --refresh >/dev/null 2>&1
+  AGENTMUX_REMOTE_TRANSPORT_CMD="$_rm_t/denystub" _rm_roster 4 emptyhost >/dev/null 2>&1
   _assert "an unreachable roster names the transport's error" "1" \
     "$(printf '%s' "$RM_ERRMSG" | grep -c 'Permission denied (publickey)')"
 
@@ -1185,7 +1183,7 @@ ssh   = "l"
 roots = ["$_rm_t/linkroot"]
 TOML
   _rm_cfg_saved="$AGENTMUX_CONFIG"; export AGENTMUX_CONFIG="$_rm_t/linkhosts.toml"; _amux_json_cache=""
-  _rm_roster_link="$(_rm_roster 0 linkhost --refresh | sort | tr '\n' ' ')"
+  _rm_roster_link="$(_rm_roster 0 linkhost | sort | tr '\n' ' ')"
   _assert "roster follows a symlinked root and lists a .git-file repo" \
     "$_rm_tp/roots/three/solid $_rm_tp/roots/three/wt " "$_rm_roster_link"
   AGENTMUX_REMOTE_TEST_PROG="$_rm_t/amux" _rm_preflight 0 wt "" ; _assert "preflight resolves the same .git-file repo" "$_rm_tp/roots/three/wt" "$RM_DIR"
