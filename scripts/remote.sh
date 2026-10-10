@@ -378,6 +378,21 @@ _rm_run() {
   "${RM_ARGV[@]}"
 }
 
+# _rm_check_transport <kind> [target] — 0 if <kind> is a transport this file
+# can drive; otherwise sets RM_ERRCODE=badtransport + RM_ERRMSG and returns 1.
+# The check is _rm_transport_argv's OWN rc 2, not a second case statement
+# listing the kinds: a copy would have to be kept in sync by hand, and a newly
+# added transport would then be rejected here while working everywhere else.
+# RM_ARGV is rebuilt by every real caller, so computing it for the answer costs
+# nothing. bin/amux calls this before its "installed locally" check, so a typo
+# is reported as a typo rather than as a program to install.
+_rm_check_transport() {
+  _rm_transport_argv "$1" "${2:-x}" ':' --batch && return 0
+  RM_ERRCODE="badtransport"
+  RM_ERRMSG="unknown transport \"$1\" (must be one of: $(printf '%s' "$_RM_TRANSPORT_KINDS" | sed 's/ /, /g'))"
+  return 1
+}
+
 # _rm_preflight <host_index> <project> <path>
 # Sets RM_DIR, RM_VERSION, RM_ERRCODE, RM_ERRMSG.
 # Returns 0 ok, 1 resolved error (RM_ERRCODE set), 3 transport failure.
@@ -392,17 +407,7 @@ _rm_preflight() {
   # (RM_ERRCODE=badtransport) rather than fall through to _rm_run's rc 3 —
   # "transport failure", the ONE code a caller may ever retry. Retrying a typo'd
   # transport can never succeed.
-  #
-  # The check is _rm_transport_argv's OWN rc 2, not a second case statement
-  # listing the kinds. A copy would have to be kept in sync by hand, which is
-  # what it said of itself, and a newly added transport would then be rejected
-  # here while working everywhere else. RM_ARGV is rebuilt by _rm_run below, so
-  # calling it for the answer costs nothing.
-  if ! _rm_transport_argv "$kind" "$target" ':' --batch; then
-    RM_ERRCODE="badtransport"
-    RM_ERRMSG="unknown transport \"$kind\" (must be one of: $(printf '%s' "$_RM_TRANSPORT_KINDS" | sed 's/ /, /g'))"
-    return 1
-  fi
+  _rm_check_transport "$kind" "$target" || return 1
   roots="$(agentmux_host_roots "$hi")"
   prog="$(_rm_prog_for_host "$hi")"
   script="$(_rm_preflight_script "$project" "$path" "$roots" "$prog")"
