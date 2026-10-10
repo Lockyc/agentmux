@@ -26,11 +26,13 @@
 # <runtime>/agentmux-diag-<pane_key>.txt     pipeline diagnostic shown when no summary yet
 # <runtime>/<agent_name>-subject-<pane_key>.txt  stable subject label (derived once, re-anchored on shift)
 # <runtime>/<agent_name>-substart-<pane_key>.txt subject-start line offset (scope B; written on re-anchor)
-# <runtime>/agentmux-sum-<pane_key>.lock.d   summariser overlap lock
+# <runtime>/agentmux-sum-<pane_key>.lock.d   summariser overlap lock (holds the job's pid)
+# <runtime>/agentmux-sum-<pane_key>.gen      conversation generation (rewritten by start)
 # <runtime>/agentmux-sum-<pane_key>.ts       last-refresh stamp (throttles prompt-less PostToolUse refreshes)
 # <runtime>/agentmux-sum-<pane_key>.drift    consecutive-drift counter (subject re-derives only after sustained drift)
-# start state removes all of the above. Needs jq, AGENTMUX_CTX_BIN, AGENTMUX_DIGEST_BIN,
-# summarise.sh, and a reachable LLM endpoint; without it diag shows "llm: unreachable".
+# start state removes all of the above except the .gen (which it rewrites) and a
+# live job's lock. Needs jq, AGENTMUX_CTX_BIN, AGENTMUX_DIGEST_BIN, summarise.sh,
+# and a reachable LLM endpoint; without it diag shows "llm: unreachable".
 
 [ -z "$TMUX" ] && exit 0
 
@@ -95,6 +97,7 @@ substartfile="$runtime_dir/${agent_name}-substart-${pane_key}.txt"
 sumtsfile="$runtime_dir/agentmux-sum-${pane_key}.ts"
 driftfile="$runtime_dir/agentmux-sum-${pane_key}.drift"
 sumlockdir="$runtime_dir/agentmux-sum-${pane_key}.lock.d"
+genfile="$runtime_dir/agentmux-sum-${pane_key}.gen"
 TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
 label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
 # Target our own pane explicitly: an un-targeted display-message resolves against
@@ -119,7 +122,13 @@ esac
 
 if [ "$emoji" = "🤖" ]; then
   rm -f "$longfile" "$diagfile" "$subjectfile" "$substartfile" "$sumtsfile" "$driftfile" 2>/dev/null
-  rmdir "$sumlockdir" 2>/dev/null
+  # A refresh job still running (7-43s of LM calls) belongs to the conversation
+  # /clear just ended: a new generation makes it discard its results instead of
+  # rewriting the files above and re-pushing the old rows. Its lock stays — taking
+  # it would let a second job run concurrently; only a dead holder's is reaped.
+  _lp=$(cat "$sumlockdir/pid" 2>/dev/null)
+  if [ -z "$_lp" ] || ! kill -0 "$_lp" 2>/dev/null; then rm -rf "$sumlockdir" 2>/dev/null; fi
+  printf '%s' "$(date +%s 2>/dev/null)-$$" > "$genfile" 2>/dev/null
   # Event-driven display: clear the pushed summary-row pane options too, so a
   # fresh session starts blank instead of showing the previous run's rows.
   for _r in 1 2 3; do tmux set-option -pu -t "$TMUX_PANE" "@amux_row$_r" 2>/dev/null; done
@@ -189,7 +198,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
   if [ -n "$pfile" ]; then
     printf '%s' "$prompt" > "$pfile"
     nohup sh -c '
-      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}; dcf=${12}; rtd=${13}; sr=${14}
+      sum=$1; ctx=$2; tp=$3; pf=$4; lf=$5; pane=$6; sf=$7; dig=$8; ssf=$9; llm_url=${10}; gate=${11}; dcf=${12}; rtd=${13}; sr=${14}; gf=${15}; gen=${16}
       # Push the three rendered rows into pane options the status bar reads
       # statically (@amux_row1/2/3), then refresh — replaces the old #() poll.
       # Uses inherited $TMUX / $TMUX_PANE (exported by tmux, preserved by nohup),
@@ -209,6 +218,13 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       [ -n "$blob" ] || exit 0
       lock="$rtd/agentmux-sum-${pane}.lock.d"
       mkdir "$lock" 2>/dev/null || exit 0
+      printf "%s" "$$" > "$lock/pid"
+      # Release only OUR lock: a start that found it stale may have handed it on.
+      _unlock() { [ "$(cat "$lock/pid" 2>/dev/null)" = "$$" ] && rm -rf "$lock"; }
+      # Abort before any write or push once start has opened a new generation
+      # (the conversation this job summarises is gone). Called after every LM
+      # call, since those are where the seconds go.
+      _ck() { [ "$(cat "$gf" 2>/dev/null)" = "$gen" ] || { _unlock; exit 0; }; }
 
       # GOAL context for the subject: early intent (read from the session START,
       # so it captures the stated goal even on long sessions) + the agent task
@@ -237,6 +253,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
         fi
         if [ "$segs" -ge 6 ]; then
           subj=$(printf "%s" "$goal" | "$sum" 6 label)
+          _ck
           [ -n "$subj" ] && printf "%s" "$subj" > "$sf"
         fi
       else
@@ -250,6 +267,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
         # AGENTMUX_SUBJECT, never rendered as a tmux label, so punctuation is
         # harmless here.)
         cand=$(printf "%s" "$blob" | "$sum" 6 label)
+        _ck
         if [ -n "$cand" ]; then
           sl=" $(printf "%s" "$subj" | tr "A-Z" "a-z" | tr -cs "a-z0-9" " ") "
           ov=
@@ -269,6 +287,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
               # the same goal re-derives to the same subject, so keep the
               # trajectory window intact and just clear the counter.
               new=$(printf "%s" "$goal" | "$sum" 6 label)
+              _ck
               if [ -n "$new" ]; then
                 if [ "$new" != "$subj" ]; then
                   subj="$new"
@@ -298,6 +317,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
       # investigation is the failure shape this gate catches.
       # See scripts/strip_unbacked_done.sh for the full rationale.
       [ -n "$p" ] && [ -x "$gate" ] && p=$(printf "%s" "$digest" | "$gate" "$p")
+      _ck
       if [ -n "$p" ]; then
         printf "%s" "$p" > "$lf"
         rm -f "$df" 2>/dev/null
@@ -310,6 +330,7 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
           else
             _dt="llm: unreachable"
           fi
+          _ck
           printf "%s" "$_dt" > "$df"
         fi
         # A failed refresh leaves the last-good summary in "$lf" untouched, so the
@@ -317,8 +338,9 @@ if [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ "$sum_ok" = 1 ] && [ -x "$S
         # summary, never clobbering good rows with "llm: unreachable".
         [ -s "$lf" ] || { [ -n "$_dt" ] && _push "$_dt"; }
       fi
-      rmdir "$lock" 2>/dev/null
+      _unlock
     ' _ "$SUM" "$CTX" "$transcript" "$pfile" "$longfile" "$pane_key" "$subjectfile" "$DIG" "$substartfile" "$_llm_url" "$GATE" "$driftfile" "$runtime_dir" "$SR" \
+      "$genfile" "$(cat "$genfile" 2>/dev/null)" \
       >/dev/null 2>&1 </dev/null &
   fi
 elif [ "$emoji" = "⚡" ] && [ -n "$transcript" ] && [ -x "$SUM" ]; then
