@@ -33,7 +33,10 @@ EOF
     exit 0
   fi
 
-  CWD=$(tmux display-message -p -t "$WIN" '#{pane_current_path}' 2>/dev/null)
+  # The agent's LAUNCH dir (@amux_cwd, stamped by session_log.sh open) first:
+  # the active pane of a split agent tab may be a shell that cd'd elsewhere, and
+  # the agent resolves --resume <id> against its project dir.
+  CWD=$(tmux display-message -p -t "$WIN" '#{?#{@amux_cwd},#{@amux_cwd},#{pane_current_path}}' 2>/dev/null)
   [ -n "$CWD" ] || CWD="$HOME"
 
   if ! NEW=$(tmux new-window -a -t "$WIN" -c "$CWD" -P -F '#{window_id}' "$FORK_CMD"); then
@@ -89,7 +92,11 @@ case "$1" in
         # is what lets `open @42` record @42 rather than the source window.
         printf '/s/k\0376001\037proj\037%s\037w\037/tmp/proj\n' "$_t" ;;
       *pane_current_path*)
-        # fork_session.sh's own cwd query: -p -t <win> '#{pane_current_path}'
+        # fork_session.sh's own cwd query: @amux_cwd when the window carries one
+        # (SHIM_AMUX_CWD), else pane_current_path.
+        case "$*" in
+          *@amux_cwd*) [ -n "${SHIM_AMUX_CWD:-}" ] && { echo "$SHIM_AMUX_CWD"; exit 0; } ;;
+        esac
         echo "/tmp/proj" ;;
     esac
     ;;
@@ -145,6 +152,11 @@ LEDGER
     "$(grep -c -- "nothing to fork" "$TMPD/shim.log")"
   _assert "logs the fork window as an open agent tab" "1" \
     "$(grep -c '"window_id":"@42"' "$AGENTMUX_STATE_DIR/sessions.jsonl")"
+
+  # --- launch dir wins over the active pane's cwd ---------------------------
+  SHIM_AMUX_CWD=/tmp/launch _run @1
+  _assert "forks in the window's @amux_cwd, not the active pane's cwd" "1" \
+    "$(grep -c -- "new-window -a -t @1 -c /tmp/launch " "$TMPD/shim.log")"
 
   # --- unforkable tab: reports, creates nothing -----------------------------
   _run @5
