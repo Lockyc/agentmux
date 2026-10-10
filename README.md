@@ -593,7 +593,7 @@ Five is tmux's own maximum number of status lines, which is why there's no fifth
 
 Each session gets a status-bar colour seeded from a stable hash of its name, so the same project usually lands on the same colour with no config. The summary rows use a matching shade of the same hue, and colours update automatically on attach. The colour is frozen for a session's lifetime — it never moves while the session lives, regardless of what else starts or stops.
 
-Because two names can hash to the same slot, a newcomer that collides de-dups onto the next free slot. Which one wins is launch-order-dependent, so two colliding projects can swap colours between runs. To make a project's colour fixed, **pin it**:
+Two project names can hash to the same slot, and then the two projects share a colour — on every run, since each project runs on its own tmux server and its colour is chosen without looking at the others. (Several named sessions of one project share its server and do de-dup onto distinct colours.) To give a project a distinct, fixed colour, **pin it**:
 
 ```toml
 [amux.dirs."~/Developer/github.com/you/myproject"]
