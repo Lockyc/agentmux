@@ -205,7 +205,7 @@ by `bin/amux` and published as a tmux *option* (`[notes] row` → `@amux_note_ro
 `update_colors.sh`'s row count) needs this second step, or `--reload` silently delivers
 half the change — the shipped bug that prompted it: the new `status-format[4]` arrived,
 the option and the fifth row did not, and the command appeared to do nothing at all.
-`_amux_note_opts` is the single emitter both this and the launch path use, so they cannot
+`_amux_note_opts` and `_amux_prefix_opts` are the single emitters both this and the launch path use, so they cannot
 drift. Two traps it encodes: resolve each session against **its own `@amux_dir`**, never
 `$PWD` (reload spans every project, and `[notes.dirs]` answers per directory; a session
 with no `@amux_dir` is skipped rather than resolved against the wrong one), and target
