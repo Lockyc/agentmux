@@ -2109,6 +2109,11 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # single isolation point — individual blocks must NOT set their own TMUX_TMPDIR.
   _st_tmpdir="/tmp/amuxtest-$$"; mkdir -p "$_st_tmpdir"
   export TMUX_TMPDIR="$_st_tmpdir"
+  # The session-log state the same way, BEFORE any server starts: every agent
+  # server spawned below inherits it, and its window-unlinked hook writes live/
+  # sidecars at teardown — into the user's real state dir unless this is set.
+  # Blocks that scope their own dir restore to this one, never to the real one.
+  export AGENTMUX_STATE_DIR="$_st_tmpdir/state"
   trap 'rm -rf "$_st_tmpdir" "$_selftest_cache"' EXIT
   pass=0; fail=0
   _assert() {
