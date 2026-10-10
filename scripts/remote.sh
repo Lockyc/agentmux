@@ -303,9 +303,10 @@ _RM_REMOTE_FNS='tilde() { case $1 in "~") printf %s "$HOME" ;; "~/"*) printf %s 
 # — a picker row is that host's own `find` output — must survive verbatim.
 # Roots are resolved with `pwd -P` so every path printed here and by the roster
 # is physical, matching the `@amux_dir` a remote session records; that
-# directory join is what lights the picker's liveness dot. Names are compared
-# exactly after `find -name`, which would otherwise treat the typed name as a
-# glob.
+# directory join is what lights the picker's liveness dot. The name is escaped
+# for `find -name` (which would read [*? as a pattern) and still compared exactly
+# after; `set -f` stops the unquoted, newline-split loops pathname-expanding a
+# root or a found path.
 _rm_preflight_script() {
   local project="$1" path="$2" roots="$3" prog="$4"
   # shellcheck disable=SC2016  # $-vars below are for the REMOTE shell, not us
@@ -317,6 +318,7 @@ _rm_preflight_script() {
     "depth=$_RM_MAX_PROJECT_DEPTH" \
     'TAB=$(printf "\t")' \
     'err() { printf "RM_ERR%s%s%s%s\n" "$TAB" "$1" "$TAB" "$2"; exit 0; }' \
+    'set -f' \
     'if [ -n "$path" ]; then' \
     '  d=$(tilde "$path")' \
     '  [ -d "$d" ] || err nodir "no such directory on the remote: $path"' \
@@ -325,11 +327,12 @@ _rm_preflight_script() {
     '  [ -n "$project" ] || err notfound "no project given"' \
     '  [ -n "$roots" ]   || err noroots "host has no roots = [...] configured"' \
     '  found=""; n=0' \
+    "  pat=\$(printf %s \"\$project\" | sed 's/[][*?\\\\]/\\\\&/g')" \
     '  IFS="' \
     '"' \
     '  for r in $roots; do' \
     '    r=$(cd "$(tilde "$r")" 2>/dev/null && pwd -P) || continue' \
-    '    for c in $(find "$r" -maxdepth "$depth" -type d -name "$project" 2>/dev/null); do' \
+    '    for c in $(find "$r" -maxdepth "$depth" -type d -name "$pat" 2>/dev/null); do' \
     '      [ "${c##*/}" = "$project" ] || continue' \
     '      [ -e "$c/.git" ] || continue' \
     '      n=$((n+1)); found="$found$c' \
@@ -535,6 +538,7 @@ _rm_roster_script() {
     "$_RM_REMOTE_FNS" \
     "roots=$(_rm_shquote "$roots")" \
     "depth=$(( _RM_MAX_PROJECT_DEPTH + 1 ))" \
+    'set -f' \
     'IFS="' \
     '"' \
     'for r in $roots; do' \
@@ -973,6 +977,12 @@ TOML
   _rm_preflight 0 "" "~" ; _assert "~ expands to the remote HOME" "$(cd ~ && pwd -P)" "$RM_DIR"
   # A project name is matched exactly, never as a find glob.
   _rm_preflight 0 'ward*' "" ; _assert "a glob name does not resolve" "notfound" "$RM_ERRCODE"
+  # ...and a name WITH glob characters resolves to itself: escaped for -name, and
+  # never pathname-expanded in the loop (foo1 is what `foo[1]` would glob to).
+  mkdir -p "$_rm_t/roots/one/foo[1]/.git" "$_rm_t/roots/one/foo1/.git"
+  _rm_preflight 0 'foo[1]' "" ; _assert "a name with glob characters resolves" "0" "$?"
+  _assert "a name with glob characters lands in itself" "$_rm_tp/roots/one/foo[1]" "$RM_DIR"
+  rm -rf "$_rm_t/roots/one/foo[1]" "$_rm_t/roots/one/foo1"
   _rm_preflight 0 "" "$_rm_t/nope" ; _assert "explicit missing path rc" "1" "$?"
   _assert "explicit missing path code" "nodir" "$RM_ERRCODE"
 
