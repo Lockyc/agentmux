@@ -1540,9 +1540,9 @@ _amux_probe() {
 # agent's windows RESTORABLE instead: no discard, and the shard goes down by
 # `kill-server`, never `kill-session`. kill-session unlinks every window first,
 # which fires the window-unlinked snapshot hook against a still-live, emptying
-# server and writes an empty sidecar — exactly a deliberate close. kill-server
-# fires no hook, so the sidecar keeps the live set and the dead shard reads as a
-# crash: `--probe` exits 3 and the next bare `amux` offers the restore picker.
+# server and writes an empty sidecar — exactly a deliberate close. kill-server's
+# hooks fire against a server that no longer answers, so the sidecar keeps the
+# live set and the dead shard reads as a crash: `--probe` exits 3 and the next bare `amux` offers the restore picker.
 _amux_kill() {
   local suspend=0
   if [ "${1:-}" = "--suspend" ]; then suspend=1; shift; fi
