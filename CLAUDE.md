@@ -239,13 +239,14 @@ by default (`[update] check`, or `AGENTMUX_VERSION_CHECK`).
 shellcheck, the `fish -n` syntax check, every selftest below, and the
 `tests/mouse` click suite; it prints a per-check pass/fail line and a summary, and
 exits non-zero if anything fails. It's runnable from any cwd and is what CI runs
-(`.github/workflows/ci.yml`, on push to `dev`/`main` and every PR — the runner
+(`.github/workflows/ci.yml`, on push to `main`, every PR, and manual dispatch — the runner
 installs `tmux` and `expect`, then a dedicated step builds tmux from source when
 the packaged version is below the click suite's 3.6 floor, so the tmux-gated
 selftests and the click suite actually run rather than self-skip).
 
 **On a heavily-loaded machine, prefer the individual selftests below for local
-checks and let CI run the aggregate `bash test.sh`.** It's bounded — one
+checks and run the aggregate `bash test.sh` once the machine has headroom — CI
+runs it only for `main` and PRs, so a `dev` push is never checked for you.** It's bounded — one
 shellcheck call plus strictly-sequential selftests, no infinite fan-out — but it
 does spike process count, not worth stacking on a machine already near its
 per-user process limit. (It once contributed to a process-table lockup, but only
