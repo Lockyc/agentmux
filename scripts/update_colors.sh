@@ -7,12 +7,17 @@
 # same name prefers the same curated (bg fg) slot on every machine — the
 # randomColor.js "seeded, not random, curated range" idea. But a plain name-hash
 # pigeonholes: two distinct names can cksum to the same slot (e.g. agentmux &
-# smithy). So a NEW session DE-DUPS AT BIRTH — it linear-probes from its
-# preferred slot past every slot already claimed by a live session and takes the
-# first free one. That chosen slot is stored on the session (@l1idx) and never
-# recomputed: existing sessions are fixed points; newcomers fill the gaps around
-# them. Killing a session frees its slot for the next newcomer without disturbing
-# anyone else, which is what keeps live sessions' colours stable.
+# smithy). Agent servers are sharded per project, so this reconcile only ever sees
+# the sessions of ONE project: two projects whose names share a slot share a
+# colour, deterministically, every run. The remedy is a pin —
+# [amux.dirs."<dir>"].session_colour — which bin/amux also publishes in the global
+# @l1reserved set, so no unpinned project is ever assigned it. Probing the other
+# projects' servers instead would add a fork per live project to every cold start.
+# Within one server (several named sessions of one project), a NEW session
+# DE-DUPS AT BIRTH — it linear-probes from its preferred slot past every slot
+# already claimed or reserved and takes the first free one. That chosen slot is
+# stored on the session (@l1idx) and never recomputed: existing sessions are fixed
+# points; newcomers fill the gaps around them.
 #
 # Fired by the client-attached / session-created / client-session-changed hooks in
 # tmux/agentmux.conf. Each fire reconciles every coloured session, but reconciliation only
