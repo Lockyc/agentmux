@@ -118,7 +118,7 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 
 **Inline images failing in an agent pane is NOT a tmux problem — adding terminal features will not fix it (`docs/multiplexer-direction.md`).** The symptom points at the confs and the adjacent code is `terminal-features`/`allow-passthrough`, so the useless fix is the obvious one. Claude Code's own renderer closes three layers upstream of tmux; passthrough governs images from *other* programs in a pane and never the agent's own output. The mechanism, the closed upstream issues, and the out-of-band shape that does work are in the doc.
 
-**The architectural direction — fewer terminal emulators between the host and each PTY — lives in `docs/multiplexer-direction.md`.** Read it before touching the frame layer, the nesting model, or anything proposing a second session backend; it records what `--frame` is *for* now (amux's compatibility mode, deliberately kept), and why a backend seam comes before any backend.
+**The architectural direction — warden as the client, Rex as the session backend, amux retired — lives in `docs/multiplexer-direction.md`.** Read it before touching the frame layer, the nesting model, or anything proposing a second session backend; it records amux as the bridge until warden can be a Rex client, which is why amux gets fixes but no new architecture.
 
 **Traps that live at their call site — read the code comment, don't re-document them here:**
 - **mtime: GNU `stat -c %Y` before BSD `stat -f %m`, never flip** despite macOS (a shadowing GNU/uutils `stat` reads `-f` as `--file-system` and leaks a non-numeric value) — commented at the `stat` calls in `tmux-status.sh`.
@@ -159,7 +159,7 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 | `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
 | `tests/mouse/` | The status-bar click suite — the only test that exercises the path a real mouse click takes (`NOTES_SELFTEST` stops short of it by design). `run.sh` is the entry point; `main.exp`/`frame.exp`/`lib.tcl` are the `expect` drivers. Its `README.md` carries the technique and the traps that make a harness of this shape silently test nothing |
 | `docs/ai-summary.md` | AI summary design rationale: invariants, ruled-out approaches, eval method — **start here when revisiting the summary feature** |
-| `docs/multiplexer-direction.md` | Architecture direction + the external evidence for it (Superlogical's design, transcribed because its sources are agent-unfetchable): why the frame layer stops being warden's path, why `--frame` is kept anyway, why a backend seam precedes any second backend, and why inline images are not a tmux problem — **start here before changing the nesting model or the frame** |
+| `docs/multiplexer-direction.md` | Architecture direction + the external evidence for it (Superlogical's design, transcribed because its sources are agent-unfetchable): why the frame layer stops being warden's path, where each amux capability goes when amux retires, what blocks warden being a Rex client, and why inline images are not a tmux problem — **start here before changing the nesting model or the frame** |
 | `docs/FOLLOWUPS.md` | Deferred, non-blocking work with pick-up-cold context (e.g. the restore picker's window-launch consistency item) |
 | `VERSION` | Semver version string |
 
