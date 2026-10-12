@@ -210,7 +210,7 @@ than re-deriving the state from the web.
   report replaces its record whole; hierarchical `id`s (`build/test`) give a program several
   records at once. `working`/`blocked` drop on process exit or the next OSC 133 A prompt;
   `done`/`error` survive both until the terminal decides the user has seen them. Detection is the
-  `OSC 7501 ; ? ST` echo (send `CSI c` after it to avoid a timeout); terminfo `Pst` advertises it.
+  `OSC 7501 ; ? ST` echo (send `CSI c` after it to avoid a timeout).
   Implemented in Rex and in **libghostty-vt** (ghostty-org/ghostty#14560); the embedding API in
   `ghostty.h` has no action for it, so the Ghostty app ignores it and warden can't see it.
   Proof-of-concept emitters exist (plugins/forks) for Claude Code, Codex, Terraform and Homebrew,
@@ -289,11 +289,18 @@ than re-deriving the state from the web.
     - Cargo will wait for adoption.
     - Critics called it AI-agent-specific, or argued for APC or systemd's OSC 3008 instead.
     - No kitty, WezTerm, foot or iTerm2 maintainer has responded.
-    - The spec is at rev 0.3 (10-07: an absent `progress` now means indeterminate, and emitting
-      without feature detection is allowed).
+    - Spec rev 0.3 (10-07): an absent `progress` now means indeterminate, and emitting without
+      feature detection is allowed.
 
     Hashimoto (08-28): "we're not launching any hosted services". There's a Linux CLI server and
     a NixOS module, and Tailscale is built into the server.
+- **2026-10-13** — status check: no devlog, video or post since 10-07. Two things landed:
+  - **Claude Code emits OSC 7501**, shipped in v2.1.295 (10-08): "terminals that implement it can
+    show whether Claude Code is working, waiting on you, or done". The hook amux would otherwise
+    write exists upstream; under tmux it still needs passthrough per layer.
+  - **Spec rev 0.4** (10-10): the `?` query reply may now list the supported states and kinds, so a
+    program can fall back from a later-revision state; terminfo `Pst` is removed. libghostty-vt
+    follows in ghostty-org/ghostty#14630 (merged 10-10).
 
 ## What this changes here
 
@@ -335,8 +342,8 @@ That reframing settles several things that were previously arguable:
   tab-row dots and presence indicators already live. Migrating it is the expensive half
   of removing the agent tmux layer, and is what makes that layer removable at all.
   OSC 7501 (ledger, 2026-10-06) is the channel for it: the agent reports its own state to
-  whichever terminal hosts it, so the emitter belongs at the agent (a Claude Code hook, or
-  upstream), never in `tmux-status.sh` — status leaves tmux with the emitter, not through it.
+  whichever terminal hosts it, so the emitter belongs at the agent (Claude Code ships one
+  since 2026-10-08), never in `tmux-status.sh` — status leaves tmux with the emitter, not through it.
 
 **Not yet:** removing the agent tmux layer. It is blocked on the chrome migration above
 and on a backend that provides the ledger's open/close events; revisit once the seam
