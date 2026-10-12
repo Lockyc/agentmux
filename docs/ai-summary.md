@@ -238,7 +238,7 @@ will confidently rank configuration noise as model quality. Read the raw respons
   TodoWrite. Is the first user message enough, or do we need to weight it
   explicitly over early assistant prose?
 - **Local-model naming quality.** Re-run the replay eval when the model lineup
-  moves; the last pass was 2026-07 (5 transcripts, M3 Max). What it settled:
+  moves; passes ran 2026-07 and 2026-10 (5 transcripts, M3 Max). What 2026-07 settled:
   **every candidate that got a fair window produced usable output on all five** —
   qwen3.5-4b (3.1 GB), qwen3.5-9b (6.0 GB), qwen2.5-14b-instruct (9.0 GB) and
   qwen3-coder-30b (17.2 GB) all scored 5/5, differing in latency (stand: 12-20s /
@@ -248,6 +248,16 @@ will confidently rank configuration noise as model quality. Read the raw respons
   adherence*, the only axis that separated them: the 4B drifts to
   `subject: done:` (the prompt asks for `subject. done:`) and pads `done:` with
   seven-item lists; 9B and 14B hold the shape.
+  The 2026-10 pass (same method, 8192 / parallel 1) kept qwen3.5-9b: stands
+  6.6-9.6s, 5/5 in shape. **gemma-4-e4b** (6.9 GB, *larger* than the 9B on
+  MLX) was faster (stands 3.5-6.2s) but overran the 55-word cap on 3/5, so the
+  cleaner cut them mid-clause, and filled the other slots with narration ("no clear
+  focus", "the session involved numerous file system operations").
+  **minicpm5-2b** (1.4 GB) returned empty on 10/10: it ignores
+  `reasoning_effort: "none"` (and `low`, and `enable_thinking: false`) and spends
+  198/200 tokens reasoning. Only a `/no_think` prompt suffix produces output, and it
+  still reasons first (55 tokens). **So `reasoning_effort: "none"` is not universal:
+  a candidate that ignores it cannot replace the 9B without a prompt change.**
   The real lesson was that this question had been asking the wrong thing: the
   summary was blank because of backend *configuration* (see "why a healthy-looking
   endpoint returns nothing"), and every apparent quality gap was that in
