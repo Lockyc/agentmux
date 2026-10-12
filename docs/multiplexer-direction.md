@@ -6,11 +6,11 @@ links:
     note: the architecture-direction record CLAUDE.md's Layout table points into
 ---
 
-# Multiplexer direction — why amux stops being the terminal in the middle
+# Multiplexer direction — warden and Rex replace tmux and amux
 
 Durable record of the architectural direction, and the external evidence behind it.
 Start here before proposing a change to the frame layer, the socket/nesting model, or
-anything that would add a fourth tmux layer or a second session backend.
+anything that would add a fourth tmux layer, a second session backend, or new architecture to amux.
 
 **Transcribed, not linked, on purpose.** The primary sources are a YouTube channel and
 X threads. Agent web-fetch tooling cannot read either (YouTube returns the SPA footer;
@@ -78,9 +78,8 @@ than re-deriving the state from the web.
   waitlist opens at `superlogical.com`. Co-founders: Jack Pearkes (HashiCorp's first
   employee), Alasdair Monk, Hector Simpson. US$10M seed led by Notable Capital with Amplify
   Partners; angels include Patrick Collison, Tobi Lütke, Aaron Levie, Guillermo Rauch and
-  Armon Dadgar. This bears on the paid-product point in *What this changes here*: it is a
-  venture-scale play, so the paid layer is the lock-in risk, as assumed there — which layer
-  that is was narrowed on 2026-09-02, below.
+  Armon Dadgar. It is a venture-scale play, so the paid layer is the lock-in risk; which layer that is was
+  narrowed on 2026-09-02, below.
 - **2026-07-30 → 08-01** — the architecture devlog and X thread transcribed above.
 - **2026-08-28** (X; the Hacker News mirror *Basic Superlogical Demo* is dated 08-30, and a
   YouTube upload of the same three minutes, titled *Superlogical Pre-Alpha Demo*, followed
@@ -102,8 +101,7 @@ than re-deriving the state from the web.
     fresh install starts a local server invisibly, and the same server binary "runs
     anywhere", Linux included. The stated vision is a server on every machine, host and
     pod you have. So the paid layer is the control plane (accounts, sharing, remote
-    resolution), not the thing the PTYs run in; the *What this changes here* bullet on
-    lock-in is updated accordingly.
+    resolution), not the thing the PTYs run in.
   - **Benchmarks exist, and they are about memory at agent scale.** The scale argument:
     agents spawn terminals and attach as clients in numbers no multiplexer was designed
     for, so the target is "hundreds of people, hundreds of thousands of agents". Numbers
@@ -308,60 +306,57 @@ than re-deriving the state from the web.
 
 ## What this changes here
 
-The direction is **not** "replace tmux with something". It is: *reduce the number of
-terminal emulators between the host client and each PTY.* Today a framed agent is two
-(frame + agent); an unframed one is one; Superlogical's native path is zero.
-
-That reframing settles several things that were previously arguable:
+**The destination is warden as the client and Rex as the session backend, with amux
+retired.** The measure of progress is the number of terminal emulators between the host
+client and each PTY. Today a framed agent has two (frame + agent) and an unframed one has
+one. Rex's native path has zero. tmux leaves when Rex takes over sessions. amux leaves too,
+because everything it does is either something Rex does natively or something warden owns
+as the client.
 
 - **The frame layer stops being warden's path.** warden already embeds one libghostty
-  surface per PTY behind its `TerminalSurface` seam, which is the same design
-  Superlogical describes for splits — so warden's own native splits replace the frame's
-  fixed two-pane layout, and nesting drops 2 → 1 for local use. Every invariant of the
-  form *"re-assert this terminal feature on the frame socket too"* (`extkeys`, `sync`,
-  `hyperlinks`, `allow-passthrough`, the per-layer OSC 777 wrap counted by
-  `_tmux_nest_depth`, and `bin/amux`'s re-assertion on every `--frame` because that
-  server never re-reads its `-f` file) stops applying to that path.
-- **`--frame` is kept, not deleted.** It is amux's compatibility mode — standalone
-  terminals, `amux @host` over ssh, and non-macOS — and Superlogical ships the same
-  concession for the same reason. Deleting it to "finish the migration" would trade a
-  supported public surface for tidiness; the no-legacy-hangers-on rule does not reach a
-  path that still has its own users.
-- **A second session backend needs a seam before it needs an implementation.** amux's
-  durable assets — config, agent adapters, the session ledger, restore, fork, remote
-  resolution — are not tmux-specific, but they currently assume tmux everywhere. The
-  seam is what lets `zmx` or Superlogical's protocol drop in as a backend rather than
-  force a rewrite, and it is cheapest to build now, while tmux is the only implementation.
-  This is also the whole of the answer to Superlogical being venture-funded: Rex's client and
-  server are free, self-hosted, account-free and not directly monetized (2026-10-05), so the
-  lock-in risk is whatever the unannounced commercial layer turns out to be — and a seam
-  contains it either way. A self-hosted server on
-  your own remote host is also exactly the shape `amux @host` already assumes, which is why the seam,
-  not a rewrite, is the right investment. The 2026-09-08 remote demo sharpens what the seam has
-  to own: Superlogical's server *is* the login (no sshd on the host, identity from the transport),
-  so remote resolution is a backend's concern, not an ssh hop amux composes in front of one —
-  `amux @host`'s ssh assumption belongs behind the seam, not above it.
-- **Status rows and notes are chrome painted into a terminal grid.** In a client-owns-
-  the-viewport model that chrome belongs to the client, which is where warden's sidebar,
-  tab-row dots and presence indicators already live. Migrating it is the expensive half
-  of removing the agent tmux layer, and is what makes that layer removable at all.
-  OSC 7501 (ledger, 2026-10-06) is the channel for it: the agent reports its own state to
-  whichever terminal hosts it, so the emitter belongs at the agent (Claude Code ships one
-  since 2026-10-08), never in `tmux-status.sh` — status leaves tmux with the emitter, not through it.
-  Claude Code only emits to a terminal that answers its query, and tmux doesn't (ledger,
-  2026-10-13), so the agent's emitter takes over only once the agent tmux layer is gone. Until
-  then, any 7501 that reaches warden has to come from amux, wrapped per layer like OSC 777.
+  surface per PTY behind its `TerminalSurface` seam, which is the split model Superlogical
+  describes, so warden's native splits replace the frame's fixed two-pane layout. Every
+  invariant of the form *"re-assert this terminal feature on the frame socket too"*
+  (`extkeys`, `sync`, `hyperlinks`, `allow-passthrough`, the per-layer OSC 777 wrap counted
+  by `_tmux_nest_depth`, `bin/amux`'s re-assertion on every `--frame`) stops applying to
+  that path.
+- **amux is the bridge until Rex can host warden's sessions, and gets no new
+  architecture.** No backend seam and no second session backend: those only paid off if
+  amux outlived tmux. Fixes and small features to the tmux path stay worthwhile because it
+  is what runs today. `--frame` keeps serving standalone terminals and remote hosts until
+  amux retires.
+- **Where each amux capability goes when amux retires:**
 
-**Not yet:** removing the agent tmux layer. It is blocked on the chrome migration above
-and on a backend that provides the ledger's open/close events; revisit once the seam
-exists and warden renders at least the note row. Superlogical's demoed per-session event
-stream is the shape that second condition asks for, and the Rex docs now publish it (ledger,
-2026-10-09: `block_closed`, `terminal.child_exited`, `client_connected`, streamed by `rex
-events --json`). Server and binaries are still invite-only macOS testing (2026-10-05). So a
-backend is now *designable* against a documented API, by driving `rex` as a subprocess, but
-it can't be *built or tested* without an invite. The unlock is Rex being downloadable on the
-hosts amux runs on; a published wire protocol or open client would also let a backend skip
-the `rex` subprocess.
+  | amux today | After |
+  | --- | --- |
+  | sessions that outlive the client, the session ledger, restore | Rex server-side sessions (persistent, parked when idle) |
+  | `amux @host` over ssh/et/mosh | Rex servers on each host, reached with `-S <host>` / the client's remote sessions |
+  | agent state in tab names, OSC 777 attention | OSC 7501 from the agent itself, read from Rex's `program_status_changed` events |
+  | presence probe (`amux --probe`) | Rex `session_created`/`destroyed` and `child_exited` events |
+  | directory-based agent selection, per-agent launch commands | warden's per-tab `cmd` cascade |
+  | AI summary status lines, the note row | no home decided; warden chrome or dropped |
+
+  The lock-in point lives here too. Rex's client and server are free, self-hosted,
+  account-free and not directly monetized (2026-10-05), so the venture-funded risk is the
+  unannounced commercial layer. warden reads Rex through its documented API and events,
+  which keeps that layer optional.
+- **Agent status reaches warden from Rex, not from the terminal.** Claude Code emits OSC
+  7501 only to a terminal that answers its query (ledger, 2026-10-13). Rex answers it. tmux
+  and the Ghostty app don't. So under amux nothing emits, and amux doesn't grow a 7501
+  emitter for a layer that is going away. Under Rex, warden subscribes to `rex events --json`
+  and renders the states as chrome, which is where warden's sidebar and tab-row dots already
+  live. The `ghostty.h` action matters only for plain tabs outside Rex (warden's
+  `docs/FOLLOWUPS.md`).
+
+**Not yet: warden as a Rex client.** Rex's wire protocol and client code aren't published,
+and its only clients are Superlogical's own apps. Today warden could show a Rex session only
+by running an attach command inside a libghostty surface. That is the compatibility mode,
+"architecturally identical" to a traditional multiplexer, so it puts an emulator back in the
+middle. The Rex docs don't document an attach command either. The control side is already
+reachable: `rex` drives sessions and streams events as a subprocess (ledger, 2026-10-09).
+Testing it still needs a beta invite (2026-10-05). **Unlock:** a published Rex client
+protocol, or a libghostty piece that attaches a surface to a Rex block. Revisit on either.
+Until then, amux and tmux stay the session layer.
 
 ## Inline images are not a tmux problem
 
