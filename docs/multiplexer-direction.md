@@ -297,7 +297,11 @@ than re-deriving the state from the web.
 - **2026-10-13** — status check: no devlog, video or post since 10-07. Two things landed:
   - **Claude Code emits OSC 7501**, shipped in v2.1.295 (10-08): "terminals that implement it can
     show whether Claude Code is working, waiting on you, or done". The hook amux would otherwise
-    write exists upstream; under tmux it still needs passthrough per layer.
+    write exists upstream, but it only emits once the terminal answers `OSC 7501 ; ?` (its startup
+    probe; no env var forces it on, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` turns it off). tmux 3.7c
+    answers nothing (tested: a pane sending the query plus `CSI c` gets only the DA reply), so
+    Claude Code under any tmux layer never emits. The Ghostty app drops `program_status` in its
+    termio `StreamHandler`, query included, so a bare warden tab doesn't get it either.
   - **Spec rev 0.4** (10-10): the `?` query reply may now list the supported states and kinds, so a
     program can fall back from a later-revision state; terminfo `Pst` is removed. libghostty-vt
     follows in ghostty-org/ghostty#14630 (merged 10-10).
@@ -344,6 +348,9 @@ That reframing settles several things that were previously arguable:
   OSC 7501 (ledger, 2026-10-06) is the channel for it: the agent reports its own state to
   whichever terminal hosts it, so the emitter belongs at the agent (Claude Code ships one
   since 2026-10-08), never in `tmux-status.sh` — status leaves tmux with the emitter, not through it.
+  Claude Code only emits to a terminal that answers its query, and tmux doesn't (ledger,
+  2026-10-13), so the agent's emitter takes over only once the agent tmux layer is gone. Until
+  then, any 7501 that reaches warden has to come from amux, wrapped per layer like OSC 777.
 
 **Not yet:** removing the agent tmux layer. It is blocked on the chrome migration above
 and on a backend that provides the ledger's open/close events; revisit once the seam
