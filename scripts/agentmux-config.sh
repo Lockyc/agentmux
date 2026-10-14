@@ -340,7 +340,7 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   # Self-contained coverage for agentmux_build_cmd's keep_alive/reattach
   # wrapping — exercises every branch without depending on the example
   # config carrying those optional fields.
-  _tmpcfg=$(mktemp /tmp/agentmux-selftest-XXXXXX.toml) || exit 1
+  _tmpcfg=$(mktemp /tmp/agentmux-selftest-XXXXXX) || exit 1
   cat > "$_tmpcfg" <<'TOML'
 [[agents]]
 name = "wrapped"
@@ -377,7 +377,7 @@ TOML
   # absolute paths (no ~) so it doesn't depend on $HOME. Covers longest-prefix
   # precedence, subtree fallback to a broader rule, and same-length ties
   # resolving to the first agent in file order.
-  _dircfg=$(mktemp /tmp/agentmux-dir-XXXXXX.toml) || exit 1
+  _dircfg=$(mktemp /tmp/agentmux-dir-XXXXXX) || exit 1
   cat > "$_dircfg" <<'TOML'
 [[agents]]
 name = "broad"
@@ -412,7 +412,7 @@ TOML
   # deeper block only shadows a field it actually sets, otherwise the field falls
   # back to a shallower block, then to the base [frame] value. A ~ key exercises
   # $HOME expansion; an explicit `false` override exercises the has()-not-// guard.
-  _frcfg=$(mktemp /tmp/agentmux-frame-XXXXXX.toml) || exit 1
+  _frcfg=$(mktemp /tmp/agentmux-frame-XXXXXX) || exit 1
   cat > "$_frcfg" <<TOML
 [frame]
 left = 30
@@ -454,7 +454,7 @@ TOML
 
   # [notes] resolves through the same scoped engine as [frame]/[amux], so a
   # per-directory override works without a second mechanism.
-  _ntcfg=$(mktemp "${TMPDIR:-/tmp}/amux-notes-XXXXXX.toml") || exit 1
+  _ntcfg=$(mktemp "${TMPDIR:-/tmp}/amux-notes-XXXXXX") || exit 1
   cat > "$_ntcfg" <<'TOML'
 [[agents]]
 name = "a"
@@ -475,7 +475,7 @@ TOML
 
   # [amux] shares the same dir-scoped engine as [frame]. Cover a base read, a
   # per-dir override (longest match), subtree fallback to base, and an unset field.
-  _amcfg=$(mktemp /tmp/agentmux-amux-XXXXXX.toml) || exit 1
+  _amcfg=$(mktemp /tmp/agentmux-amux-XXXXXX) || exit 1
   cat > "$_amcfg" <<TOML
 [amux]
 prefix = "C-a"
@@ -496,7 +496,7 @@ TOML
   rm -f "$_amcfg"
 
   # ---- [[hosts]] accessors ----
-  _hostscfg=$(mktemp "${TMPDIR:-/tmp}/agentmux-hosts-XXXXXX.toml") || exit 1
+  _hostscfg=$(mktemp "${TMPDIR:-/tmp}/agentmux-hosts-XXXXXX") || exit 1
   cat > "$_hostscfg" <<'TOML'
 [[hosts]]
 name  = "buildbox"
@@ -536,7 +536,7 @@ TOML
 
   # A config with NO [[agents]] block (hosts-only) must return empty/0, never a jq null error —
   # this is now a valid and discoverable config shape (remote-only hosts, no local agents).
-  _hostsonlycfg=$(mktemp "${TMPDIR:-/tmp}/agentmux-hostsonly-XXXXXX.toml") || exit 1
+  _hostsonlycfg=$(mktemp "${TMPDIR:-/tmp}/agentmux-hostsonly-XXXXXX") || exit 1
   cat > "$_hostsonlycfg" <<'TOML'
 [[hosts]]
 name  = "buildbox"

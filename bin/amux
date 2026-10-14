@@ -2260,7 +2260,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # [frame] allow_nested = true lifts the guard: _amux_frame proceeds past it (we
   # point it at a bogus config dir so it fails on the missing frame.conf, not the
   # tmux guard — proving the guard no longer fired).
-  _anw=$(mktemp /tmp/amux-nest-XXXXXX.toml) || exit 1
+  _anw=$(mktemp /tmp/amux-nest-XXXXXX) || exit 1
   printf '[frame]\nallow_nested = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_anw"
   _fout=$(TMUX="/tmp/fake,1,0" AGENTMUX_CONFIG="$_anw" _amux_json_cache="" \
           AGENTMUX_TMUX="/tmp/amux-no-such-tmux-dir" _amux_frame a test 2>&1)
@@ -2276,7 +2276,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # identically — two entry points disagreeing about a documented escape hatch
   # is the defect. The assertion above cannot see this: it calls _amux_frame
   # directly and so starts past the guard the plain launch hits first.
-  _anwd=$(mktemp /tmp/amux-nest-XXXXXX.toml) || exit 1
+  _anwd=$(mktemp /tmp/amux-nest-XXXXXX) || exit 1
   printf '[frame]\ndefault = true\nallow_nested = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_anwd"
   _fout=$(TMUX="/tmp/fake,1,0" AGENTMUX_CONFIG="$_anwd" _amux_json_cache="" \
           AGENTMUX_TMUX="/tmp/amux-no-such-tmux-dir" amux 2>&1)
@@ -2291,7 +2291,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # on path + mtime, and two writes to one path inside the same second collide
   # on that key — the second run would then be asserted against the FIRST
   # config's parse and pass for the wrong reason (it did).
-  _anwn=$(mktemp /tmp/amux-nest-XXXXXX.toml) || exit 1
+  _anwn=$(mktemp /tmp/amux-nest-XXXXXX) || exit 1
   printf '[frame]\ndefault = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_anwn"
   _fout=$(TMUX="/tmp/fake,1,0" AGENTMUX_CONFIG="$_anwn" _amux_json_cache="" \
           AGENTMUX_TMUX="/tmp/amux-no-such-tmux-dir" amux 2>&1); _frc=$?
@@ -2305,9 +2305,9 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
 
   # _amux_use_frame: the single home for the frame-vs-plain decision both the bare
   # launch and --restore's attach step take. Truth table, config-driven.
-  _ufon=$(mktemp /tmp/amux-uf-XXXXXX.toml) || exit 1
+  _ufon=$(mktemp /tmp/amux-uf-XXXXXX) || exit 1
   printf '[frame]\ndefault = true\n[[agents]]\nname="a"\ncmd="x"\n' > "$_ufon"
-  _ufoff=$(mktemp /tmp/amux-uf-XXXXXX.toml) || exit 1
+  _ufoff=$(mktemp /tmp/amux-uf-XXXXXX) || exit 1
   printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_ufoff"
   _assert "use_frame: default=true"        "1" \
     "$(AGENTMUX_CONFIG="$_ufon"  _amux_json_cache="" _amux_use_frame "")"
@@ -2677,7 +2677,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   #     can never be "frame-only" again. Built detached at a caller-supplied window size.
   if command -v tmux >/dev/null 2>&1; then
     _tl_dir=$(mktemp -d); _tl_base=$(cd "$_tl_dir" && _amux_default_session_name)
-    _tl_cfg=$(mktemp /tmp/amux-termlayout-XXXXXX.toml)
+    _tl_cfg=$(mktemp /tmp/amux-termlayout-XXXXXX)
     _tl_panes() { tmux -L "$AGENTMUX_TERM_SOCKET" list-panes -t "=${_tl_base}-term" -F "$1" 2>/dev/null; }
     # No split configured → a single scratch pane.
     printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_tl_cfg"
@@ -2916,7 +2916,7 @@ TOML
 
   # _amux_frame_width clamps from synthetic configs. Clear the (isolated) disk
   # cache between rewrites — same-second mtime would otherwise alias the cache.
-  _fw=$(mktemp /tmp/amux-frame-XXXXXX.toml)
+  _fw=$(mktemp /tmp/amux-frame-XXXXXX)
   printf '[frame]\nleft = 5\n[[agents]]\nname="a"\ncmd="x"\n' > "$_fw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "frame_width clamp low"  "10" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_width)"
@@ -2968,7 +2968,7 @@ TOML
   _assert "frame_status bad val" "bottom" "$(AGENTMUX_CONFIG="$_fw" _amux_json_cache="" _amux_frame_status_position)"
 
   # [notes] row -> @amux_note_row (update_colors.sh reads it to pick status 5).
-  _nw=$(mktemp "${TMPDIR:-/tmp}/amux-notesw-XXXXXX.toml") || exit 1
+  _nw=$(mktemp "${TMPDIR:-/tmp}/amux-notesw-XXXXXX") || exit 1
   printf '[[agents]]\nname="a"\ncmd="x"\n' > "$_nw"
   rm -rf "$_selftest_cache/agentmux" 2>/dev/null
   _assert "note_row absent"  ""  "$(AGENTMUX_CONFIG="$_nw" _amux_json_cache="" _amux_note_row)"
