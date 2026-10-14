@@ -4,6 +4,41 @@ links:
   - rel: part-of
     to: CLAUDE.md
     note: the architecture-direction record CLAUDE.md's Layout table points into
+research:
+  bears-on: >-
+    The zero-emulator direction: warden as the client for Rex sessions, libghostty as its
+    terminal, tmux and amux retired. News is anything that moves the unlock in "Not yet: warden
+    as a Rex client", changes Rex's API/events/pricing, or changes the libghostty embedding API
+    (`ghostty.h`) or the terminal-state pieces (snapshot, OSC 7501) warden consumes.
+  sources:
+    - name: Superlogical devlog
+      check: https://superlogical.com/updates/rss.xml
+      note: the Rex docs serve raw Markdown at /rex/docs/<page>.md
+    - name: Hashimoto's posts (X cross-posts)
+      check: curl -A <browser UA> https://hachyderm.io/api/v1/accounts/lookup?acct=mitchellh → /api/v1/accounts/<id>/statuses
+      note: >-
+        x.com fails TLS, hachyderm's RSS and status pages hang; the API needs a browser
+        user-agent. Charts are media_attachments[].url with no alt text — read them as images.
+    - name: YouTube devlogs
+      check: https://www.youtube.com/feeds/videos.xml?channel_id=UC0gjVbm7HY5GzDTo5NbQruA
+      note: >-
+        the page is an SPA; transcripts via yt-dlp --write-auto-subs (the cookie-rotation
+        warning is noise). The @Mitchellh3 handle does not resolve.
+    - name: Hacker News
+      check: https://hn.algolia.com/api/v1/search_by_date?query=superlogical&tags=story (also query=rex, query=OSC 7501)
+      note: news.ycombinator.com rate-limits; items via /api/v1/items/<id>
+    - name: Ghostty releases
+      check: gh api repos/ghostty-org/ghostty/tags --jq '.[:3][].name'
+      note: the GitHub "release" is only the rolling tip; tags carry the versions
+    - name: libghostty embedding API since warden's vendored commit
+      check: >-
+        gh api repos/ghostty-org/ghostty/compare/<commit>...main for include/ghostty.h,
+        src/apprt/embedded.zig, src/terminal/snapshot/; <commit> is in warden's
+        crates/warden-app/vendor/PROVENANCE.md
+    - name: libghostty PRs (snapshot, OSC 7501, multiplexer)
+      check: gh search prs --repo ghostty-org/ghostty --merged-at '>=<as-of>'
+    - name: Press
+      check: web search "Superlogical Rex" (The Register, InfoWorld, XenoSpectrum have covered it)
 ---
 
 # Multiplexer direction — warden and Rex replace tmux and amux
@@ -12,27 +47,10 @@ Durable record of the architectural direction, and the external evidence behind 
 Start here before proposing a change to the frame layer, the socket/nesting model, or
 anything that would add a fourth tmux layer, a second session backend, or new architecture to amux.
 
-**Transcribed, not linked, on purpose.** The primary sources are a YouTube channel and
-X threads. Agent web-fetch tooling cannot read either (YouTube returns the SPA footer;
-`x.com` fails TLS host verification), so a link here would be a dead end for the next
-agent exactly as it was for this one. Video transcripts were pulled with `yt-dlp
---write-auto-subs` from channel `UC0gjVbm7HY5GzDTo5NbQruA` — note the handle in
-circulation (`@Mitchellh3`) does not resolve; the cookie-rotation warning `yt-dlp` prints is
-noise, the subtitles still land. The ledger's last entry carries the as-of date for
-everything below it.
-
-What *is* agent-fetchable, for the next status check (so it starts from the ledger below,
-not from a fresh web search): `mitchellh.com/writing/superlogical`, `superlogical.com`
-(new posts: `/updates/rss.xml`; the Rex docs serve raw Markdown at `/rex/docs/<page>.md`),
-the YouTube channel's feed (`youtube.com/feeds/videos.xml?channel_id=<id above>`), press coverage (The Register, InfoWorld, XenoSpectrum's 2026-08-01 architecture write-up),
-and Hacker News through `hn.algolia.com/api/v1/items/<id>` (`search_by_date?query=superlogical
-&tags=story` lists new mirrors) — the site itself rate-limits. **The X posts are readable
-through the Mastodon API, not the mirror pages**: `hachyderm.io/@mitchellh.rss` and the
-`/@mitchellh/<id>` pages hang up, but `curl` with a browser user-agent against
-`hachyderm.io/api/v1/accounts/lookup?acct=mitchellh` → `/api/v1/accounts/<id>/statuses`
-returns the cross-posted text, and each status's `media_attachments[].url` (on
-`media.hachyderm.io`) serves the attached charts, which carry no alt text and must be read
-as images. That route is how the 2026-09-02 numbers below were captured.
+**Transcribed, not linked, on purpose.** The primary sources are YouTube videos and X threads,
+which agent tooling reads only through the routes in the frontmatter's `research:` watch list,
+so a bare link would be a dead end for the next agent. The ledger's last entry carries the as-of
+date for everything below it; a status check runs the watch list from there.
 
 ## What Superlogical is doing
 
@@ -303,8 +321,11 @@ than re-deriving the state from the web.
   - **Spec rev 0.4** (10-10): the `?` query reply may now list the supported states and kinds, so a
     program can fall back from a later-revision state; terminfo `Pst` is removed. libghostty-vt
     follows in ghostty-org/ghostty#14630 (merged 10-10).
-- **2026-10-15** — status check: nothing since 10-07 on the devlog RSS, YouTube, Mastodon or HN.
-  libghostty only hardened snapshot decoding (#14595, page-capacity validation).
+- **2026-10-15** — status check: nothing from Superlogical since 10-07 (devlog, YouTube, Mastodon,
+  HN). Ghostty: no release since v1.3.1 (03-13). Since warden's vendored `b115e45`, `ghostty.h`
+  gained only `ghostty_surface_paste_text` (paste protection for injected text; additive — warden's
+  `cmd` injection deliberately stays on `ghostty_surface_text`), and snapshot decoding gained
+  page-capacity validation (#14595). Still no `program_status` embedding action.
 
 ## What this changes here
 
