@@ -19,10 +19,11 @@ default:
 gate:
     bash test.sh
 
-# Micro-benchmark the presence-probe hot path: cost of `dropped --pending` for a cwd that is
-# NOT in the ledger (the common `[[window.root]]` case) vs one that IS, over a large synthetic
-# ledger. warden forks this per session-less tab every 5s; `sl_dropped`'s fast-path gate
-# short-circuits the absent-from-ledger case. The recipe IS the generator (seeds its own ledger).
+# Measures `dropped --pending` for a cwd that is NOT in the ledger (the common
+# `[[window.root]]` case) vs one that IS, over a large synthetic ledger. warden forks this per
+# session-less tab every 5s; `sl_dropped`'s fast-path gate short-circuits the absent-from-ledger
+# case. The recipe IS the generator (seeds its own ledger).
+# Micro-benchmark the presence-probe hot path (ledger miss vs hit)
 bench:
     #!/usr/bin/env bash
     set -euo pipefail
