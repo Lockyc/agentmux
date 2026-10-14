@@ -303,6 +303,8 @@ than re-deriving the state from the web.
   - **Spec rev 0.4** (10-10): the `?` query reply may now list the supported states and kinds, so a
     program can fall back from a later-revision state; terminfo `Pst` is removed. libghostty-vt
     follows in ghostty-org/ghostty#14630 (merged 10-10).
+- **2026-10-15** — status check: nothing since 10-07 on the devlog RSS, YouTube, Mastodon or HN.
+  libghostty only hardened snapshot decoding (#14595, page-capacity validation).
 
 ## What this changes here
 
