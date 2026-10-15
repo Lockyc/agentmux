@@ -14,11 +14,12 @@ research:
     - name: Superlogical devlog
       check: https://superlogical.com/updates/rss.xml
       note: the Rex docs serve raw Markdown at /rex/docs/<page>.md
-    - name: Hashimoto's posts (X cross-posts)
-      check: curl -A <browser UA> https://hachyderm.io/api/v1/accounts/lookup?acct=mitchellh → /api/v1/accounts/<id>/statuses
+    - name: Hashimoto's and Superlogical's X posts
+      check: curl -A <browser UA> https://api.fxtwitter.com/2/profile/<mitchellh|superlogical>/statuses (one post, quote included, at /status/<id>)
       note: >-
-        x.com fails TLS, hachyderm's RSS and status pages hang; the API needs a browser
-        user-agent. Charts are media_attachments[].url with no alt text — read them as images.
+        x.com fails TLS. X is the primary channel. The hachyderm.io API (browser user-agent,
+        /api/v1/accounts/lookup?acct=mitchellh) is only a partial mirror and missed every post
+        from 10-11 to 10-15. Charts are media URLs with no alt text, so read them as images.
     - name: YouTube devlogs
       check: https://www.youtube.com/feeds/videos.xml?channel_id=UC0gjVbm7HY5GzDTo5NbQruA
       note: >-
@@ -310,7 +311,8 @@ than re-deriving the state from the web.
 
     Hashimoto (08-28): "we're not launching any hosted services". There's a Linux CLI server and
     a NixOS module, and Tailscale is built into the server.
-- **2026-10-13** — status check: no devlog, video or post since 10-07. Two things landed:
+- **2026-10-13** — status check: no devlog or video since 10-07 (the X posts are under 10-16). Two
+  things landed:
   - **Claude Code emits OSC 7501**, shipped in v2.1.295 (10-08): "terminals that implement it can
     show whether Claude Code is working, waiting on you, or done". The hook amux would otherwise
     write exists upstream, but it only emits once the terminal answers `OSC 7501 ; ?` (its startup
@@ -321,11 +323,30 @@ than re-deriving the state from the web.
   - **Spec rev 0.4** (10-10): the `?` query reply may now list the supported states and kinds, so a
     program can fall back from a later-revision state; terminfo `Pst` is removed. libghostty-vt
     follows in ghostty-org/ghostty#14630 (merged 10-10).
-- **2026-10-15** — status check: nothing from Superlogical since 10-07 (devlog, YouTube, Mastodon,
-  HN). Ghostty: no release since v1.3.1 (03-13). Since warden's vendored `b115e45`, `ghostty.h`
+- **2026-10-15** — status check: no Superlogical devlog, YouTube upload or HN story since 10-07.
+  Ghostty: no release since v1.3.1 (03-13). Since warden's vendored `b115e45`, `ghostty.h`
   gained only `ghostty_surface_paste_text` (paste protection for injected text; additive — warden's
   `cmd` injection deliberately stays on `ghostty_surface_text`), and snapshot decoding gained
   page-capacity validation (#14595). Still no `program_status` embedding action.
+- **2026-10-16** — X posts from 10-11 to 10-15. None of them reached Mastodon. Still no devlog or
+  video, and no Ghostty release. Nothing has touched `ghostty.h`, `embedded.zig` or the snapshot
+  code since 10-15.
+  - **Activity Mode** (10-11, @superlogical, quoted by Hashimoto): a Rex view of active and idling
+    processes and agents, with metadata, for quick switching. It is built on OSC 7501.
+    Hashimoto: "not as simple as 'program has activity lets show an attention icon.' Lots of
+    heuristics and other signals as input to decide what exactly to show when." The design bar
+    was an activity inbox the team would actually use instead of a noisy one. Testers were
+    admitted in waves of 50–100 at that point.
+  - **OSC 7501 adoption** (10-13): kitty implements it and shows it in the tab title, Grok Build
+    shipped support, and Codex merged it. That makes Claude Code and Codex the two agents amux
+    runs that now emit it.
+  - **Rex iOS app** (10-12): the first build is in App Store review. iOS testing follows approval.
+  - **Agents driving Rex across machines** (10-15): a tester's agent ran benchmarks on another
+    person's Mac and brought both results back to compare. Superlogical plans evals so any
+    harness can use Rex in few turns.
+  - **Beta waves** (10-15): 250 invited the week of 10-05, about 2,000 the week of 10-12, and a
+    1,000-person wave started on 10-15, in signup order. Almost 50,000 are still waiting, and
+    wave size grows as stability holds.
 
 ## What this changes here
 
@@ -368,7 +389,9 @@ as the client.
   and the Ghostty app don't. So under amux nothing emits, and amux doesn't grow a 7501
   emitter for a layer that is going away. Under Rex, warden subscribes to `rex events --json`
   and renders the states as chrome, which is where warden's sidebar and tab-row dots already
-  live. The `ghostty.h` action matters only for plain tabs outside Rex (warden's
+  live. The events are raw states. Deciding what deserves attention takes a policy on top,
+  which Rex's own Activity Mode builds from heuristics (ledger, 2026-10-16), and warden would
+  have to write its own. The `ghostty.h` action matters only for plain tabs outside Rex (warden's
   `docs/FOLLOWUPS.md`).
 
 **Not yet: warden as a Rex client.** Rex's wire protocol and client code aren't published,
