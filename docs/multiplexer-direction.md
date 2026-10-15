@@ -355,7 +355,8 @@ than re-deriving the state from the web.
     since 08-05 and now gates `unknown` too: http/https/mailto with a host or address open,
     custom schemes ask first, and executable `file:` targets and control or bidi characters
     are refused. The policy is Swift in the macOS app, not libghostty; warden ports it in
-    `surface/link.rs`. Fixes that warden gets on its next revendor: a use-after-free when scrollback
+    `surface/link.rs`. warden revendored to `b3dc3d7` (main, 10-15) the same day, which brings
+    a fix for a use-after-free when scrollback
     prunes the cursor page (#14686), pty and terminal resizes synchronized (#14706), and
     CVDisplayLink start and stop moved to the main thread (#14691). The tmux control-mode viewer
     fixes and the libghostty-vt C API additions (prompt navigation, OSC 7501 rev 0.4,
