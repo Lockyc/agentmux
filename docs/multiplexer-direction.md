@@ -354,8 +354,8 @@ than re-deriving the state from the web.
     like `osc8` (#14683, 10-13). The struct layout is unchanged. Ghostty.app has gated `osc8`
     since 08-05 and now gates `unknown` too: http/https/mailto with a host or address open,
     custom schemes ask first, and executable `file:` targets and control or bidi characters
-    are refused. warden opens every kind straight through `NSWorkspace`, which is a gap on
-    warden's side. Fixes that warden gets on its next revendor: a use-after-free when scrollback
+    are refused. The policy is Swift in the macOS app, not libghostty; warden ports it in
+    `surface/link.rs`. Fixes that warden gets on its next revendor: a use-after-free when scrollback
     prunes the cursor page (#14686), pty and terminal resizes synchronized (#14706), and
     CVDisplayLink start and stop moved to the main thread (#14691). The tmux control-mode viewer
     fixes and the libghostty-vt C API additions (prompt navigation, OSC 7501 rev 0.4,
