@@ -30,7 +30,9 @@ research:
       note: news.ycombinator.com rate-limits; items via /api/v1/items/<id>
     - name: Ghostty releases
       check: gh api repos/ghostty-org/ghostty/tags --jq '.[:3][].name'
-      note: the GitHub "release" is only the rolling tip; tags carry the versions
+      note: >-
+        the GitHub "release" is only the rolling tip; tags carry the versions. warden vendors a
+        main commit, not a release, so the main compare below is the source that matters
     - name: libghostty embedding API since warden's vendored commit
       check: >-
         gh api repos/ghostty-org/ghostty/compare/<commit>...main for include/ghostty.h,
@@ -347,6 +349,17 @@ than re-deriving the state from the web.
   - **Beta waves** (10-15): 250 invited the week of 10-05, about 2,000 the week of 10-12, and a
     1,000-person wave started on 10-15, in signup order. Almost 50,000 are still waiting, and
     wave size grows as stability holds.
+  - **Ghostty main, 140 commits past warden's `b115e45`** (10-09). One embedding-API change in
+    meaning: `OPEN_URL` kind `unknown` (regex-matched link text) is now documented as untrusted,
+    like `osc8` (#14683, 10-13). The struct layout is unchanged. Ghostty.app has gated `osc8`
+    since 08-05 and now gates `unknown` too: http/https/mailto with a host or address open,
+    custom schemes ask first, and executable `file:` targets and control or bidi characters
+    are refused. warden opens every kind straight through `NSWorkspace`, which is a gap on
+    warden's side. Fixes that warden gets on its next revendor: a use-after-free when scrollback
+    prunes the cursor page (#14686), pty and terminal resizes synchronized (#14706), and
+    CVDisplayLink start and stop moved to the main thread (#14691). The tmux control-mode viewer
+    fixes and the libghostty-vt C API additions (prompt navigation, OSC 7501 rev 0.4,
+    hierarchical context) don't reach `ghostty.h`.
 
 ## What this changes here
 
