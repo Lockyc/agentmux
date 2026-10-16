@@ -195,7 +195,7 @@ the tradeoff, not a bug to fix.
 Selftests "Fourth invariant" for the full reasoning).
 
 **What:** the cleanup trap is deliberately `EXIT`-only. POSIX-sh bash fires its `EXIT` trap
-even on an untrapped `SIGINT`, but `dash` (CI's `/bin/sh`) does not — so a Ctrl-C during
+even on an untrapped `SIGINT`, but `dash` (Debian/Ubuntu's `/bin/sh`) does not — so a Ctrl-C during
 `dash scripts/notes.sh` can leave one `/tmp/nt$$` directory behind. This is specific to
 dash; `bin/amux`'s own `EXIT`-only selftest trap never strands anything this way, because
 `bin/amux` is bash.

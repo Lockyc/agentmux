@@ -585,7 +585,7 @@ if [ "${NOTES_SELFTEST:-}" = "1" ]; then
     #
     # Coverage is shell-dependent and deliberately NOT total: /bin/sh (bash
     # in POSIX mode) runs an EXIT trap when it dies from an untrapped SIGINT,
-    # but dash does NOT — so under CI's dash, a Ctrl-C here strands one
+    # but dash does NOT — so under dash, a Ctrl-C here strands one
     # /tmp/nt$$. That is accepted: it is non-destructive, and it is specific
     # to POSIX-sh scripts run under dash. It does NOT match bin/amux's
     # behaviour — bin/amux is bash, and bash DOES fire its EXIT trap on an

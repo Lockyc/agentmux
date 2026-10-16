@@ -56,11 +56,9 @@ build than an ancient one).
 
 `test.sh` skips this check with a note when `expect`/`tmux` is missing, **or** when an
 installed tmux is below 3.6 (the message names the version found) — **except** under
-`AGENTMUX_REQUIRE_MOUSE_TESTS=1` (set by CI), where either condition fails the build
-instead. A self-skipping *regression test* silently stops protecting you wherever it
-skips, unlike an advisory linter, so CI must not be able to pass by skipping it — which
-is also why CI's workflow builds tmux from source when the packaged version lags,
-rather than relying on apt to already be new enough.
+`AGENTMUX_REQUIRE_MOUSE_TESTS=1` (an opt-in you set), where either condition fails the
+run instead. A self-skipping *regression test* silently stops protecting you wherever it
+skips, unlike an advisory linter, so set it when a skip must not pass for a green run.
 
 ## What it covers
 
