@@ -69,7 +69,7 @@ amux
 
 ## Prerequisites
 
-- tmux >= 3.6 (the notes feature's click-to-edit prefill uses `command-prompt -l`, added in that release)
+- tmux >= 3.6
 - `toml2json`: `brew install go-toml`
 - `jq`: `brew install jq`
 - A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
@@ -93,11 +93,11 @@ Normal shell commands — type them at a prompt.
 | `amux <agent>` | New/attach session, agent by name |
 | `amux <agent> <session>` | New/attach named session with specified agent |
 | `amux --sessions` | List agentmux agent sessions (name, agent, windows, attach state) |
-| `amux --sessions-json` | The same, as JSON keyed on project **directory** rather than name — always valid JSON (`[]` when nothing is running). For scripting, and how `amux @host` answers a whole host's liveness in one query instead of probing per project |
-| `amux attach <name>` | Attach to a running agent session by name, from any directory — resolves which project's per-project socket is hosting it |
+| `amux --sessions-json` | The same, as JSON keyed on project **directory** rather than name — always valid JSON (`[]` when nothing is running). For scripting |
+| `amux attach <name>` | Attach to a running agent session by name, from any directory |
 | `amux @<host> [project]` | Launch/attach a session on a remote host from `[[hosts]]` — see [Remote sessions](#remote-sessions) |
 | `amux --restore [--global]` | Pick dropped agent tabs (lost to a crash/reboot) to relaunch — this project by default, `--global` for all. Lands you exactly where a bare `amux` would: in a frame if this project sets `[frame] default = true` (`amux --no-frame --restore` opts out). Also offered automatically when you launch `amux` in a project with dropped tabs — that offer stands until you actually answer it, so closing the window at the prompt doesn't consume it |
-| `amux --probe [session]` | Exit 0 if a session exists — the agent **or** a lingering frame (default: current dir). Silent; for scripting a presence indicator (e.g. warden's cyan dot) off the exit code. With no `session` arg it matches only the session launched *from this dir*, so two projects sharing a folder name never cross-light — and exits **3** if there's no live session but a crashed one here is restorable (a plain `amux` launch would offer the restore picker), which warden renders as a ghost dot; **1** if there's nothing at all. An explicit `session` arg is a plain 0/1 presence check. Exit 3 is non-zero, so an `if amux --probe` consumer that only tests success still reads it as absent |
+| `amux --probe [session]` | Exit 0 if a session exists — the agent **or** a lingering frame (default: current dir). Silent; for scripting a presence indicator (e.g. warden's dot) off the exit code. With no `session` arg it matches only the session launched *from this dir*, and exits **3** if there's no live session but a crashed one here is restorable (a plain `amux` would offer the restore picker); **1** if there's nothing at all. An explicit `session` arg is a plain 0/1 presence check. `if amux --probe` reads 3 as absent |
 | `amux --kill [session]` | Kill an agent session **and** its frame + terminal (default: current dir). Like `--probe`, the no-arg form only reaps the session launched *from this dir* — a same-named sibling project is left alone |
 | `amux --suspend [session]` | `--kill`, but restorable: the agent tabs stay recorded as open, so `--probe` exits 3 (warden's ghost dot) and the next bare `amux` here offers them in the restore picker. For pausing a project to free its processes without losing its conversations |
 | `amux --kill-all` | Kill every agent session + all frames/terminals (asks first) |
@@ -106,8 +106,8 @@ Normal shell commands — type them at a prompt.
 | `amux --colours [grid\|names\|pick]` | Preview the colour palette: `grid` (curated names + 256 codes) or `names` (the raw palette-name list). `pick [agent]` interactively builds a paste-ready `colour =` line |
 | `amux --frame [agent] [session]` | Side-terminal layout: bare shell (left) + amux (right) as a nested tmux |
 | `amux --no-frame` | One-off plain launch when `[frame] default = true` is set (skips the frame) |
-| `amux --term [session]` | Attach (or create) this project's persistent scratch terminal **on its own** — the exact server and session a frame's left pane attaches, **including** the `[frame]` top-region shells (`left_vertical_split` / `left_top_panes` are built inside this session, not by the frame), for a host that supplies its own split (warden: `[split] cmd = "amux --term"` beside `cmd = "amux --no-frame"`). A frame started in a plain terminal and a warden pane therefore share one scratch column. Reaped by `--kill`; `--probe` ignores it (a shell is not a session) |
-| `amux --frames` | List active `--frame` wrappers (each lives on its own per-project tmux socket) |
+| `amux --term [session]` | Attach (or create) this project's persistent scratch terminal **on its own** — the same one a frame's left pane shows, **including** the `[frame]` top-region shells — for a host that supplies its own split (warden: `[split] cmd = "amux --term"` beside `cmd = "amux --no-frame"`). A frame and a `--term` pane share one scratch column. Reaped by `--kill`; ignored by `--probe` |
+| `amux --frames` | List active `--frame` wrappers |
 | `amux --frame-kill [session]` | Tear down a frame (wrapper + its left terminal) — or a frame-less scratch terminal started by `--term`; the agent keeps running |
 | `amux --frame-kill-all` | Tear down ALL frames + scratch terminals at once; agents keep running |
 | `amux --version` | Print the installed agentmux version |
@@ -140,22 +140,19 @@ All of these are pressed **after the prefix** (`C-b` by default).
 
 | Press | Effect |
 |---|---|
-| `prefix c` | New tab — auto-launches the current `@agent-mode` agent (tmux's built-in new-window key; agentmux just hooks it to launch the agent) |
+| `prefix c` | New tab — auto-launches the current `@agent-mode` agent |
 | `prefix x` | Close the current tab. On an agentmux session's last tab it opens a fresh agent tab first (as `prefix c` would), so the session survives; everywhere else it's tmux's kill-pane |
 | `prefix d` | Detach — leave the session running and return to your shell |
 | `prefix m` | Cycle `@agent-mode` through your defined agents (agentmux sessions only) |
-| `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched. agentmux already knows the session id and which wrapper to launch it with, so there is nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
+| `prefix f` | Fork this tab's agent session into a new tab beside it — the new tab resumes the same conversation as an independent branch, leaving the original untouched, with nothing to type. Agent tabs only; on a tab with no session yet (or an agent that can't fork) it says so and does nothing. Elsewhere the key stays tmux's `find-window` |
 | `prefix v` | Clear the state emoji (✅/📣/⚡…) off the current tab. One-shot — the next status hook re-adds one as normal; use it to acknowledge a done/notify tab. No-op on a tab with no emoji |
 | `prefix N` | Toggle this tab's three summary rows between the AI summary and notes 1-3. In notes mode, **click any of those rows** to edit it — the prompt opens prefilled with that row's current text (Enter commits, Escape cancels, an empty commit clears it). While the AI summary is showing, rows 1-3 are click-inert (a click does nothing) — press `prefix N` first. The optional fourth row (see [The always-on note row](#the-always-on-note-row)) is unaffected by this toggle and clickable either way. Notes are per-tab and live in memory: closing the tab (`prefix x`), a crash, `amux --kill`, or a reboot drops them. The AI summary keeps updating underneath, so toggling back shows a current one |
 
 ### Customizing tmux (per-role overlays)
 
 agentmux runs each agent — and, under `--frame`, the wrapper and scratch terminal —
-on its **own** tmux server that does **not** read your `~/.tmux.conf`. That isolation
-is deliberate: a config that loads a plugin manager (TPM) would run its synchronous
-plugin load on every cold per-project launch and stall it for seconds. agentmux
-re-sets the sensible defaults itself (escape-time, focus-events, scrollback, mouse,
-clipboard), so nothing an agent pane needs is lost. Your own `~/.tmux.conf` needs no
+on its **own** tmux server that does **not** read your `~/.tmux.conf`; it sets its own
+defaults (escape-time, focus-events, scrollback, mouse, clipboard). Your own `~/.tmux.conf` needs no
 agentmux line. Adding `source-file ~/.agentmux/tmux/agentmux.conf` there is only for
 running Claude in plain tmux outside amux (tab states, notifications), and it installs
 amux's hooks and `prefix v`/`prefix N` bindings on that regular server.
@@ -171,11 +168,6 @@ shared**:
 | `~/.agentmux/user.frame.tmux.conf` | the `--frame` wrapper |
 | `~/.agentmux/user.term.tmux.conf` | the `--frame` scratch terminal |
 
-They're separate on purpose: the frame runs a **different prefix** (`C-f`) and unbinds
-the window keys to hold its fixed layout, so one shared overlay would apply your
-`bind-key` to all three and break the frame. Per-role files keep every binding scoped
-to the surface you meant.
-
 ```bash
 cp ~/.agentmux/config/user.tmux.conf.example ~/.agentmux/user.agent.tmux.conf
 # edit it, then:
@@ -184,8 +176,7 @@ amux --reload        # applies the agent overlay to running agent servers
 
 You only need a file if you want to customize that role — an absent overlay changes
 nothing. Prefer copying the specific bindings/options you want rather than `source`-ing
-a full `~/.tmux.conf` that loads plugins (that reintroduces the cold-start stall the
-isolation removes). See the example file's header for the full caveats, including how
+a full `~/.tmux.conf` that loads plugins (plugin loading stalls every launch). See the example file's header for the full caveats, including how
 to share common settings across roles.
 
 ### Directory-based agent selection
@@ -206,16 +197,12 @@ Matching uses the logical path — `$PWD` as your shell shows it — and symlink
 ### Side-terminal layout (`--frame`)
 
 `amux --frame [agent] [session]` puts a persistent scratch terminal in the left
-pane beside amux in the right. It's a nested tmux on its own **per-project** socket
-(`agentmux-frame-<hash>`, session `<session>-frame`), so amux runs completely unchanged
-on the right. There are **three status bars**: a thin full-width outer bar (the
+pane beside amux in the right. There are **three status bars**: a thin full-width outer bar (the
 frame, showing the project + clock), and a per-pane bar under each side — the left
 terminal's own tab bar and amux's.
 
-- The **left pane is its own dedicated tmux** on a separate per-project `agentmux-term-<hash>` socket
-  (config `tmux/term.conf`): its own tab bar, and it **never dies** — exit the
-  shell and it respawns. It's a bare tmux (not your `~/.tmux.conf`), kept isolated
-  on purpose.
+- The **left pane is its own dedicated tmux**: its own tab bar, and it **never dies** —
+  exit the shell and it respawns.
 - **Prefixes:** the frame uses `C-f` ("f" for frame — `C-f h`/`l` focus left/right,
   `C-f j`/`k` move within the split left column, `C-f H`/`L` resize, `C-f 0` reset the
   split back to `[frame] left`, `C-f Q` quit, `C-f d` detach), overridable via
@@ -224,16 +211,14 @@ terminal's own tab bar and amux's.
   the frame passes through to whichever pane is focused: left → the terminal's tabs,
   right → amux. A stray `prefix d` on either pane is harmless — the pane re-attaches
   in place rather than vanishing (use `C-f d` to detach the whole frame). The `[amux]`
-  and `[frame]` prefixes must differ: the frame grabs its own prefix before the inner
-  amux can see it, so a colliding `[amux] prefix` is ignored (with a warning).
+  and `[frame]` prefixes must differ; a colliding `[amux] prefix` is ignored (with a
+  warning).
 - Set the left-pane width with `[frame] left = <percent>` (default `30`).
   Optionally split the left column top/bottom with `[frame] left_vertical_split =
   <percent>` (the top region's height, `10`–`90`; unset = single left pane). The
-  top region is plain shells stacked **inside the scratch terminal's own tmux** —
-  panes of its first window, above the scratch pane, whose tab bar stays at the
-  bottom — so the same column appears wherever that session is attached, `--frame`
-  or `--term`. Reach the top shells with the mouse, `C-f j`/`k` (the frame forwards
-  them to the inner terminal), or the terminal's own `C-b` pane keys; a top shell
+  top region is plain shells above the scratch pane (whose tab bar stays at the
+  bottom), under both `--frame` and `--term`. Reach the top shells with the mouse,
+  `C-f j`/`k`, or the terminal's own `C-b` pane keys; a top shell
   closes on `exit` like any plain shell (only the scratch pane respawns). Stack more
   than one shell in the top region with `[frame] left_top_panes = <count>` (`1`–`6`,
   default `1`, equal-height, full-width; needs `left_vertical_split`) — e.g.
@@ -243,8 +228,7 @@ terminal's own tab bar and amux's.
   or `"terminal"` (the left column); `[frame] status_position` places the frame's
   outer status bar at `"bottom"` (default) or `"top"`. Frame
   config applies when the frame **and its scratch terminal** are **created** — both
-  persist and keep their layout (the left column's split lives in the scratch
-  terminal, so it survives the frame too), so after changing it, tear them down
+  persist and keep their layout, so after changing it, tear them down
   (`C-f Q` or `amux --frame-kill <session>`, both of which drop the terminal as
   well) and relaunch. Killing only the agent session leaves the wrapper, which
   reattaches at the old size.
@@ -257,8 +241,7 @@ terminal's own tab bar and amux's.
   tmux: the frame is its own tmux server, so nesting it stacks prefixes (your outer
   `C-b`, the frame's `C-f`, the scratch terminal's). Advanced users already living
   in tmux can opt in with `[frame] allow_nested = true`, which lifts the guard (and
-  the `default` skip above, so a default frame opens in-tmux too). The frame's own
-  panes already clear `$TMUX`, so the inner amux/terminal still launch cleanly.
+  the `default` skip above, so a default frame opens in-tmux too).
 - **Per-directory overrides.** Any `[frame]` field can be overridden for a
   directory (and its subtree) with a `[frame.dirs."<path>"]` block — same
   matching as an agent's `dirs` (`~` expands, longest path wins), resolved
@@ -271,16 +254,11 @@ terminal's own tab bar and amux's.
   ```
 - Run it from a plain terminal, not from inside tmux. Reattach with the same
   `amux --frame <session>` (a closed pane is rebuilt).
-- **Three sessions, each on its own per-project socket.** `<session>` (your agent),
-  `<session>-frame` (the wrapper), and `<session>-term` (the left terminal) each live
-  on their **own per-project socket** (`agentmux-agent-<hash>` / `agentmux-frame-<hash>`
-  / `agentmux-term-<hash>`, where `<hash>` is derived from the project's directory).
-  Every project gets its own agent/frame/term tmux servers, so a busy agent streaming
-  output in one project never slows your typing in another. The frame is the *outer*
-  layer in the nesting sense, but each lives on its own socket so their stripped
-  configs never bleed into your normal tmux — which is also why **none of this shows
-  up in a plain `tmux ls`**: agentmux sessions live off your default tmux socket
-  entirely. Use `amux --sessions` (agents) and `amux --frames` (frames) instead.
+- **Three sessions per project.** `<session>` (your agent), `<session>-frame` (the
+  wrapper), and `<session>-term` (the left terminal) each run on their own per-project
+  tmux server, so a busy agent in one project never slows another. **None of them
+  shows up in a plain `tmux ls`** — use `amux --sessions` (agents) and `amux --frames`
+  (frames) instead.
 - **Managing it from the base terminal:**
   - Leave the frame from inside: `C-f d` (detach, all kept) or `C-f Q` (quit the
     wrapper; the agent survives, reattach later).
@@ -293,8 +271,8 @@ terminal's own tab bar and amux's.
     its frame and terminal (default: current dir's). Use this instead of a raw
     `tmux kill-session` so nothing is left orphaned. `amux --sessions` lists the
     exact session names.
-  - `amux attach <name>` — attach to an agent session by name from any directory
-    (it finds which project's socket is hosting it); useful when you're not
+  - `amux attach <name>` — attach to an agent session by name from any directory;
+    useful when you're not
     currently `cd`'d into that project.
 
 ## Remote sessions
@@ -310,7 +288,7 @@ transport = "ssh"                         # ssh (default) | et | mosh
 agent = "work"                            # optional: agent to pass to the remote amux
 ```
 
-There is deliberately **no `user`/`port`/`key`/`password` field** — `ssh` names an ssh target or a `~/.ssh/config` `Host` alias, and ssh owns reaching it. If `ssh buildbox` works, `amux @buildbox` works, and no credential lives in `amux.toml`.
+There is no `user`/`port`/`key`/`password` field: `ssh` names an ssh target or a `~/.ssh/config` `Host` alias. If `ssh buildbox` works, `amux @buildbox` works.
 
 Four invocation forms:
 
@@ -328,7 +306,7 @@ Like a plain launch, `amux @host` refuses to run from inside an existing tmux �
 **Transports**, set per host with `transport =`:
 - **`ssh`** (default) — stock, multiplexed (`ControlMaster`), full escape transparency. The right default for most links.
 - **`et`** (Eternal Terminal) — a transparent byte stream with its own automatic reconnect/roaming. Needs `et` installed locally and `etserver` on the remote.
-- **`mosh`** — supported for genuinely bad links, but it re-emulates the terminal and forwards only escapes it knows, so desktop notifications (OSC 777), OSC 52 clipboard and tmux passthrough silently stop working. agentmux warns once per host when you use it; prefer `ssh` or `et` unless the link needs it.
+- **`mosh`** — for genuinely bad links; desktop notifications (OSC 777), OSC 52 clipboard and tmux passthrough don't work over it. agentmux warns once per host when you use it; prefer `ssh` or `et` unless the link needs it.
 
 Nothing new to install locally for the default `ssh` transport. On the remote, if agentmux isn't found, `amux @host` offers to install it (the same `curl | bash` from [Install](#install)) before continuing — an offer you can decline.
 
@@ -377,7 +355,7 @@ Per-directory overrides: `[amux.dirs."<path>"]` blocks, matched like an agent's 
 
 | Key | Default | What it does |
 |---|---|---|
-| `prefix` | tmux's `C-b` (or your `user.agent.tmux.conf` prefix) | Prefix for the amux session only (a session option). Must differ from the `[frame]` prefix — a colliding value is ignored with a warning, since the frame would shadow it. Cascades to `[amux.dirs]` |
+| `prefix` | tmux's `C-b` (or your `user.agent.tmux.conf` prefix) | Prefix for the amux session only. Must differ from the `[frame]` prefix — a colliding value is ignored with a warning. Cascades to `[amux.dirs]` |
 | `session_colour` | — (auto-assigned) | Pin this directory's status-bar colour by name (`amux --colours` lists them) and reserve it from the auto-assign pool. Only meaningful inside a `[amux.dirs."<path>"]` block. See [Session colours](#session-colours) |
 
 ### `[frame]` — the `--frame` side-terminal layout
@@ -388,7 +366,7 @@ Per-directory overrides: `[frame.dirs."<path>"]` blocks, resolved per field. See
 |---|---|---|
 | `left` | `30` | Left (scratch terminal) pane width, percent |
 | `prefix` | `C-f` (from `tmux/frame.conf`) | The frame's own prefix for focus/resize/quit. Must differ from the `[amux]` prefix |
-| `left_vertical_split` | unset (single left pane) | Percent height (`10`–`90`) of a top region of plain shells above the scratch terminal — built inside the scratch terminal's own session, so `--term` shows it too |
+| `left_vertical_split` | unset (single left pane) | Percent height (`10`–`90`) of a top region of plain shells above the scratch terminal — shown under `--term` too |
 | `left_top_panes` | `1` | Plain shells stacked in that top region (`1`–`6`); needs `left_vertical_split` |
 | `focus` | `"agent"` | Pane focused at launch: `"agent"` (right) or `"terminal"` (left column) |
 | `status_position` | `"bottom"` | Where the frame's status bar sits: `"bottom"` or `"top"` |
@@ -427,7 +405,7 @@ Any OpenAI-compatible `/v1/chat/completions` server (LM Studio, Ollama, llama.cp
 
 ### `[[hosts]]` — remote machines for `amux @<name>`
 
-See [Remote sessions](#remote-sessions). There is deliberately no user/port/key field: `ssh` names a target or `~/.ssh/config` alias and ssh owns reaching it.
+See [Remote sessions](#remote-sessions).
 
 | Key | Default | What it does |
 |---|---|---|
@@ -459,7 +437,7 @@ An adapter is a thin shim that:
    | `AGENTMUX_HOOK_PROMPT` | Latest user prompt (working state only) |
    | `AGENTMUX_HOOK_TRANSCRIPT` | Filesystem path to the agent's session transcript (working state only) |
 
-The shared core is hook-schema-agnostic — it consumes only those env vars, never stdin. Hook-payload parsing belongs in the adapter because every agent has a different schema.
+The shared core reads only those env vars, never stdin — parse the hook payload in the adapter.
 
 Two optional overrides let an adapter swap in custom helpers; defaults work for everyone:
 
@@ -470,18 +448,18 @@ Two optional overrides let an adapter swap in custom helpers; defaults work for 
 
 **Contracts for `ctx.sh` and `digest.sh`** (both read the transcript path as `$1`):
 
-- `ctx.sh <transcript> <max_msgs> [percap] [head|tail|todos]` — prints prose-only turns joined by ` / `; used to derive the stable subject and to anchor recent activity. Filters out tool noise and pasted dumps. `head`/`tail` select the earliest/most-recent turns; `todos` emits the latest task-list snapshot (the session's goal/plan) — the shared core calls all three, so an adapter must handle `todos` too or the plan anchor silently stays empty.
+- `ctx.sh <transcript> <max_msgs> [percap] [head|tail|todos]` — prints prose-only turns joined by ` / `. Filters out tool noise and pasted dumps. `head`/`tail` select the earliest/most-recent turns; `todos` emits the latest task-list snapshot (the session's goal/plan). An adapter must support all three modes.
 - `digest.sh <transcript> [start_line] [char_budget]` — prints a chronological digest (prose + mutating tool one-liners) for the done/now/next summariser. Drops oldest prose first when over budget; keeps tool lines.
 
-Both must print nothing and exit 0 on any error — the shared core treats them as cosmetic.
+Both must print nothing and exit 0 on any error.
 
-To add e.g. a Gemini CLI adapter: create the adapter's `{status,ctx,digest}.sh` following the Claude versions and wire your agent's hook system to call its `status.sh <state>` (by absolute path) with `state` ∈ `start|working|notify|permission|done`. `install.sh` doesn't wire adapters — it only clones/updates the repo, so any adapter agentmux *ships* (e.g. a future tracked `scripts/gemini/`) is already present in the clone, but your **own** adapter and its hook wiring are manual and live outside the clone (see below).
+To add e.g. a Gemini CLI adapter: create the adapter's `{status,ctx,digest}.sh` following the Claude versions and wire your agent's hook system to call its `status.sh <state>` (by absolute path) with `state` ∈ `start|working|notify|permission|done`. `install.sh` doesn't wire adapters; your own adapter and its hook wiring are manual and live outside the clone (see below).
 
 **Keep custom adapters outside the shipped tree.** `~/.agentmux/` is a git clone and `amux --update` runs `git pull --ff-only`. Because adapters are referenced by absolute path — the hook command plus the `AGENTMUX_CTX_BIN`/`AGENTMUX_DIGEST_BIN` (and other `AGENTMUX_*_BIN`) overrides — they can live anywhere on your filesystem. Put your own under e.g. `~/.agentmux-local/<agent>/` and point your hook command and env-var overrides at those paths. Avoid authoring an adapter under `~/.agentmux/scripts/<name>/` using a name agentmux might later ship: if a future release adds a tracked `scripts/<name>/`, `amux --update` will refuse to proceed rather than overwrite your file, blocking updates until you relocate it.
 
 ## Shell support
 
-`amux` works in **bash**, **zsh**, and **fish**. All of the launcher logic lives in a single standalone bash executable — `bin/amux`, the one source of truth — and each interactive shell just sources a thin wrapper that defines the `amux` command and wires tab-completion. The launcher runs as a subprocess, so **bash must be installed**, but it does not have to be your interactive shell.
+`amux` works in **bash**, **zsh**, and **fish**. **bash must be installed**, but it does not have to be your interactive shell.
 
 | Shell | `amux` command | Tab-completion | Integration file | Source from |
 |---|---|---|---|---|
@@ -532,24 +510,19 @@ The `claude/status.sh` hook drives an emoji on the tmux tab label reflecting Cla
 }
 ```
 
-The `--notify` flag emits a standard **OSC 777 desktop-notification** escape *through the terminal* (tmux-passthrough-wrapped, so it needs `allow-passthrough on` — set in `agentmux.conf`). The hook wraps the escape **once per nested tmux layer**, so it reaches the host even under `--frame` (where the agent runs two tmux deep: frame → agent) — a single wrap would be unwrapped by the inner tmux and then dropped by the frame. A notification-aware host such as [warden](https://github.com/lockyc/warden) ties the alert to the agent's own tab (badge + macOS banner); plain Ghostty raises a system notification. A host that doesn't understand OSC 777 simply ignores it. Remove `--notify` if you don't want alerts.
+The `--notify` flag emits a standard **OSC 777 desktop-notification** escape *through the terminal*, including from inside a `--frame`. A notification-aware host such as [warden](https://github.com/lockyc/warden) ties the alert to the agent's own tab (badge + macOS banner); plain Ghostty raises a system notification. A host that doesn't understand OSC 777 simply ignores it. Remove `--notify` if you don't want alerts.
 
 ## AI summary status lines
 
-The 3-row status bar shows a rolling `done / now / next` summary of the active session. `agentmux.conf` already wires `status-format[1-3]` to the `@amux_row1/2/3` pane options that `tmux-status.sh` pushes (event-driven — no polling); you just need a local LLM endpoint and the Claude Code hooks above.
+The 3-row status bar shows a rolling `done / now / next` summary of the active session. It needs a local LLM endpoint and the Claude Code hooks above.
 
 **Requirements:**
 - A local OpenAI-compatible LLM endpoint with a small non-reasoning instruct model loaded (e.g. LM Studio at `localhost:1234` with `qwen2.5-14b-instruct`, or Ollama at `localhost:11434`)
 - Claude Code hooks wired (above) — the `working` hook triggers the summariser
 
-The coloured status bar and 3 extra summary rows only appear in `amux` sessions (`@autoagent=1`). Plain tmux sessions are left unstyled with a single status line.
+The coloured status bar and 3 extra summary rows only appear in `amux` sessions. Plain tmux sessions are left unstyled with a single status line.
 
-**Pipeline** (runs detached on every `working` hook):
-1. `claude/ctx.sh` — extracts recent prose turns from the Claude Code transcript
-2. `claude/digest.sh` — compacts the session into a chronological digest (prose + mutating tool actions)
-3. `summarise.sh` (stand mode) — sends the digest to a local OpenAI-compatible endpoint; receives `"<subject>. done: …; now: …; next: …"`
-4. Result saved to the writer's per-pane status file (internal state — lets a later failed refresh keep the last-good rows rather than blank them)
-5. The three rows are rendered (`summary_rows.sh --stdin`) and **pushed** into the `@amux_row1/2/3` pane options; `status-format[1-3]` reads those options (`#{@amux_rowN}`), so a status redraw substitutes them and spawns nothing — no `#()` poll
+On every `working` hook, agentmux digests the transcript in the background and asks the endpoint for a `<subject>. done: …; now: …; next: …` line. If a refresh fails, the last good rows stay.
 
 Override the endpoint or model with environment variables:
 
@@ -559,7 +532,7 @@ export AGENTMUX_LLM_MODEL=qwen2.5-14b-instruct
 export AGENTMUX_LLM_TIMEOUT=45   # seconds
 ```
 
-**Non-Claude agents:** any agent can participate by pushing the three rendered rows into its pane's `@amux_row1/2/3` options — the same options `status-format` reads (the display is event-driven; there is no status file to poll). Render each row from your summary line with `summary_rows.sh --stdin <row>`, set the option on your own pane, and refresh:
+**Non-Claude agents:** any agent can participate by pushing the three rendered rows into its pane's `@amux_row1/2/3` options. Render each row from your summary line with `summary_rows.sh --stdin <row>`, set the option on your own pane, and refresh:
 
 ```sh
 summary="…"   # "<subject>. done: …; now: …; next: …"
@@ -581,19 +554,17 @@ An optional **fourth status row** is a note line that stays on screen all the ti
 row = true
 ```
 
-(`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) Apply a change to it with **`amux --reload`**, which pushes it to every live agent session at once — in both directions, without detaching. Running `amux` in the project again also works (a re-attach is enough; you don't have to kill the session), since the setting is published on every launch. Under `--frame` that launch-path publish rides the frame's build, so a relaunch reusing a healthy frame keeps the previous setting until the frame itself is rebuilt — `--reload` reaches it regardless.
+(`[notes.dirs."<path>"]` scopes it per directory, the same shape as `[frame]`'s — see `config/amux.toml.example`.) Apply a change to it with **`amux --reload`**, which pushes it to every live agent session at once — in both directions, without detaching. Running `amux` in the project again also works (a re-attach is enough; you don't have to kill the session), except under a reused `--frame`, which keeps the previous setting until the frame is rebuilt; `--reload` reaches it regardless.
 
 Click the row — or its empty-state hint, `✎ click to add a note` — to write or edit it, the same prompt rows 1-3 use in notes mode. The prompt opens **on the row you clicked**, so it never covers the tab bar while you type.
 
 The row starts with a small button. While the row holds a note it shows `⧉` — click it to **copy the note and clear the row** in one action; the text goes to your system clipboard *and* the tmux paste buffer (`prefix ]` to paste it into a pane), so it survives even where no clipboard tool is available. The button then becomes `↩`, and one more click **restores the note**. The undo is a single level, not a stack: once restored, the button goes back to `⧉`. Every row currently showing a note leads with `✎`, empty or not, so the note rows are identifiable at a glance. `prefix N` still only swaps rows 1-3 between the AI summary and notes 1-3; row 4 stays put and stays clickable regardless of that mode.
 
-Five is tmux's own maximum number of status lines, which is why there's no fifth agentmux row.
-
 ## Session colours
 
-Each session gets a status-bar colour seeded from a stable hash of its name, so the same project usually lands on the same colour with no config. The summary rows use a matching shade of the same hue, and colours update automatically on attach. The colour is frozen for a session's lifetime — it never moves while the session lives, regardless of what else starts or stops.
+Each session gets a status-bar colour derived from its name, so the same project usually lands on the same colour with no config. The summary rows use a matching shade of the same hue, and colours update automatically on attach. The colour is frozen for a session's lifetime — it never moves while the session lives, regardless of what else starts or stops.
 
-Two project names can hash to the same slot, and then the two projects share a colour — on every run, since each project runs on its own tmux server and its colour is chosen without looking at the others. (Several named sessions of one project share its server and do de-dup onto distinct colours.) To give a project a distinct, fixed colour, **pin it**:
+Two projects can land on the same colour, and then share it on every run. (Several named sessions of one project always get distinct colours.) To give a project a distinct, fixed colour, **pin it**:
 
 ```toml
 [amux.dirs."~/Developer/github.com/you/myproject"]
