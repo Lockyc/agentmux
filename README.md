@@ -1,7 +1,6 @@
 # agentmux
 
 [![Release](https://img.shields.io/github/v/release/lockyc/agentmux?sort=semver&label=release)](https://github.com/lockyc/agentmux/releases/latest)
-[![CI](https://github.com/lockyc/agentmux/actions/workflows/ci.yml/badge.svg)](https://github.com/lockyc/agentmux/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-555)
 ![Built with tmux](https://img.shields.io/badge/built%20with-tmux-1BB91F?logo=tmux&logoColor=white)
 [![License](https://img.shields.io/github/license/lockyc/agentmux)](LICENSE)

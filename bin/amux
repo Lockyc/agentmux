@@ -2159,7 +2159,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   #     ledger's cwd comes from tmux (getcwd). Two spellings of one dir therefore
   #     fork the project in two. A SYMLINKED dir is the portable lever for this (a
   #     case-only variant needs a case-insensitive filesystem, so it can't be
-  #     asserted on CI); both spellings resolve through the same getcwd, so this
+  #     asserted portably); both spellings resolve through the same getcwd, so this
   #     covers the case-variant bug it was written for. Run in subshells: the
   #     helper cd's, and the selftest's own cwd must not move.
   _cp_tmp=$(mktemp -d); mkdir -p "$_cp_tmp/real"; ln -s "$_cp_tmp/real" "$_cp_tmp/link"

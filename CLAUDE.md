@@ -238,15 +238,11 @@ by default (`[update] check`, or `AGENTMUX_VERSION_CHECK`).
 `bash test.sh` (repo root) is the aggregate "run everything" entry point: it runs
 shellcheck, the `fish -n` syntax check, every selftest below, and the
 `tests/mouse` click suite; it prints a per-check pass/fail line and a summary, and
-exits non-zero if anything fails. It's runnable from any cwd and is what CI runs
-(`.github/workflows/ci.yml`, on push to `main`, every PR, and manual dispatch — the runner
-installs `tmux` and `expect`, then a dedicated step builds tmux from source when
-the packaged version is below the click suite's 3.6 floor, so the tmux-gated
-selftests and the click suite actually run rather than self-skip).
+exits non-zero if anything fails. It's runnable from any cwd and is the gate — nothing
+else runs it, so run it before work is called done.
 
 **On a heavily-loaded machine, prefer the individual selftests below for local
-checks and run the aggregate `bash test.sh` once the machine has headroom — CI
-runs it only for `main` and PRs, so a `dev` push is never checked for you.** It's bounded — one
+checks and run the aggregate `bash test.sh` once the machine has headroom.** It's bounded — one
 shellcheck call plus strictly-sequential selftests, no infinite fan-out — but it
 does spike process count, not worth stacking on a machine already near its
 per-user process limit. (It once contributed to a process-table lockup, but only
@@ -311,7 +307,7 @@ development, when an un-isolated run set `@amux_note1` on a live pane. Isolating
 sockets are created, not which server a bare `tmux` resolves. Save `$TMUX`, point it
 at the throwaway socket (ask tmux for it, `display-message -p '#{socket_path}'`, the
 way `session_log.sh` does — don't hand-build the path from `TMUX_TMPDIR`'s layout),
-and restore it on every exit path alongside `TMUX_TMPDIR`. In a clean CI environment
+and restore it on every exit path alongside `TMUX_TMPDIR`. In a clean environment
 with no ambient `$TMUX` the unfixed version still fails, just without the
 contamination: bare `tmux` resolves to socket `default`, which the test never creates.
 This is the mirror image of the CLI-path/hook-path split in Footguns above — that one
@@ -329,7 +325,7 @@ value. `bin/amux`'s selftest is the precedent for the trap list — `EXIT` only.
 done-guard is the second half and is `notes.sh`'s own: `bin/amux` needs none because
 nothing calls its cleanup a second time, whereas a block that also cleans up on its
 normal fall-through must be safe to run twice. Accepted cost
-of `EXIT`-only: under `dash` (CI's `/bin/sh`) an untrapped `SIGINT` doesn't fire the
+of `EXIT`-only: under `dash` (Debian/Ubuntu's `/bin/sh`) an untrapped `SIGINT` doesn't fire the
 `EXIT` trap either, so one throwaway dir is stranded — non-destructive, and specific to
 POSIX-sh scripts run under dash. It does **not** match `bin/amux`'s behaviour: `bin/amux`
 is bash, and bash **does** fire its `EXIT` trap on an untrapped `SIGINT`, so it never
@@ -401,11 +397,10 @@ release; the floor and the `tmux -V` parse are single-sourced in
 `scripts/tmux_version.sh`, consumed by both `tests/mouse/run.sh`'s preflight (hard
 abort) and `test.sh`'s classification below. `test.sh` skips this check with a note
 when `expect`/`tmux` is missing **or** an installed tmux is below 3.6 (the message
-names the version found), **except** under `AGENTMUX_REQUIRE_MOUSE_TESTS=1` (set by
-CI), where either condition fails instead: a self-skipping *regression* test stops
-protecting you wherever it skips, unlike an advisory linter, so CI must not be able
-to pass by skipping it — CI's workflow also builds tmux from source when the
-packaged version lags, so the runner is actually capable rather than hoped to be.
+names the version found), **except** under `AGENTMUX_REQUIRE_MOUSE_TESTS=1` (an opt-in you
+set), where either condition fails instead: a self-skipping *regression* test stops
+protecting you wherever it skips, unlike an advisory linter, so set it when a skip
+must not pass for a green run.
 
 It is **slower than the other selftests (~1 minute)** — it drives real pty clients
 and must settle between clicks — so run it directly while iterating and let `test.sh`

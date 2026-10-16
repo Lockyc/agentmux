@@ -122,11 +122,11 @@ run_selftest tmux_version        env TMUX_VERSION_SELFTEST=1        sh scripts/t
 # settle delays — hence last.
 #
 # A self-skipping REGRESSION test stops protecting you wherever it skips, unlike
-# an advisory linter, so AGENTMUX_REQUIRE_MOUSE_TESTS=1 (set in CI) turns a
+# an advisory linter, so AGENTMUX_REQUIRE_MOUSE_TESTS=1 (an opt-in) turns a
 # missing dependency, OR an installed tmux too old for the suite's
 # `command-prompt -l` (needs >= 3.6 — see scripts/tmux_version.sh), into a
 # failure rather than a skip. The three outcomes are classified distinctly so a
-# CI failure explains itself instead of reading like a flaky test:
+# failure explains itself instead of reading like a flaky test:
 #   dependency missing      -> skip (fail under AGENTMUX_REQUIRE_MOUSE_TESTS=1)
 #   tmux present, too old   -> skip (fail under AGENTMUX_REQUIRE_MOUSE_TESTS=1),
 #                               message names the version found

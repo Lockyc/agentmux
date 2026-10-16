@@ -1065,7 +1065,7 @@ STUB
   # sh program against a local temp tree. The bootstrap command is not — it is the
   # real `curl … | bash` one-liner, so exec'ing it makes every selftest run a live
   # download-and-execute from the internet, and on a machine with no ~/.agentmux
-  # (every CI runner) it clones agentmux into the REAL $HOME. Offline, and leaving
+  # (any fresh machine) it clones agentmux into the REAL $HOME. Offline, and leaving
   # nothing in the user's home, are both invariants of this suite (see CLAUDE.md).
   # Recording the command also carries strictly more information than a bare
   # marker: it pins WHAT the transport was asked to run.
