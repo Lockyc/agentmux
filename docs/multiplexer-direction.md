@@ -20,6 +20,24 @@ research:
         x.com fails TLS. X is the primary channel. The hachyderm.io API (browser user-agent,
         /api/v1/accounts/lookup?acct=mitchellh) is only a partial mirror and missed every post
         from 10-11 to 10-15. Charts are media URLs with no alt text, so read them as images.
+    - name: Other Superlogical staff on X
+      check: the fxtwitter route above, for almonk (Alasdair Monk) and pearkes (Jack Pearkes)
+      note: Activity Mode and beta-wave news surfaced through these accounts before the company's
+    - name: Hashimoto's blog
+      check: https://mitchellh.com/feed.xml
+      note: the OSC 7501 rationale and the Ghostty-leaving-GitHub plan were posted here, not on the devlog
+    - name: Rex docs
+      check: >-
+        the page list in https://www.superlogical.com/rex/docs/llms.txt (whole text at
+        llms-full.txt); https://www.superlogical.com/rex/docs/search.json?q=attach (also
+        q=protocol) shows whether the unlock has been documented
+      note: >-
+        docs change without a devlog post. The community MCP server
+        (superlogical.com/rex/community-mcp) carries the beta Discord's feedback, but signing in
+        to it needs Discord membership, so only a human can read it
+    - name: Superlogical GitHub org
+      check: gh api orgs/superlogical/repos --jq '.[].full_name'
+      note: the org exists with no public repos; a first repo is the likely home for code, a protocol spec or a license
     - name: YouTube devlogs
       check: yt-dlp --flat-playlist --playlist-end 5 --print '%(id)s %(title)s' https://www.youtube.com/channel/UC0gjVbm7HY5GzDTo5NbQruA/videos
       note: >-
@@ -42,6 +60,19 @@ research:
         crates/warden-app/vendor/PROVENANCE.md
     - name: libghostty PRs (snapshot, OSC 7501, multiplexer)
       check: gh search prs --repo ghostty-org/ghostty --merged-at '>=<as-of>'
+      note: >-
+        Ghostty plans to leave GitHub (mitchellh.com, 2026-04-28; destination not yet named),
+        keeping a read-only mirror at the current URL. Once it moves, this search goes silent,
+        while the tag and compare checks keep working on the mirror. A sudden empty result means
+        the project has moved, not that work has stopped
+    - name: OSC 7501 in the layers between agent and warden
+      check: >-
+        gh search issues --repo tmux/tmux 7501 and gh api repos/tmux/tmux/tags; grep 7501 in
+        https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md and in gh
+        release list -R openai/codex
+      note: >-
+        whether an agent under amux emits at all depends on tmux answering the query and on
+        the agent's emit rules (see "Agent status reaches warden from Rex")
     - name: Press
       check: web search "Superlogical Rex" (The Register, InfoWorld, XenoSpectrum have covered it)
 ---
@@ -366,8 +397,23 @@ than re-deriving the state from the web.
 - **2026-10-18** — status check: nothing since 10-16 beyond another 1,000 beta invites (X, 10-16).
   No devlog, video, HN story or new press; no Ghostty release; main is 11 commits past warden's
   `b3dc3d7` with none touching `ghostty.h`, `embedded.zig` or the snapshot code.
-- **2026-10-19** — status check: nothing since 10-18. Ghostty main is 18 commits past `b3dc3d7`,
-  still none touching `ghostty.h`, `embedded.zig` or the snapshot code.
+- **2026-10-19** — no Superlogical devlog, video, X post or HN story since 10-18. Ghostty main is
+  18 commits past `b3dc3d7`, with none touching `ghostty.h`, `embedded.zig` or the snapshot code.
+  This check added the sources above and found three things the ledger had missed:
+  - **tmux declined OSC 7501** (tmux/tmux#5713, opened 10-09, closed 10-13). nicm: "This seems
+    premature… between pane titles, OSC 9 progress bars and OSC 133 we have enough coverage of
+    this kind of thing for the moment, let's see if this one takes off." tmux 3.8 (10-08) doesn't
+    answer the query, so Claude Code still never emits under amux. A third-party patch onto tmux
+    master (`autonomous-low-noise/tmux@4a77824`, 10-18) answers the query and keeps each pane's
+    record as `pane_ps_*` formats. Nothing ships it.
+  - **Ghostty is leaving GitHub** (mitchellh.com, 04-28). The destination is still in talks with
+    "multiple providers (both commercial and FOSS)", the move will be incremental, and a read-only
+    mirror stays at the current URL. As of today, PRs still merge on GitHub.
+  - **The Rex docs have grown to 22 pages.** New since 10-09: a built-in agent skill for Claude Code
+    and Codex (open tabs, split panes, read a screen, drive connected apps), and a read-only MCP
+    server over the docs and the beta Discord's feedback, open to Discord members. There's still
+    nothing on attach, the wire protocol or a license. The privacy page says Rex has no account or
+    license checks.
 
 ## What this changes here
 
