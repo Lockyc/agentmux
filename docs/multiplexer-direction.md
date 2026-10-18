@@ -12,8 +12,8 @@ research:
     (`ghostty.h`) or the terminal-state pieces (snapshot, OSC 7501) warden consumes.
   sources:
     - name: Superlogical devlog
-      check: https://superlogical.com/updates/rss.xml
-      note: the Rex docs serve raw Markdown at /rex/docs/<page>.md
+      check: https://www.superlogical.com/updates/rss.xml
+      note: the bare domain 308-redirects to www (curl -L); the Rex docs serve raw Markdown at /rex/docs/<page>.md
     - name: Hashimoto's and Superlogical's X posts
       check: curl -A <browser UA> https://api.fxtwitter.com/2/profile/<mitchellh|superlogical>/statuses (one post, quote included, at /status/<id>)
       note: >-
@@ -21,10 +21,12 @@ research:
         /api/v1/accounts/lookup?acct=mitchellh) is only a partial mirror and missed every post
         from 10-11 to 10-15. Charts are media URLs with no alt text, so read them as images.
     - name: YouTube devlogs
-      check: https://www.youtube.com/feeds/videos.xml?channel_id=UC0gjVbm7HY5GzDTo5NbQruA
+      check: yt-dlp --flat-playlist --playlist-end 5 --print '%(id)s %(title)s' https://www.youtube.com/channel/UC0gjVbm7HY5GzDTo5NbQruA/videos
       note: >-
-        the page is an SPA; transcripts via yt-dlp --write-auto-subs (the cookie-rotation
-        warning is noise). The @Mitchellh3 handle does not resolve.
+        the channel's RSS feed (/feeds/videos.xml?channel_id=…) returns 404 with or without a
+        browser user-agent, and the page is an SPA; the flat listing gives no upload dates, so
+        compare ids against the ledger. Transcripts via yt-dlp --write-auto-subs (the
+        cookie-rotation warning is noise). The @Mitchellh3 handle does not resolve.
     - name: Hacker News
       check: https://hn.algolia.com/api/v1/search_by_date?query=superlogical&tags=story (also query=rex, query=OSC 7501)
       note: news.ycombinator.com rate-limits; items via /api/v1/items/<id>
@@ -361,6 +363,9 @@ than re-deriving the state from the web.
     CVDisplayLink start and stop moved to the main thread (#14691). The tmux control-mode viewer
     fixes and the libghostty-vt C API additions (prompt navigation, OSC 7501 rev 0.4,
     hierarchical context) don't reach `ghostty.h`.
+- **2026-10-18** — status check: nothing since 10-16 beyond another 1,000 beta invites (X, 10-16).
+  No devlog, video, HN story or new press; no Ghostty release; main is 11 commits past warden's
+  `b3dc3d7` with none touching `ghostty.h`, `embedded.zig` or the snapshot code.
 
 ## What this changes here
 
