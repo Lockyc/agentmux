@@ -366,6 +366,8 @@ than re-deriving the state from the web.
 - **2026-10-18** — status check: nothing since 10-16 beyond another 1,000 beta invites (X, 10-16).
   No devlog, video, HN story or new press; no Ghostty release; main is 11 commits past warden's
   `b3dc3d7` with none touching `ghostty.h`, `embedded.zig` or the snapshot code.
+- **2026-10-19** — status check: nothing since 10-18. Ghostty main is 18 commits past `b3dc3d7`,
+  still none touching `ghostty.h`, `embedded.zig` or the snapshot code.
 
 ## What this changes here
 
