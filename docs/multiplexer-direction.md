@@ -413,7 +413,36 @@ than re-deriving the state from the web.
     and Codex (open tabs, split panes, read a screen, drive connected apps), and a read-only MCP
     server over the docs and the beta Discord's feedback, open to Discord members. There's still
     nothing on attach, the wire protocol or a license. The privacy page says Rex has no account or
-    license checks.
+    license checks. What the pages add for a warden client, beyond the 10-09 entry:
+    - **Status can be pulled as well as streamed.** The terminal block has a `program_status`
+      method that returns the current records. So a client that attaches late reads the state
+      directly instead of replaying events. The other terminal methods are `format`, `process`,
+      `pwd`, `title`, `size`, `write`, `reset`, `resize`, `set_theme` and `list_dir`.
+    - **The `rex events --json` shape.** Each line is `{type, payload}`. A session event comes
+      wrapped in `session_event` (adding `session_id`), and a terminal event is wrapped again in
+      `block_event` (`block_id`, `creator_name`, `name`, `payload`). `program_status_changed`
+      carries `id`, `record` and `reason`. Unknown events and fields are to be ignored, because new
+      versions add them.
+    - **Clients define the UI actions.** `pane.split`, `client.tab.*` and the rest come from the
+      connected client (`rex -C <client> actions`), not from the server. A CLI or script can drive
+      the Mac app only when Remote Control is on in the app's settings.
+    - **Terminal options match warden's tab model.** They are `command`, `shell` (`none` execs the
+      command directly), `cwd`, `initial_input` (text typed in at start, like warden's `cmd`) and
+      `exit.on_completion`. Layouts are binary splits with a ratio. There are also floating layers,
+      unplaced (detached) blocks, and server-side block plugins (`--block-dir`).
+    - **Transport.** Local connections use a Unix socket. Remote ones use HTTP(S) on 443 or 7297,
+      with callers identified only by Tailscale or the local peer uid. The docs call password and
+      key auth **planned, "including support for existing SSH keys"**. That contradicts the 09-08
+      demo's claim that SSH keys already work. The personal server starts on any `rex` command and
+      exits about 10 s after its last session and connection close. Rex ships its own `xterm-rex`
+      terminfo.
+    - **The Linux server can't be installed yet, even by testers.** Its docs were written first.
+      The 10-05 and 10-09 Linux mentions describe internal builds.
+    - **Rex can configure Claude Code.** `rex skill setup` installs a `rex` skill in `~/.claude/skills`
+      and adds a session-start hook to `~/.claude/settings.json`. The hook tells the agent its Rex
+      session and has it name the session after its task.
+    - **The release changelog is only in the beta Discord's #changelog**, which is readable through
+      the community MCP. There's no public changelog page.
 
 ## What this changes here
 
