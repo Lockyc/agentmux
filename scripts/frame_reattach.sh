@@ -24,18 +24,12 @@
 # Arg: <dead-pane-id> (a %-prefixed tmux pane id, never contains spaces).
 
 # tmux on another socket with TMUX cleared, so it talks to that socket rather
-# than the frame socket we're invoked under. An empty socket (a pane with no
-# @amux_agent_socket) falls back to the default socket.
+# than the frame socket we're invoked under.
 sock_tmux() {
   _s=$1; shift
   # TMUX= scopes an empty TMUX to this one command (SC1007: intentional, not a typo).
-  if [ -n "$_s" ]; then
-    # shellcheck disable=SC1007
-    TMUX= tmux -L "$_s" "$@"
-  else
-    # shellcheck disable=SC1007
-    TMUX= tmux "$@"
-  fi
+  # shellcheck disable=SC1007
+  TMUX= tmux -L "$_s" "$@"
 }
 
 frame_reattach() {
@@ -50,10 +44,9 @@ frame_reattach() {
   _base=${_fsess%-frame}
   # The socket comes from the frame SESSION's own @amux_{term,agent}_socket option
   # (bin/amux sets both on every `amux --frame`), read back through the dead pane so
-  # it resolves pane -> window -> session. NOT from $AGENTMUX_*_SOCKET: amux exports
+  # it resolves pane -> window -> session. Never from $AGENTMUX_*_SOCKET: amux exports
   # neither (see bin/amux's header — an exported per-project socket leaks into every
-  # descendant of the frame), so reading the env here found the agent socket EMPTY and
-  # silently probed the default socket, and the term one whatever a stale ancestor had.
+  # descendant of the frame).
   if [ "$_role" = term ]; then
     _sess="${_base}-term"
     _sock=$(tmux display-message -p -t "$_pane" '#{@amux_term_socket}' 2>/dev/null)
@@ -61,6 +54,9 @@ frame_reattach() {
     _sess="$_base"
     _sock=$(tmux display-message -p -t "$_pane" '#{@amux_agent_socket}' 2>/dev/null)
   fi
+  # No socket recorded means nothing to reattach to. The default socket is someone
+  # else's server, and a same-named session there would respawn into a busy loop.
+  [ -n "$_sock" ] || return 0
   # Exact-match (`=`): tmux resolves a bare `-t name` by prefix/fnmatch too, so a
   # killed agent whose name is a prefix of another live session would falsely read
   # as alive and get resurrected — defeating the no-resurrection guarantee.
@@ -104,13 +100,12 @@ if [ -n "${FRAME_REATTACH_SELFTEST:-}" ]; then
   frame_reattach %7
   [ -z "$_respawned" ] || { echo "FAIL: dead agent must not respawn (got '$_respawned')"; fail=1; }
 
-  # A frame session predating the options (option unset -> empty) degrades to the
-  # default socket rather than erroring; nothing is resurrected there, so the worst
-  # case is a pane left dead until the next `amux --frame` rebuild.
-  _role_val=agent; _sess_val=proj-frame; _alive=1; _respawned=; _q_sock=x
+  # No recorded socket (option unset -> empty): nothing to reattach, even when a
+  # same-named session would answer on some other server.
+  _role_val=agent; _sess_val=proj-frame; _alive=1; _respawned=
   _agent_sock_val=
   frame_reattach %7
-  [ -z "$_q_sock" ] || { echo "FAIL: absent @amux_agent_socket must fall back to the default socket (got '$_q_sock')"; fail=1; }
+  [ -z "$_respawned" ] || { echo "FAIL: absent @amux_agent_socket must not respawn (got '$_respawned')"; fail=1; }
   _agent_sock_val=agentmux-agent-42
 
   # term + alive -> respawn, checked on the term socket, session=base-term (spaces kept)
