@@ -32,12 +32,6 @@ fi
 
 VERSION="$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION" 2>/dev/null || true)"
 
-# Migrate a pre-rename config (agents.toml -> amux.toml) from older installs.
-if [ ! -f "$INSTALL_DIR/amux.toml" ] && [ -f "$INSTALL_DIR/agents.toml" ]; then
-  mv "$INSTALL_DIR/agents.toml" "$INSTALL_DIR/amux.toml"
-  echo "Renamed legacy config $INSTALL_DIR/agents.toml -> amux.toml."
-fi
-
 # Seed the user's config from the example if they don't have one yet.
 if [ -f "$INSTALL_DIR/amux.toml" ]; then
   echo "Config already exists at $INSTALL_DIR/amux.toml — not overwritten."
