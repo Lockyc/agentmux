@@ -3,8 +3,8 @@
 # Pure render helper: renders ONE done/now/next status row from content on stdin.
 # tmux-status.sh (the writer) calls this per row and pushes the result into an
 # @amux_rowN pane option that the status bar reads statically — the display is
-# event-driven (pushed), not a tmux #() poll. This script no longer reads any
-# file or the tmux socket; that was the old polled reader, now removed.
+# event-driven (pushed), not a tmux #() poll. This script reads no file and no
+# tmux socket.
 # Format produced by summarise.sh stand mode: "<subject>. done: …; now: …; next: …"
 #   row 1 = "<subject>. done: …"  (everything before " now:")
 #   row 2 = "now: …"              (between " now:" and " next:")

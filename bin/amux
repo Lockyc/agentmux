@@ -9,10 +9,8 @@
 AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 
 # Install root, canonicalised ONCE — then every derived path is pure parameter
-# expansion off it. This used to be three separate
-# `$(cd "$(dirname "${BASH_SOURCE[0]}")/../<dir>" && pwd)` expansions (scripts/, tmux/,
-# bin/) plus a `basename`: ~7 forks before amux had even looked at its arguments, paid
-# by every invocation — including warden's per-tab presence probe, which runs on a ~5s
+# expansion off it, with no per-directory `$(cd … && pwd)` forks — those would be paid
+# by every invocation, including warden's per-tab presence probe, which runs on a ~5s
 # floor per tab and is the hottest command amux has. `${_amux_bindir%/*}` is the install
 # root, already absolute and `..`-free because _amux_bindir was canonicalised, so the
 # derived paths need no second `cd` to normalise them.
@@ -33,9 +31,8 @@ if [ ! -d "$AGENTMUX_SCRIPTS" ]; then
 fi
 
 # --- Lazy helper loading -----------------------------------------------------------
-# agent_window_style.sh (+ colours.sh) and remote_attach.sh (+ remote.sh) are ~1,800
-# lines that each re-resolve their own script dir with forks at source time, and
-# agentmux-config.sh is another ~536. NOTHING on the presence-probe path touches any of
+# agent_window_style.sh (+ colours.sh), remote_attach.sh (+ remote.sh) and
+# agentmux-config.sh each re-resolve their own script dir with forks at source time. NOTHING on the presence-probe path touches any of
 # them — `_amux_probe` needs only functions defined in this file — so sourcing all three
 # eagerly was the dominant cost of the command warden polls most. Load on first use.
 #
@@ -85,17 +82,13 @@ AGENTMUX_TMUX="${AGENTMUX_TMUX:-${_amux_bindir%/*}/tmux}"
 # isolation) is honoured VERBATIM with no suffix, exactly like AGENTMUX_AGENT_SOCKET.
 #
 # NONE of the three is EXPORTED, deliberately — the environment is not a transport
-# for a per-project value. amux once exported AGENTMUX_TERM_SOCKET so the two
-# in-frame consumers (frame.conf's C-f Q, frame_reattach.sh) could read the derived
-# value back, and the export then rode down into EVERY descendant of the frame —
-# including a GUI app launched from the scratch terminal. That app relaunches amux
-# for other projects, each inheriting the var, and "explicit value honoured verbatim"
-# then pinned every project's left pane to the FIRST project's term server; two
-# projects sharing a basename (~/work/api, ~/personal/api) both
-# resolve to `api-term` there and `new-session -A` silently attached the second
-# to the first one's scratch terminal. The sockets now travel as @amux_term_socket /
+# for a per-project value. An export rides down into EVERY descendant of the frame,
+# including a GUI app launched from the scratch terminal that relaunches amux for other
+# projects; each inherits the var, "explicit value honoured verbatim" pins every
+# project's left pane to the first project's term server, and two projects sharing a
+# basename attach to one scratch terminal. The sockets travel as @amux_term_socket /
 # @amux_agent_socket tmux options on the frame SESSION (set in _amux_frame), which is
-# scoped to the frame and cannot leak. Don't re-add an export here.
+# scoped to the frame and cannot leak.
 # Agent sessions live on the per-project shard `agentmux-agent-<cksum $PWD>` (see
 # _amux_agent_sock), like the frame/term sockets above. This override exists only so
 # selftests can isolate the session-management commands onto a throwaway socket instead
@@ -132,7 +125,7 @@ _amux_sanitize_session() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_'; 
 # See the AGENTMUX_TERM_SOCKET comment above for the override-vs-shard rule.
 #
 # The socket resolvers below are called MANY times per launch (every _amux_atmux /
-# frame / term / agent call resolves its socket), and each resolution used to re-fork
+# frame / term / agent call resolves its socket), and an unmemoised resolution forks
 # `printf | cksum | cut`. On macOS a fork+exec is ~10ms idle and 50-250ms under load,
 # so dozens of these dominate a cold-start. Memoize the hash, keyed on $PWD so a
 # subshell that `cd`s to another project (the restore path) still recomputes correctly.
@@ -150,10 +143,8 @@ _amux_sanitize_session() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9_-' '_'; 
 # through a symlink, or type a different case on a case-insensitive filesystem (APFS/HFS+,
 # i.e. every stock Mac). Every one of those lookups is exact string equality, so a single
 # alternate spelling silently forks the project in two: a second tmux server for the same
-# dir, and a restore offer that can never match the ledger rows it is hunting for. That
-# was a real, total loss of crash recovery — tabs opened from `…/LSJC/business` were
-# invisible to `amux --restore` run in that very directory, because the ledger said
-# `…/lsjc/business`. Normalising ONCE here fixes all four by construction; normalising at
+# dir, and a restore offer that can never match the ledger rows it is hunting for — a
+# total loss of crash recovery for that directory. Normalising ONCE here fixes all four by construction; normalising at
 # each lookup would be four copies of one fact, and the next lookup added would forget.
 #
 # `env pwd -P` is load-bearing and must not become a bare `pwd -P`: bash's BUILTIN pwd
@@ -1869,7 +1860,7 @@ amux() {
   # is the one exemption: it reads no config at all (verified: none of
   # _amux_default_session_name / _amux_{agent,frame}_session_is_mine / the socket
   # resolvers touch an agentmux_* function), and it is the path warden polls per tab, so
-  # it must not pay for 536 lines it never uses. Exempt a subcommand here ONLY after
+  # it must not pay for agentmux-config.sh, which it never uses. Exempt a subcommand here ONLY after
   # checking the same way; a wrong exemption is an "unbound function" at runtime, not a
   # compile error.
   case "${1:-}" in
