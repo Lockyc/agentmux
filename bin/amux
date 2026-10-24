@@ -1056,12 +1056,27 @@ _amux_frames() {
 # warden split) is reaped the same way — it is the frame's terminal
 # whether or not a frame is up, and this is the one command that drops it without
 # taking the agent along (`--kill` does that). Refuses only when neither exists.
+# The project base a probe or kill targets. A name derived from $PWD is already the
+# base, even for a folder that itself ends in -term or -frame. An explicit name is
+# taken literally when an agent session by that name exists; otherwise a trailing
+# -frame/-term is stripped, so `amux --kill foo-frame` targets project `foo`.
+_amux_target_base() { # NAME EXPLICIT(0|1)
+  if [ "$2" -eq 0 ] || [ -n "$(_amux_agent_socks | _amux_sock_hosting "$1")" ]; then
+    printf '%s' "$1"; return
+  fi
+  case "$1" in
+    *-frame) printf '%s' "${1%-frame}" ;;
+    *-term)  printf '%s' "${1%-term}" ;;
+    *)       printf '%s' "$1" ;;
+  esac
+}
+
 _amux_frame_kill() {
   local arg base explicit=0
   # Sanitise the same way the frame was named (. and : → _) so an explicit arg or
   # the no-arg default basename resolves to the name the frame was created under.
   if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); explicit=1; else arg=$(_amux_default_session_name); fi
-  case "$arg" in *-frame) base="${arg%-frame}" ;; *) base="$arg" ;; esac
+  base=$(_amux_target_base "$arg" "$explicit")
   local fsess="${base}-frame" tsess="${base}-term" fsock tsock
   if [ "$explicit" -eq 1 ]; then
     # No $PWD to derive from — find whichever sharded socket hosts this named session.
@@ -1521,16 +1536,12 @@ $c
 # `amux --kill` reaps; no -term check on purpose — a scratch terminal (a frame's
 # left pane, or a standalone `amux --term`) is a shell, not a session, so it never
 # lights the dot on its own. Default target is the current
-# dir's session; an explicit arg is sanitised, and a trailing -frame/-term is
-# stripped to the base (so `amux --probe foo-frame` queries project `foo`).
+# dir's session; an explicit arg is sanitised and resolved by _amux_target_base
+# (so `amux --probe foo-frame` queries project `foo`).
 _amux_probe() {
   local arg base by_dir=0
   if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); by_dir=1; fi
-  case "$arg" in
-    *-frame) base="${arg%-frame}" ;;
-    *-term)  base="${arg%-term}" ;;
-    *)       base="$arg" ;;
-  esac
+  base=$(_amux_target_base "$arg" "$((1 - by_dir))")
   # CWD-derived (no explicit name → warden's call): honour the dir guard so a
   # basename collision with a different project can't light this dot.
   if [ "$by_dir" -eq 1 ]; then
@@ -1561,7 +1572,7 @@ _amux_probe() {
 
 # Kill ONE project completely: the agent session (agent socket) plus its paired
 # <base>-frame and <base>-term. Default target is the current dir's session; an
-# explicit arg is sanitised, and a trailing -frame/-term is stripped to the base.
+# explicit arg is sanitised and resolved by _amux_target_base.
 # Kills whichever of the three exist; errors only if none do.
 #
 # A leading internal `--suspend` (the `amux --suspend` entry point) keeps the
@@ -1577,13 +1588,9 @@ _amux_kill() {
   if [ "${1:-}" = "--suspend" ]; then suspend=1; shift; fi
   local arg base
   if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
-  case "$arg" in
-    *-frame) base="${arg%-frame}" ;;
-    *-term)  base="${arg%-term}" ;;
-    *)       base="$arg" ;;
-  esac
   local fsock tsock parts="" by_dir=0
   [ $# -eq 0 ] && by_dir=1
+  base=$(_amux_target_base "$arg" "$((1 - by_dir))")
   if [ "$by_dir" -eq 1 ]; then
     fsock=$(_amux_frame_sock); tsock=$(_amux_term_sock)   # CWD path: derive from $PWD
   else
@@ -3260,6 +3267,16 @@ STUB
     _amux_atmux set-option -u -t dgapi @amux_dir 2>/dev/null   # legacy: no @amux_dir
     if _amux_probe; then _got=present; else _got=absent; fi
     _assert "dir-guard: probe present for a legacy session (no @amux_dir)" "present" "$_got"
+
+    # A folder whose own name ends in -term is the session's base as it stands.
+    mkdir -p "$_dgroot/long-term"; cd "$_dgroot/long-term" || true
+    _amux_atmux new-session -d -s long-term -c "$PWD" 2>/dev/null
+    _amux_atmux set-option -t long-term @amux_dir "$PWD" 2>/dev/null
+    if _amux_probe; then _got=present; else _got=absent; fi
+    _assert "a *-term folder: by-dir probe finds its session" "present" "$_got"
+    _amux_kill >/dev/null 2>&1
+    if _amux_session_exists long-term; then _got=alive; else _got=killed; fi
+    _assert "a *-term folder: by-dir kill reaps its session" "killed" "$_got"
 
     _amux_atmux kill-server 2>/dev/null; tmux -L "$AGENTMUX_FRAME_SOCKET" kill-server 2>/dev/null
     cd "$_dgsave" || true; rm -rf "$_dgroot"
