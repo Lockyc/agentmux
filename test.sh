@@ -81,13 +81,15 @@ fi
 # `VAR=1 run_selftest …` prefix would set the var only in this shell, not in the
 # child. Runner + env mirror the invocation forms in CLAUDE.md's Selftests list.
 run_selftest() {
-  local label="$1"; shift
-  if "$@" >/dev/null 2>&1; then
+  local label="$1" out; shift
+  # Captured, not re-run on failure: a second run doubles the tmux servers and can
+  # pass a timing-dependent failure, printing output that doesn't match the FAIL.
+  if out="$("$@" 2>&1)"; then
     pass "selftest: $label"
   else
     failed "selftest: $label"
     printf '  --- output of failing selftest %s ---\n' "$label"
-    "$@" 2>&1 | sed 's/^/  /'
+    printf '%s\n' "$out" | sed 's/^/  /'
     printf '  --- end ---\n'
   fi
 }
