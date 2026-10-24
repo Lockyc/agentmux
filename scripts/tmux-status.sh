@@ -98,7 +98,7 @@ sumtsfile="$runtime_dir/agentmux-sum-${pane_key}.ts"
 driftfile="$runtime_dir/agentmux-sum-${pane_key}.drift"
 sumlockdir="$runtime_dir/agentmux-sum-${pane_key}.lock.d"
 genfile="$runtime_dir/agentmux-sum-${pane_key}.gen"
-TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$HOME/.agentmux/scripts/tab_label.sh}"
+TAB_LABEL="${AGENTMUX_TAB_LABEL_BIN:-$SCRIPT_DIR/tab_label.sh}"
 label=$([ -x "$TAB_LABEL" ] && "$TAB_LABEL" "$agent_name" 2>/dev/null || echo "$agent_name")
 # Target our own pane explicitly: an un-targeted display-message resolves against
 # the most recently active client, which is the wrong pane when a project's agent
@@ -162,11 +162,11 @@ tmux rename-window -t "$TMUX_PANE" "$emoji $label"
 # 2>&1 </dev/null & so it shares no fd with the agent. Up to 3 LM calls
 # (drift-probe, then a goal re-derive once drift is sustained, then stand);
 # detached + per-pane lock so latency is invisible.
-SUM="${AGENTMUX_SUMMARISE_BIN:-$HOME/.agentmux/scripts/summarise.sh}"
+SUM="${AGENTMUX_SUMMARISE_BIN:-$SCRIPT_DIR/summarise.sh}"
 CTX="${AGENTMUX_CTX_BIN:-}"
 DIG="${AGENTMUX_DIGEST_BIN:-}"
-GATE="${AGENTMUX_STRIP_GATE_BIN:-$HOME/.agentmux/scripts/strip_unbacked_done.sh}"
-SR="${AGENTMUX_SUMMARY_ROWS_BIN:-$HOME/.agentmux/scripts/summary_rows.sh}"
+GATE="${AGENTMUX_STRIP_GATE_BIN:-$SCRIPT_DIR/strip_unbacked_done.sh}"
+SR="${AGENTMUX_SUMMARY_ROWS_BIN:-$SCRIPT_DIR/summary_rows.sh}"
 
 # Refresh cadence + throttle. A new user prompt (UserPromptSubmit, $prompt set)
 # always refreshes immediately. PostToolUse carries no $prompt and fires per

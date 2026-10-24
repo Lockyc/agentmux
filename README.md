@@ -442,8 +442,8 @@ Two optional overrides let an adapter swap in custom helpers; defaults work for 
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `AGENTMUX_TAB_LABEL_BIN` | `~/.agentmux/scripts/tab_label.sh` | Resolves the tab-label suffix from `@window-agent`. Override to render labels differently. |
-| `AGENTMUX_SUMMARISE_BIN` | `~/.agentmux/scripts/summarise.sh` | LLM-summary entry point. Override to point at a different summariser. |
+| `AGENTMUX_TAB_LABEL_BIN` | `tab_label.sh` beside `tmux-status.sh` | Resolves the tab-label suffix from `@window-agent`. Override to render labels differently. |
+| `AGENTMUX_SUMMARISE_BIN` | `summarise.sh` beside `tmux-status.sh` | LLM-summary entry point. Override to point at a different summariser. |
 
 **Contracts for the context extractor (`ctx.sh`, `AGENTMUX_CTX_BIN`) and the digest builder (`digest.sh`, `AGENTMUX_DIGEST_BIN`)** (both read the transcript path as `$1`):
 

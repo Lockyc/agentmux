@@ -1891,7 +1891,7 @@ amux() {
         return $?
         ;;
       --version)
-        local v; v=$(cat "$HOME/.agentmux/VERSION" 2>/dev/null | tr -d '[:space:]')
+        local v; v=$(tr -d '[:space:]' < "${_amux_bindir%/*}/VERSION" 2>/dev/null)
         echo "agentmux ${v:-unknown}"
         return 0
         ;;
