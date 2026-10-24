@@ -472,8 +472,8 @@ than re-deriving the state from the web.
   - **Ghostty main moved to Zig 0.17** (#14519, 10-20; `minimum_zig_version = "0.17.0"`). Main is
     148 commits past warden's `b3dc3d7`. `ghostty.h` is unchanged. `embedded.zig` changed only
     through the treewide Zig 0.17 renames (`dupeZ` → `dupeSentinel`, `@intFromEnum` →
-    `@backingInt`, and similar), so its behaviour is the same. The next revendor needs
-    libghostty-build's `ZIG_VERSION` raised from 0.16.0 in the same change. There's still no
+    `@backingInt`, and similar), so its behaviour is the same. warden revendored to `8ef0ec1`
+    (main, 10-24) the same day, built on Zig 0.17.0. There's still no
     `program_status` embedding action. On the VT side, #14793 rejects OSC 7501 reports with
     malformed ids. Still no Ghostty release since v1.3.1.
   - **OSC 7501 adoption:** Rune 1.3 (10-23, HN 50 points) lists OSC 7501 support. Nothing new
