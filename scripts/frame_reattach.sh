@@ -68,8 +68,8 @@ frame_reattach() {
 if [ -n "${FRAME_REATTACH_SELFTEST:-}" ]; then
   fail=0
   # No AGENTMUX_*_SOCKET scrubbing needed: the sockets come from the frame session's
-  # own options now, so the ambient environment of a maintainer running this from
-  # inside a live amux frame can no longer reach the assertions below.
+  # own options, so the ambient environment of a maintainer running this from inside
+  # a live amux frame cannot reach the assertions below.
   # Stubs: `tmux` answers display-message by format and records the respawn
   # target; `sock_tmux` records the socket/session it was asked about and
   # answers has-session per-case via $_alive.
