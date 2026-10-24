@@ -741,7 +741,7 @@ if [ "${REMOTE_SELFTEST:-}" = "1" ]; then
   # input covers every character `_rm_shquote`'s single-quoting has to defeat:
   # single quotes, double quotes, backslashes (doubled and trailing), `$`, and
   # backticks. TWO levels is the shape every remote call has — a quoted value
-  # inside a script quoted again for `sh -c` — and the one fish used to break.
+  # inside a script quoted again for `sh -c` — and the one fish breaks.
   _rm_adv='it'"'"'s "tricky" \slash \\dbl $var `cmd` tail\'
   _rm_adv_q="$(_rm_shquote "$_rm_adv")"
   _rm_adv_qq="sh -c $(_rm_shquote "printf '%s' $_rm_adv_q")"

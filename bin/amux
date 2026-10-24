@@ -594,10 +594,9 @@ _amux_default_session_name() {
   _amux_sanitize_session "$(basename "$PWD")"
 }
 
-# Attach the current project's agent session (on its $PWD shard). switch-client is
-# gone with the shared default socket — it can't cross sockets, and the direct-tmux
-# in-place switch it served is a workflow we no longer support (each project is its
-# own server; you attach, you don't switch within one).
+# Attach the current project's agent session (on its $PWD shard). Never switch-client:
+# it can't cross sockets, and each project is its own server — you attach, you don't
+# switch within one.
 _amux_attach() {
   _amux_atmux attach-session -t "=$1"
 }
@@ -1436,8 +1435,7 @@ $gc
   # the whole point of marking late. `dropped --new` is a read and marks nothing:
   # the marking lives in `--mark`, which retires every still-dead server in $c (a
   # session restored below is new and live, so only the dead source is marked).
-  # It also subsumes the retire-after-restore this used to do per restored cwd —
-  # a manual --restore/--global is ungated on the way IN, so without a mark on the
+  # It also covers retiring each restored cwd — a manual --restore/--global is ungated on the way IN, so without a mark on the
   # way out a later bare `amux` would auto-restore the same tab AGAIN, into a
   # second window fighting the same session id.
   local mk_seen="" mi mc
@@ -2283,10 +2281,10 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     "$(AGENTMUX_CONFIG="$_ufoff" _amux_json_cache="" _amux_use_frame "")"
   _amux_json_cache=""
 
-  # `amux --restore` must take that SAME decision. It used to attach plainly, so a
-  # [frame] default = true project got its crashed tabs back in a bare session with
-  # no scratch terminal — the frame the user configured simply never appeared, and
-  # `amux` and `amux --restore` disagreed about the project's own setting. Stubs
+  # `amux --restore` must take that SAME decision: attaching plainly would give a
+  # [frame] default = true project its crashed tabs back in a bare session with no
+  # scratch terminal, so `amux` and `amux --restore` would disagree about the project's
+  # own setting. Stubs
   # stand in for the ledger and for the two landings, so this asserts the BRANCH
   # without needing a real tmux (the landings themselves are covered elsewhere).
   _rfd=$(mktemp -d /tmp/amux-rf-XXXXXX) || exit 1
@@ -2555,8 +2553,8 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   _fk=$(amux --frame-kill 'a.b:c' 2>&1)
   case "$_fk" in *"no frame 'a_b_c-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
   _assert "frame-kill sanitises arg" "ok" "$_got"
-  # --frame-kill no-arg default also sanitises the PWD basename's colon (the bug:
-  # the default path used to skip : so it computed a name the frame never had).
+  # --frame-kill no-arg default also sanitises the PWD basename's colon, or it would
+  # compute a name the frame never had.
   _ckdir="$_selftest_cache/has:colon"; mkdir -p "$_ckdir"
   _fk=$(cd "$_ckdir" && amux --frame-kill 2>&1)
   case "$_fk" in *"no frame 'has_colon-frame'"*) _got=ok ;; *) _got="bad:$_fk" ;; esac
@@ -2619,7 +2617,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
 
   # A scratch terminal started by --term has NO frame. `amux --kill` from the dir must still
   # reap it (the term socket is sharded per dir, so the by-dir kill can only ever hit this
-  # project's own server) — previously the term was only reaped alongside an owned frame.
+  # project's own server), not only alongside an owned frame.
   if command -v tmux >/dev/null 2>&1; then
     _tk_dir=$(mktemp -d); _tk_base=$(cd "$_tk_dir" && _amux_default_session_name)
     ( cd "$_tk_dir" && env -u TMUX tmux -L "$AGENTMUX_TERM_SOCKET" -f "$AGENTMUX_TMUX/term.conf" \
@@ -2672,8 +2670,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
     echo "SKIP: term layout test (tmux not found)"
   fi
   # --- --frame-kill reaps a frame-LESS scratch terminal too (a --term started for a warden
-  #     split has no frame; it used to be reachable only through --kill, which takes the
-  #     agent with it, or a raw tmux kill-server). Both the by-dir default and the explicit
+  #     split has no frame, and --kill would take the agent with it). Both the by-dir default and the explicit
   #     session-name form; the "no frame" refusal is reserved for nothing-to-kill.
   if command -v tmux >/dev/null 2>&1; then
     _fl_dir=$(mktemp -d); _fl_base=$(cd "$_fl_dir" && _amux_default_session_name)

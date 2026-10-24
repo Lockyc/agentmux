@@ -702,7 +702,7 @@ _sl_pending_fast() {  # <cwd>
         #
         # `resume` rows (683 of 1629 on a real ledger) carry no cwd, so they answer
         # neither cwd question — but they ARE ledger rows, so they must reach `lany`.
-        # Screening them out on `"cwd":"` (which this pass used to do) would report a
+        # Screening them out on `"cwd":"` would report a
         # window with only `resume` rows as having no ledger row at all, i.e. as inert
         # when it is not. The cheap screen is therefore `nlegf`, not the cwd key.
         hit = index($0, need)
@@ -793,9 +793,8 @@ _sl_pending_fast() {  # <cwd>
             # whether it is in this cwd cannot change the answer. It is dropped, not
             # bailed on. A window the ledger DOES hold a row for while naming no cwd
             # (only `resume` rows survived pruning) stays unknown, and bails as before
-            # if its server is one the ledger ties to this cwd. This is the condition
-            # that used to defer half the cwds on a real state dir: the residual legacy
-            # lines are hand-created windows amux never logged at all.
+            # if its server is one the ledger ties to this cwd. The windows left
+            # after this are hand-created ones amux never logged at all.
             if (((s SUBSEP p) in cwdsock) && ((p SUBSEP ww[m]) in lany)) exit 3
           }
         }
@@ -953,11 +952,10 @@ sl_dropped() {
   # on the DECODED cwd (fold col 6), so it stays correct for cwds the grep fast-path above
   # can't screen (quotes / control chars). --global and the empty scope keep the full set.
   state=$(mktemp) || { rm -f "$rows"; return 1; }
-  # Emit the server set WITH each server's max ts, in ONE pass. The max ts used to be
-  # re-derived by a fresh awk per server inside the loop below — and a process spawn is the
-  # whole cost of this query, not the data: at 13 servers for one cwd that was 13 spawns of
-  # ~30ms against a ledger that parses in 36ms total. It is also self-amplifying, since the
-  # spawns load the machine that makes every later spawn slower. Max ts is computed over ALL
+  # Emit the server set WITH each server's max ts, in ONE pass, never a fresh awk per
+  # server in the loop below: a process spawn is the whole cost of this query, not the
+  # data (~30ms per spawn against a ledger that parses in 36ms total), and it is
+  # self-amplifying, since the spawns load the machine that makes every later spawn slower. Max ts is computed over ALL
   # of a server's rows (m[]) while the scoped set is chosen by cwd (s[]), which is exactly
   # what the per-server awk did — scoping must not truncate a server's history.
   # The scope reaches awk through ENVIRON, never `-v` (escape-processed: a cwd with
@@ -3120,7 +3118,7 @@ else
 fi
 
 # ============ Task 4d: a DEAD server the ledger names but that has NO sidecar is
-#     the one state the sidecar scan used to answer WRONG rather than defer. The
+#     the one state a sidecar-only scan answers WRONG rather than defers. The
 #     ledger path reads it as "all its windows were open at death" (sl_dropped's
 #     '*' branch) and offers the drops; live/ cannot see such a server at all, so
 #     a scan of live/ alone concluded "no drop". It triggers exactly on a crash at
