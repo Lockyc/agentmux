@@ -196,9 +196,8 @@ _amux_term_sock() {
 }
 
 # ALL agentmux socket FILES, for name-targeted commands with no $PWD to derive from.
-# Override wins (single socket); else glob the tmux socket dir. The glob matches the
-# legacy bare 'agentmux-frame'/'agentmux-term' AND sharded '<name>-<hash>', so frames
-# already running from before the upgrade stay enumerated and killable. [ -S ] drops
+# Override wins (single socket); else glob the tmux socket dir for '<name>*', which
+# matches the bare name and every sharded '<name>-<hash>'. [ -S ] drops
 # the literal pattern when the dir has no matches (nullglob-safe, no arrays) — but it
 # tests "is a socket", NOT "is a LIVE server": macOS leaves a stale socket file behind
 # after `tmux kill-server`, so this can return dead sockets. Callers needing liveness
@@ -251,20 +250,14 @@ _amux_sock_hosting() {
 #
 # `-f agent.conf` is passed on EVERY call, but tmux reads it ONLY when a call starts the
 # server (the first new-session on a cold per-project shard) — it's ignored for commands
-# against an already-running server. That's the whole fix for the sharding startup regression:
-# without it a cold agent server fell through to ~/.tmux.conf and ran TPM's synchronous
-# `run` line (seconds per project). agent.conf is the AGENT peer of -f frame.conf/-f term.conf;
-# routing it through this one chokepoint (not each new-session site) means no future
-# server-creating path can silently forget it. Guarded on the file existing so a stale
-# pre-update install (tmux/ without agent.conf yet) still launches — just without the speedup.
+# against an already-running server. Without it a cold agent server falls through to
+# ~/.tmux.conf and runs TPM's synchronous `run` line (seconds per project). agent.conf is
+# the AGENT peer of -f frame.conf/-f term.conf; routing it through this one chokepoint (not
+# each new-session site) means no server-creating path can forget it. bin/ and tmux/ ship
+# in the same clone, so the file is always there.
 _amux_atmux() {
   local sock; sock=$(_amux_agent_sock)
-  local conf="$AGENTMUX_TMUX/agent.conf"
-  if [ -f "$conf" ]; then
-    env -u TMUX tmux -L "$sock" -f "$conf" "$@"
-  else
-    env -u TMUX tmux -L "$sock" "$@"
-  fi
+  env -u TMUX tmux -L "$sock" -f "$AGENTMUX_TMUX/agent.conf" "$@"
 }
 
 # tmux resolves a `-t` session target by exact → prefix → fnmatch, so a bare

@@ -92,7 +92,7 @@ Note the actual backup path from that output — reuse the same `~/.agentmux.bak
 Remember `~/.agentmux.bak.$TS` — after step 4 clones, restore the user's config:
 
 ```bash
-for f in amux.toml agents.toml; do [ -f ~/.agentmux.bak.$TS/$f ] && cp ~/.agentmux.bak.$TS/$f ~/.agentmux/amux.toml && echo "restored $f as amux.toml" && break; done
+[ -f ~/.agentmux.bak.$TS/amux.toml ] && cp ~/.agentmux.bak.$TS/amux.toml ~/.agentmux/amux.toml && echo "restored amux.toml"
 ```
 
 Tell the user the backup remains at `~/.agentmux.bak.$TS` and they can delete it
