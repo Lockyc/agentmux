@@ -443,6 +443,41 @@ than re-deriving the state from the web.
       session and has it name the session after its task.
     - **The release changelog is only in the beta Discord's #changelog**, which is readable through
       the community MCP. There's no public changelog page.
+- **2026-10-24** — X posts only. There's still no devlog, video, new docs page or HN discussion,
+  and the GitHub org has no repos. The attach and protocol searches of the docs still return
+  nothing.
+  - **Rex API compatibility across versions** (Hashimoto, 10-19, shipped in a preview release).
+    Clients and servers of different versions now interoperate forwards and backwards. Each API
+    change is recorded as a rule on a JSON pointer (RFC 6901). For each message, the rules between
+    two versions compile lazily into a trie keyed by path tokens. A streaming JSON editor rewrites
+    a message in one forward pass and copies untouched subtrees straight to the wire. Identical
+    rule chains are interned, so a broadcast event is translated once per distinct chain rather
+    than once per client. The API is at revision 4. A simulated 10,000-revision chain upgrades a
+    20 KB body in about 35 µs. This was the gate on the Linux test program. For a warden client,
+    it means a `rex events --json` consumer built against one server version keeps working
+    against newer servers.
+  - **The Linux server test program started** (10-21) with 100 people drawn from existing testers.
+    The docs now say only members of a Linux testing wave can install it. 5,000 more joined the
+    macOS beta the same day, about 7,500 that week, or roughly 15 % of the waitlist so far.
+  - **The Rex iOS app is in external testing** (10-22), with dedicated iPad and iPhone Duo support.
+    It will be free on the App Store.
+  - **Kitty graphics now work over remote Rex sessions** (10-23), including image files that live
+    on the remote host. Rex intercepts the file-based Kitty commands and resends the data to remote
+    clients as in-band chunks, at under 1 % IO cost to everything else. The upstream half is in
+    libghostty: the binary snapshot format now carries Kitty images, placements and pixels
+    (ghostty-org/ghostty#14801, 10-21), restoring the layout before READY and the pixel data after
+    it. #14776 and #14780 add a Kitty animation tick to the libghostty-vt C API and resolve Kitty
+    placeholders in the render state. warden's surface already renders Kitty graphics, so none of
+    this changes warden's own image path.
+  - **Ghostty main moved to Zig 0.17** (#14519, 10-20; `minimum_zig_version = "0.17.0"`). Main is
+    148 commits past warden's `b3dc3d7`. `ghostty.h` is unchanged. `embedded.zig` changed only
+    through the treewide Zig 0.17 renames (`dupeZ` → `dupeSentinel`, `@intFromEnum` →
+    `@backingInt`, and similar), so its behaviour is the same. The next revendor needs
+    libghostty-build's `ZIG_VERSION` raised from 0.16.0 in the same change. There's still no
+    `program_status` embedding action. On the VT side, #14793 rejects OSC 7501 reports with
+    malformed ids. Still no Ghostty release since v1.3.1.
+  - **OSC 7501 adoption:** Rune 1.3 (10-23, HN 50 points) lists OSC 7501 support. Nothing new
+    from tmux (#5713 stays closed, and 3.8 is still the latest tag), Claude Code or Codex.
 
 ## What this changes here
 
