@@ -1274,12 +1274,21 @@ sl_prune() {
   # copy a tail measured against a file the other has already replaced. A holder
   # that died (a hook child killed with its server) leaves the dir behind, so an old
   # lock is broken rather than honoured forever; the loser simply skips — the next
-  # launch over the cap prunes instead.
+  # launch over the cap prunes instead. Breaking is a rename, which only one process
+  # can win; the winner re-checks the age of what it moved, since a racer may have
+  # broken and re-taken the lock between this process's age check and its rename.
   _plock="$_dir/.prune.lock"
   if ! mkdir "$_plock" 2>/dev/null; then
     _pl_mt=$(_sl_mtime "$_plock")
     [ -n "$_pl_mt" ] && [ $(( $(date +%s) - _pl_mt )) -gt 120 ] 2>/dev/null || return 0
-    rm -rf "$_plock"; mkdir "$_plock" 2>/dev/null || return 0
+    mv "$_plock" "$_plock.stale.$$" 2>/dev/null || return 0
+    _pl_mt=$(_sl_mtime "$_plock.stale.$$")
+    if ! { [ -n "$_pl_mt" ] && [ $(( $(date +%s) - _pl_mt )) -gt 120 ] 2>/dev/null; }; then
+      mv "$_plock.stale.$$" "$_plock" 2>/dev/null || rm -rf "$_plock.stale.$$"
+      return 0
+    fi
+    rm -rf "$_plock.stale.$$"
+    mkdir "$_plock" 2>/dev/null || return 0
   fi
   _sl_prune_run
   rmdir "$_plock" 2>/dev/null
