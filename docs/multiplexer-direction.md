@@ -478,6 +478,46 @@ than re-deriving the state from the web.
     malformed ids. Still no Ghostty release since v1.3.1.
   - **OSC 7501 adoption:** Rune 1.3 (10-23, HN 50 points) lists OSC 7501 support. Nothing new
     from tmux (#5713 stays closed, and 3.8 is still the latest tag), Claude Code or Codex.
+- **2026-10-28** — X posts and a Ghostty release. There's still no devlog, YouTube upload or GitHub
+  repo. The attach and protocol searches of the docs still find nothing about attaching.
+  - **Ghostty v1.4.0 shipped** (10-27, tag commit `83fb956`; HN 600 points). It's the first release
+    since v1.3.1. v1.4.0 is 61 commits past warden's vendored `8ef0ec1`, and main is 68 past it.
+    `ghostty.h` and `embedded.zig` are unchanged in both. Only the snapshot code moved
+    (`src/terminal/snapshot/screen.zig`, `terminal.zig`). Hashimoto's highlights: Kitty graphics
+    fully conformant, animation included; scrollback compression (~90 % on average) and 50–90 %
+    less memory overall; the Kitty clipboard protocol; macOS 27 support; `ghostty +ssh` installs
+    terminfo on remote hosts. The release came with **13 security advisories**, published 10-27.
+    Some of them are fixed only after warden's `8ef0ec1`, and those reach warden:
+    - GHSA-w9q4-5jvv-mcv4: memory corruption when a screen clear prunes the cursor page (`e257bb4`).
+    - GHSA-jqr7-69mm-v35h: a crash when narrowing a very wide page (`0af5c9e`).
+    - GHSA-hp9c-qp4q-cpw3: a crash from zero-sized panes in a tmux control-mode layout (`bf14ea1`).
+      Any program that writes to the terminal can trigger it, and the crash takes down the whole
+      process.
+    - GHSA-2r63-vmw6-3m3c: the zsh shell integration writes OSC 7 with `print`, so a crafted
+      directory name can inject any escape sequence (an OSC 52 clipboard write, for example)
+      (`ebd4499`). warden ships that script in `vendor/resources/ghostty/shell-integration/`.
+
+    The use-after-free (GHSA-qjfx) and Kitty clipboard (GHSA-3r5j) fixes are already in
+    `8ef0ec1`. The macOS link, OSC 8, drag-and-drop and file-open advisories are against the
+    Ghostty app's Swift code, so they don't apply to warden. Its own link screening is in
+    `surface/link.rs`. The libghostty-build tag `ghostty-8ef0ec1` is still the latest, so
+    revendoring starts at its `GHOSTTY_REF`.
+  - **libghostty's status** (Hashimoto, 10-27). It now builds and runs CI for Apple platforms,
+    Windows, Linux, FreeBSD, Android, WebAssembly and freestanding targets. It has bindings in most
+    languages. Its users include Herdr, cmux, the Ghostel Emacs terminal and Antithesis' fuzzing,
+    and Neovim has verbally accepted it as its terminal core (neovim/neovim#39773). **libghostty 1.0,
+    with a declared ABI stability, is planned "in the next few months".** The post doesn't say
+    whether that stability covers `ghostty.h`, which main labels libghostty-internal. Every example
+    in it embeds the VT core.
+  - **JetBrains IDEs run on libghostty from 2026.3** (10-27). It replaces JediTerm. libghostty does
+    the parsing and holds terminal state, and the IDE does its own rendering. That makes it another
+    libghostty-vt embedder, which doesn't change `ghostty.h`.
+  - **Rex docs: 24 pages.** FreeBSD server install is documented next to Linux, and both are still
+    limited to Linux testing waves. The Rex UI tour (Alasdair Monk, X, 10-27, a 6½-minute video,
+    not transcribed) covers pane management, process and agent activity, themes and animation. An
+    iPhone Duo redesign is due for testers the week of 10-26.
+  - Nothing new from tmux (#5713 stays closed, 3.8 is the latest tag), Claude Code or Codex on OSC
+    7501, and no new press.
 
 ## What this changes here
 
