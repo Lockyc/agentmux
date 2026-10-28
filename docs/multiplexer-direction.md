@@ -537,13 +537,16 @@ than re-deriving the state from the web.
     split by platform: Mac `0.1.0-preview.22`, Linux Server `preview.9`, plus separate iOS and CLI
     builds. Several ship a week. A tester reported API revision 5 on 10-22, one revision past the
     10-19 post. What bears on the unlock:
-    - **A third-party client attaches today, through an undocumented method.** `data.connect`
-      issues single-use tickets. A tester building an Emacs front end (Roost, which today shows
+    - **A third-party client attaches today, through `data.connect`.** It's missing from the docs
+      site but described in the server's own catalogue (`rex api describe data.connect`). It
+      issues a single-use ticket (60 s) for one block's data source (`terminal`), valid only on a
+      connection already attached with `session.attach` or `session.bootstrap`. The client opens
+      a WebSocket to `/api/data`, sends the ticket in a HELLO message, and names the subprotocol
+      `rex.data.terminal.v1`. Failures come back as REJECT reason codes or WebSocket status 1008. A tester building an Emacs front end (Roost, which today shows
       tmux sessions through `tmux -C`) reports that their own client can attach, stream, type,
       resize and reattach with it. The stream opens with a **GHOSTSNP** frame, libghostty's binary
       snapshot, followed by the raw stream. That is the architecture devlog's attach, reachable from
-      outside Superlogical's apps. The docs search finds nothing on `data.connect`. The tester's
-      blocker was the snapshot itself: Emacs's terminal can't decode GHOSTSNP, and `format` with
+      outside Superlogical's apps. The tester's blocker was the snapshot itself: Emacs's terminal can't decode GHOSTSNP, and `format` with
       `vt` isn't tied to a position in the stream. They asked for the opening screen as VT and for
       a stdio attach (VT out, input in) that an editor runs as a subprocess. The request was
       deferred on 10-23.
@@ -609,18 +612,20 @@ as the client.
   `docs/FOLLOWUPS.md`).
 
 **Not yet: warden as a Rex client.** Rex's wire protocol and client code aren't published.
-An undocumented API method, `data.connect`, already lets a third-party client attach to a
-block: a GHOSTSNP snapshot, then the raw stream, with input and resize going back (ledger,
-2026-10-28). warden can't take that stream, though. `ghostty.h` has no way to load a snapshot
-into a surface or to feed a surface from anything but its own PTY. Relaying the stream through a
-subprocess in the surface's PTY would also need the opening screen as VT, and Superlogical
-deferred that request on 10-23. The text-mode `rex attach`, which was the compatibility mode,
+The server's own API catalogue describes `data.connect`, which already lets a third-party
+client attach to a block: a GHOSTSNP snapshot, then the raw stream, with input and resize going
+back (ledger, 2026-10-28). warden can't take that stream directly, though. `ghostty.h` has no
+way to load a snapshot into a surface or to feed a surface from anything but its own PTY. A relay
+subprocess in the surface's PTY could carry it, if it turns the opening snapshot into VT itself.
+libghostty-vt can decode GHOSTSNP and format a screen as VT. Superlogical deferred doing that
+conversion on the server (10-23). The text-mode `rex attach`, which was the compatibility mode,
 was removed on 10-21. The control side is already reachable: `rex` drives sessions and streams
 events as a subprocess (ledger, 2026-10-09). warden's maintainer is in the macOS test program
 (ledger, 2026-10-28), so that side can be tested against a real Rex server now. **Unlock:**
-`data.connect` (or its successor) documented as a supported client protocol, plus either a
-`ghostty.h` way to drive a surface from a snapshot and an external stream, or a VT opening screen
-for a relay subprocess. Revisit when any of these moves. Until then, amux and tmux stay the
+a client built on `data.connect` that works: either a relay subprocess (libghostty-vt
+snapshot → VT, then the raw stream), or a `ghostty.h` way to drive a surface from a snapshot and
+an external stream. Also, `data.connect` should stay stable enough to build on, given that the
+docs site still leaves it out. Revisit when any of these moves. Until then, amux and tmux stay the
 session layer.
 
 ## Inline images are not a tmux problem
