@@ -33,8 +33,9 @@ research:
         q=protocol) shows whether the unlock has been documented
       note: >-
         docs change without a devlog post. The community MCP server
-        (superlogical.com/rex/community-mcp) carries the beta Discord's feedback, but signing in
-        to it needs Discord membership, so only a human can read it
+        (superlogical.com/rex/community-mcp, user-scope MCP `superlogical`) carries the beta
+        Discord's feedback, #backlog and #changelog. It signs in through a Discord account that
+        is in the test program, so an agent can read it only after a human has authenticated it
     - name: Superlogical GitHub org
       check: gh api orgs/superlogical/repos --jq '.[].full_name'
       note: the org exists with no public repos; a first repo is the likely home for code, a protocol spec or a license
@@ -518,6 +519,19 @@ than re-deriving the state from the web.
     iPhone Duo redesign is due for testers the week of 10-26.
   - Nothing new from tmux (#5713 stays closed, 3.8 is the latest tag), Claude Code or Codex on OSC
     7501, and no new press.
+  - **warden's maintainer is in the macOS test program**, which grants the beta Discord. Its #info
+    pin (Hashimoto, 09-09, so the Discord predates the 10-05 public wave) is the test program's
+    terms. Testers may say they're testing and share screenshots. They may not share access or
+    invite anyone. Testing covers the macOS app only, and it self-hosts a Rex server and connects
+    to other Rex servers. The Linux server is "Server only", and #alpha-registration enrolls
+    testers for other platforms as they open. **Don't host a Rex server publicly or without
+    Tailscale**, because "there are significant security risks in doing so at this time". The
+    default is local connections only, and Tailscale is the only supported way to expose a
+    server. The short-term priorities are the iOS client, **Rex as a full SSH replacement on
+    Linux**, and remote-host file copies, port forwarding and socket sharing. Feedback goes in
+    #feedback-mac, and accepted items move to #backlog. The pin also gives the community MCP
+    setup: `claude mcp add -s user --transport http superlogical
+    https://www.superlogical.com/rex/community-mcp`.
 
 ## What this changes here
 
@@ -571,7 +585,8 @@ by running an attach command inside a libghostty surface. That is the compatibil
 "architecturally identical" to a traditional multiplexer, so it puts an emulator back in the
 middle. The Rex docs don't document an attach command either. The control side is already
 reachable: `rex` drives sessions and streams events as a subprocess (ledger, 2026-10-09).
-Testing it still needs a beta invite (2026-10-05). **Unlock:** a published Rex client
+warden's maintainer is in the macOS test program (ledger, 2026-10-28), so that side can be
+tested against a real Rex server now. **Unlock:** a published Rex client
 protocol, or a libghostty piece that attaches a surface to a Rex block. Revisit on either.
 Until then, amux and tmux stay the session layer.
 
