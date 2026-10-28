@@ -585,6 +585,15 @@ than re-deriving the state from the web.
       marks from omp drop its `working` record. Idle Codex returns no `program_status` record on a
       24-hour clock. Both are deferred. Rex shows status from remote tmux sessions only when the
       agent runs locally.
+    - **Rex sessions don't survive their server.** A server restart (the in-app update asks for
+      one), a crash, or a reboot ends every program in every session. A Linux server panic took
+      every terminal down even though systemd restarted it in 0.1 s. Rex.app reopens on "No
+      Sessions". There's no built-in restore of layout or processes. The requests for it
+      ("Persist/resurrect sessions", 10-08; "Layout restore") are deferred. A team member (golden)
+      said "we want to encourage use of Lua/scripting/APIs to do this", and that they aim for
+      server restarts to become rare, with compatibility promises and no forced upgrades. So
+      surviving restarts is up to the client, which is what amux's session ledger does for tmux
+      today.
 
 ## What this changes here
 
@@ -611,7 +620,8 @@ as the client.
 
   | amux today | After |
   | --- | --- |
-  | sessions that outlive the client, the session ledger, restore | Rex server-side sessions (persistent, parked when idle) |
+  | sessions that outlive the client | Rex server-side sessions (persistent, parked when idle) |
+  | the session ledger, restore after a server restart or reboot, sleeping a server | warden: each agent tab keeps its conversation id, a server restart brings tabs back asleep, wake resumes them; sleeping a server sleeps its tabs, then stops it (Rex keeps nothing across its own restart) |
   | `amux @host` over ssh/et/mosh | Rex servers on each host, reached with `-S <host>` / the client's remote sessions |
   | agent state in tab names, OSC 777 attention | OSC 7501 from the agent itself, read from Rex's `program_status_changed` events |
   | presence probe (`amux --probe`) | Rex `session_created`/`destroyed` and `child_exited` events |
