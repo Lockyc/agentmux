@@ -626,7 +626,8 @@ as the client.
   | agent state in tab names, OSC 777 attention | OSC 7501 from the agent itself, read from Rex's `program_status_changed` events |
   | presence probe (`amux --probe`) | Rex `session_created`/`destroyed` and `child_exited` events |
   | directory-based agent selection, per-agent launch commands | warden's per-tab `cmd` cascade |
-  | AI summary status lines, the note row | no home decided; warden chrome or dropped |
+  | AI summary status lines, the note row | warden's amux-retirement project, under the selected agent tab |
+  | the `[frame]` terminal-pane layout (`left_vertical_split`, `left_top_panes`) | warden mirroring Rex split layouts, declared per tab and created as Rex splits |
 
   The lock-in point lives here too. Rex's client and server are free, self-hosted,
   account-free and not directly monetized (2026-10-05), so the venture-funded risk is the
