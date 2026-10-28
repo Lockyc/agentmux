@@ -537,19 +537,40 @@ than re-deriving the state from the web.
     split by platform: Mac `0.1.0-preview.22`, Linux Server `preview.9`, plus separate iOS and CLI
     builds. Several ship a week. A tester reported API revision 5 on 10-22, one revision past the
     10-19 post. What bears on the unlock:
-    - **A third-party client attaches today, through `data.connect`.** It's missing from the docs
-      site but described in the server's own catalogue (`rex api describe data.connect`). It
-      issues a single-use ticket (60 s) for one block's data source (`terminal`), valid only on a
-      connection already attached with `session.attach` or `session.bootstrap`. The client opens
-      a WebSocket to `/api/data`, sends the ticket in a HELLO message, and names the subprotocol
-      `rex.data.terminal.v1`. Failures come back as REJECT reason codes or WebSocket status 1008. A tester building an Emacs front end (Roost, which today shows
-      tmux sessions through `tmux -C`) reports that their own client can attach, stream, type,
-      resize and reattach with it. The stream opens with a **GHOSTSNP** frame, libghostty's binary
-      snapshot, followed by the raw stream. That is the architecture devlog's attach, reachable from
-      outside Superlogical's apps. The tester's blocker was the snapshot itself: Emacs's terminal can't decode GHOSTSNP, and `format` with
-      `vt` isn't tied to a position in the stream. They asked for the opening screen as VT and for
-      a stdio attach (VT out, input in) that an editor runs as a subprocess. The request was
-      deferred on 10-23.
+    - **The client protocol is published by the server itself.** Each server serves its whole
+      client spec as `GET /llms.txt` (and `/llms.html`, plus the method catalogue as JSON at
+      `/api/help`), written for its own API revision (7 on the 10-27 Mac build), over its local
+      socket (`~/Library/Application Support/rex/server.sock`, from `rex whoami`). The docs site
+      leaves it out. In summary:
+      - **Control:** a WebSocket at `/api/control`, subprotocol `rex.control.v1`, with one JSON
+        object per text message. The client sends `hello` (with `api_revision`), and the server
+        replies `welcome` (carrying a `reconnect_token`). Then come `request`/`response` pairs
+        matched by `id`, and `event`s numbered by `seq`. A response's `seq` says which events its
+        result already includes. A dropped client keeps its attachments for 60 s and resumes with
+        its token.
+      - **Data:** `data.connect` returns a single-use 60 s ticket for one block's `terminal`
+        source. It needs a connection attached with `session.attach` or `session.bootstrap`. The
+        client opens a WebSocket at `/api/data` with subprotocol `rex.data.terminal.v1` and sends
+        a 17-byte binary HELLO (`0x01` + ticket). The server answers with a 32-byte WELCOME (a
+        reconnect token, a resume window and a channel nonce) or a REJECT. After that, the stream
+        is a **Ghostty snapshot**, then the program's raw output. Rex's own messages sit in it as
+        `ESC _ rex1;<nonce>;<json> ESC \` (`resize`, `theme`, `child_exited`). A RESUME continues
+        a dropped stream from an exact byte count within 60 s.
+      - **Input** goes over control: `com.superlogical.terminal.write` (text and escape
+        sequences) or `client.key`. Size goes through `terminal.resize` and follows the block's
+        owner (`session.own_block`).
+    - **A tester's Emacs front end attaches through it.** The tester is building Roost, which today
+      shows tmux sessions through `tmux -C`. Their blocker was the snapshot: Emacs's terminal can't
+      decode it, and `format` with `vt` isn't tied to a position in the stream. They asked for the
+      opening screen as VT and for a stdio attach, and the request was deferred on 10-23.
+    - **A throwaway relay proved the route for warden** (10-28). It's a small Rust program run as
+      a pane's command. It attaches over control, takes `data.connect`, writes the stream to its
+      own PTY and relays stdin through `terminal.write`. SIGWINCH goes to `terminal.resize`. For the
+      opening screen it uses `format` `vt` and drops the snapshot bytes before the first Rex APC.
+      Driven in a pseudo-terminal against the local server, output streamed, typed commands ran,
+      a resize reached the server, and a fresh relay reopened on the previous screen. The gaps it
+      left on purpose: decoding the snapshot instead of using `format` (a small race),
+      `client.key` instead of raw text input, and RESUME.
     - **`rex attach` is gone.** It was the text-mode client, attaching inside the calling shell,
       which is the compatibility mode. It was removed in `preview.18` (10-21) "because it was
       incomplete and confusing people". Hashimoto: "Rex attach is gone for now."
@@ -604,29 +625,24 @@ as the client.
 - **Agent status reaches warden from Rex, not from the terminal.** Claude Code emits OSC
   7501 only to a terminal that answers its query (ledger, 2026-10-13). Rex answers it. tmux
   and the Ghostty app don't. So under amux nothing emits, and amux doesn't grow a 7501
-  emitter for a layer that is going away. Under Rex, warden subscribes to `rex events --json`
-  and renders the states as chrome, which is where warden's sidebar and tab-row dots already
+  emitter for a layer that is going away. Under Rex, warden reads the events on its control
+  connection and renders the states as chrome, which is where warden's sidebar and tab-row dots already
   live. The events are raw states. Deciding what deserves attention takes a policy on top,
   which Rex's own Activity Mode builds from heuristics (ledger, 2026-10-16), and warden would
   have to write its own. The `ghostty.h` action matters only for plain tabs outside Rex (warden's
   `docs/FOLLOWUPS.md`).
 
-**Not yet: warden as a Rex client.** Rex's wire protocol and client code aren't published.
-The server's own API catalogue describes `data.connect`, which already lets a third-party
-client attach to a block: a GHOSTSNP snapshot, then the raw stream, with input and resize going
-back (ledger, 2026-10-28). warden can't take that stream directly, though. `ghostty.h` has no
-way to load a snapshot into a surface or to feed a surface from anything but its own PTY. A relay
-subprocess in the surface's PTY could carry it, if it turns the opening snapshot into VT itself.
-libghostty-vt can decode GHOSTSNP and format a screen as VT. Superlogical deferred doing that
-conversion on the server (10-23). The text-mode `rex attach`, which was the compatibility mode,
-was removed on 10-21. The control side is already reachable: `rex` drives sessions and streams
-events as a subprocess (ledger, 2026-10-09). warden's maintainer is in the macOS test program
-(ledger, 2026-10-28), so that side can be tested against a real Rex server now. **Unlock:**
-a client built on `data.connect` that works: either a relay subprocess (libghostty-vt
-snapshot → VT, then the raw stream), or a `ghostty.h` way to drive a surface from a snapshot and
-an external stream. Also, `data.connect` should stay stable enough to build on, given that the
-docs site still leaves it out. Revisit when any of these moves. Until then, amux and tmux stay the
-session layer.
+**Next: warden as a Rex client, through a relay.** Each Rex server publishes its client
+protocol (ledger, 2026-10-28). The protocol includes the data connection that streams a block as
+a snapshot followed by its raw output. `ghostty.h` has no way to load a snapshot into a surface or
+to feed a surface from anything but its own PTY. So the route is a relay subprocess as each
+pane's command: it writes the stream to the surface's PTY and sends input back over control. A
+throwaway relay worked end to end against the local server on 10-28. The production relay decodes
+the opening snapshot with libghostty-vt instead of racing `format`. The relay was chosen over
+patching libghostty because a patch would sit in Ghostty internals and carry a fork through every
+revendor, security ones included. warden speaks the control protocol itself, and the `rex` CLI
+isn't on its path. The design is being worked out in warden. Until warden's Rex client ships,
+amux and tmux stay the session layer.
 
 ## Inline images are not a tmux problem
 
