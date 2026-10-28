@@ -642,17 +642,16 @@ as the client.
   have to write its own. The `ghostty.h` action matters only for plain tabs outside Rex (warden's
   `docs/FOLLOWUPS.md`).
 
-**Next: warden as a Rex client, through a relay.** Each Rex server publishes its client
-protocol (ledger, 2026-10-28). The protocol includes the data connection that streams a block as
-a snapshot followed by its raw output. `ghostty.h` has no way to load a snapshot into a surface or
-to feed a surface from anything but its own PTY. So the route is a relay subprocess as each
-pane's command: it writes the stream to the surface's PTY and sends input back over control. A
-throwaway relay worked end to end against the local server on 10-28. The production relay decodes
-the opening snapshot with libghostty-vt instead of racing `format`. The relay was chosen over
-patching libghostty because a patch would sit in Ghostty internals and carry a fork through every
-revendor, security ones included. warden speaks the control protocol itself, and the `rex` CLI
-isn't on its path. The design is being worked out in warden. Until warden's Rex client ships,
-amux and tmux stay the session layer.
+**warden is a Rex client, through a relay** (built on warden's `dev`, 2026-10-28; architecture in
+[warden's `docs/rex.md`](https://github.com/lockyc/warden/blob/dev/docs/rex.md)). Rex's published client
+protocol (ledger, 2026-10-28) streams a block as a snapshot, then raw output. `ghostty.h` can neither load a snapshot into a
+surface nor feed one from anything but its own PTY, so each Rex pane's command is a relay
+subprocess: it writes the stream to the surface's PTY, decoding the opening snapshot with
+libghostty-vt, and sends input back over control. The relay beat patching libghostty because a
+patch would sit in Ghostty internals and carry a fork through every revendor, security ones
+included. warden speaks the control protocol itself; the `rex` CLI isn't on its path. A pane shows
+one block, and Rex keeps nothing across its own restart, so amux and tmux stay the session layer
+for agent tabs until warden's agent tab list (sleep/wake, conversation resume) lands.
 
 ## Inline images are not a tmux problem
 
