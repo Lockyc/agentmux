@@ -501,8 +501,9 @@ than re-deriving the state from the web.
     The use-after-free (GHSA-qjfx) and Kitty clipboard (GHSA-3r5j) fixes are already in
     `8ef0ec1`. The macOS link, OSC 8, drag-and-drop and file-open advisories are against the
     Ghostty app's Swift code, so they don't apply to warden. Its own link screening is in
-    `surface/link.rs`. The libghostty-build tag `ghostty-8ef0ec1` is still the latest, so
-    revendoring starts at its `GHOSTTY_REF`.
+    `surface/link.rs`. warden revendored to v1.4.0 (`83fb956`) the same day. Main's 7 commits past
+    the tag carry a fix for a config-parser panic on truncated UTF-8 (#14879). warden loads the
+    user's Ghostty config files, so it's exposed to that panic until 1.4.1.
   - **libghostty's status** (Hashimoto, 10-27). It now builds and runs CI for Apple platforms,
     Windows, Linux, FreeBSD, Android, WebAssembly and freestanding targets. It has bindings in most
     languages. Its users include Herdr, cmux, the Ghostel Emacs terminal and Antithesis' fuzzing,
