@@ -532,6 +532,34 @@ than re-deriving the state from the web.
     #feedback-mac, and accepted items move to #backlog. The pin also gives the community MCP
     setup: `claude mcp add -s user --transport http superlogical
     https://www.superlogical.com/rex/community-mcp`.
+  - **First read of the community MCP** (#changelog and #feedback, through 10-27). Releases are
+    split by platform: Mac `0.1.0-preview.22`, Linux Server `preview.9`, plus separate iOS and CLI
+    builds. Several ship a week. A tester reported API revision 5 on 10-22, one revision past the
+    10-19 post. What bears on the unlock:
+    - **A third-party client attaches today, through an undocumented method.** `data.connect`
+      issues single-use tickets. A tester building an Emacs front end (Roost, which today shows
+      tmux sessions through `tmux -C`) reports that their own client can attach, stream, type,
+      resize and reattach with it. The stream opens with a **GHOSTSNP** frame, libghostty's binary
+      snapshot, followed by the raw stream. That is the architecture devlog's attach, reachable from
+      outside Superlogical's apps. The docs search finds nothing on `data.connect`. The tester's
+      blocker was the snapshot itself: Emacs's terminal can't decode GHOSTSNP, and `format` with
+      `vt` isn't tied to a position in the stream. They asked for the opening screen as VT and for
+      a stdio attach (VT out, input in) that an editor runs as a subprocess. The request was
+      deferred on 10-23.
+    - **`rex attach` is gone.** It was the text-mode client, attaching inside the calling shell,
+      which is the compatibility mode. It was removed in `preview.18` (10-21) "because it was
+      incomplete and confusing people". Hashimoto: "Rex attach is gone for now."
+    - **Driving the GUI client from outside works through Lua.** With Remote Control on, `rex do
+      -e 'rex.client.queue("session.select", {session_id = …})'` moves the Mac app to a session.
+      The client keeps its own focus state, and the server's focus state is advisory.
+    - **Agent orchestration is meant for Lua.** An orchestrator wanted harness integration
+      (readiness, prompt submission, conversation ids). Hashimoto said it "can and should be
+      solved using our Lua scripting". There's no Lua method to report program status on a
+      block's behalf yet. Status comes only from the block's own OSC 7501.
+    - **OSC 7501 rough edges**, from testers running Codex, omp and Claude Code. OSC 133 prompt
+      marks from omp drop its `working` record. Idle Codex returns no `program_status` record on a
+      24-hour clock. Both are deferred. Rex shows status from remote tmux sessions only when the
+      agent runs locally.
 
 ## What this changes here
 
@@ -579,16 +607,20 @@ as the client.
   have to write its own. The `ghostty.h` action matters only for plain tabs outside Rex (warden's
   `docs/FOLLOWUPS.md`).
 
-**Not yet: warden as a Rex client.** Rex's wire protocol and client code aren't published,
-and its only clients are Superlogical's own apps. Today warden could show a Rex session only
-by running an attach command inside a libghostty surface. That is the compatibility mode,
-"architecturally identical" to a traditional multiplexer, so it puts an emulator back in the
-middle. The Rex docs don't document an attach command either. The control side is already
-reachable: `rex` drives sessions and streams events as a subprocess (ledger, 2026-10-09).
-warden's maintainer is in the macOS test program (ledger, 2026-10-28), so that side can be
-tested against a real Rex server now. **Unlock:** a published Rex client
-protocol, or a libghostty piece that attaches a surface to a Rex block. Revisit on either.
-Until then, amux and tmux stay the session layer.
+**Not yet: warden as a Rex client.** Rex's wire protocol and client code aren't published.
+An undocumented API method, `data.connect`, already lets a third-party client attach to a
+block: a GHOSTSNP snapshot, then the raw stream, with input and resize going back (ledger,
+2026-10-28). warden can't take that stream, though. `ghostty.h` has no way to load a snapshot
+into a surface or to feed a surface from anything but its own PTY. Relaying the stream through a
+subprocess in the surface's PTY would also need the opening screen as VT, and Superlogical
+deferred that request on 10-23. The text-mode `rex attach`, which was the compatibility mode,
+was removed on 10-21. The control side is already reachable: `rex` drives sessions and streams
+events as a subprocess (ledger, 2026-10-09). warden's maintainer is in the macOS test program
+(ledger, 2026-10-28), so that side can be tested against a real Rex server now. **Unlock:**
+`data.connect` (or its successor) documented as a supported client protocol, plus either a
+`ghostty.h` way to drive a surface from a snapshot and an external stream, or a VT opening screen
+for a relay subprocess. Revisit when any of these moves. Until then, amux and tmux stay the
+session layer.
 
 ## Inline images are not a tmux problem
 
