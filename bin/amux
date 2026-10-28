@@ -1073,6 +1073,7 @@ _amux_frame_kill() {
   if [ -n "$tsock" ] && tmux -L "$tsock" has-session -t "=$tsess" 2>/dev/null; then
     tmux -L "$tsock" kill-session -t "=$tsess" 2>/dev/null; had_term=1
   fi
+  [ "$had_frame$had_term" = 00 ] || _amux_log_teardown "frame-kill: '$fsess' '$tsess' ($had_frame$had_term)"
   case "$had_frame$had_term" in
     11) echo "killed frame '$fsess' + terminal '$tsess' (agent session, if any, still runs)" ;;
     10) echo "killed frame '$fsess' (no scratch terminal was up; agent session, if any, still runs)" ;;
@@ -1096,6 +1097,7 @@ _amux_frame_kill_all() {
   if [ "$any" -eq 0 ]; then
     echo "amux: no active frames or scratch terminals (try: amux --frames)" >&2; return 1
   fi
+  _amux_log_teardown "frame-kill-all"
   for s in $socks; do tmux -L "$s" kill-server 2>/dev/null; done
   for s in $tsocks; do tmux -L "$s" kill-server 2>/dev/null; done
   echo "killed all frames + scratch terminals (agent sessions, if any, still run)"
@@ -1550,6 +1552,23 @@ _amux_probe() {
   [ -n "$(_amux_frame_socks | _amux_sock_hosting "${base}-frame")" ]
 }
 
+# Append one line per deliberate teardown to <state dir>/teardown.log: the time, what
+# went down, the cwd, and the caller's process chain up to launchd. A session that
+# vanished with no line here was not taken down by amux. Best-effort: never fails
+# the teardown it records.
+_amux_log_teardown() {  # <what>
+  local dir p=$$ ppid chain="" n=0
+  dir="${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}"
+  while [ "${p:-0}" -gt 1 ] && [ "$n" -lt 16 ]; do
+    ppid=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    chain="${chain:+$chain <- }$p $(ps -o command= -p "$p" 2>/dev/null | cut -c1-160)"
+    p=$ppid; n=$((n + 1))
+  done
+  mkdir -p "$dir" 2>/dev/null \
+    && printf '%s\t%s\tcwd=%s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$PWD" "$chain" \
+         >> "$dir/teardown.log" 2>/dev/null || true
+}
+
 # Kill ONE project completely: the agent session (agent socket) plus its paired
 # <base>-frame and <base>-term. Default target is the current dir's session; an
 # explicit arg is sanitised and resolved by _amux_target_base.
@@ -1626,6 +1645,7 @@ _amux_kill() {
     parts="${parts:+$parts + }terminal '${base}-term'"
   fi
   if [ -n "$parts" ]; then
+    if [ "$suspend" -eq 1 ]; then _amux_log_teardown "suspend: $parts"; else _amux_log_teardown "kill: $parts"; fi
     if [ "$suspend" -eq 1 ]; then echo "suspended $parts (restore with: amux)"
     else echo "killed $parts"; fi
   else
@@ -1659,6 +1679,7 @@ _amux_kill_all() {
     [yY]|[yY][eE][sS]) ;;
     *) echo "aborted" >&2; return 1 ;;
   esac
+  _amux_log_teardown "kill-all: $count agent session(s)"
   # Discard each agent server's live-set sidecar before kill-server, so these
   # deliberate teardowns aren't recovered as crashes (same reasoning as _amux_kill).
   local _as _kinfo _ksp _kpid TAB; TAB=$(printf '\t')
