@@ -157,10 +157,11 @@ cmd_reader() {
   # instant between tail's last read and the truncate.
   local f sz tick=0
   while :; do
-    sleep 10
+    # every 2s: a busy attached agent writes ~1.5 MB/s of tmux log into the RAM disk
+    sleep 2
     _tmux_log_tick
     tick=$((tick + 1))
-    [ $((tick % 6)) -eq 0 ] || continue
+    [ $((tick % 30)) -eq 0 ] || continue
     for f in "$RAW_EXIT" "$RAW_SIGNAL"; do
       sz=$(stat -f %z "$f" 2>/dev/null || echo 0)
       [ "$sz" -gt "$RAW_CAP" ] && : > "$f"
