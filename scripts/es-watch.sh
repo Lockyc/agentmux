@@ -130,10 +130,13 @@ cmd_status() {
       echo "daemon $n: NOT running"
     fi
     err="$DIR/raw-$n.err"
-    [ -s "$err" ] && echo "  last error: $(tail -1 "$err")"
+    if [ -s "$err" ] && tail -1 "$err" | grep -q NOT_PERMITTED; then
+      echo "  BLOCKED: /usr/bin/eslogger lacks Full Disk Access (System Settings → Privacy & Security → Full Disk Access)"
+    fi
   done
   if launchctl print "gui/$(id -u)/$LABEL.reader" >/dev/null 2>&1; then echo "reader: loaded"; else echo "reader: NOT loaded"; fi
   echo "raw: $(du -h "$RAW_EXIT" "$RAW_SIGNAL" 2>/dev/null | awk '{printf "%s %s  ", $2, $1}')"
+  echo "tmux server logs on: $(grep -c . "$TMUX_LOGGED" 2>/dev/null || echo 0) server(s) since install"
   echo "log: $LOG"
   tail -15 "$LOG" 2>/dev/null
 }
@@ -141,23 +144,90 @@ cmd_status() {
 cmd_reader() {
   mkdir -p "$DIR"
   : >> "$RAW_EXIT"; : >> "$RAW_SIGNAL"
+  # eslogger prints a plain-text banner before its JSON; only JSON lines reach jq.
   tail -n0 -F "$RAW_EXIT" 2>/dev/null \
+    | /usr/bin/grep --line-buffered '^{' \
     | /usr/bin/jq --unbuffered -r "$FILTER" 2>>"$DIR/reader.err" >> "$LOG" &
   tail -n0 -F "$RAW_SIGNAL" 2>/dev/null \
+    | /usr/bin/grep --line-buffered '^{' \
     | /usr/bin/grep --line-buffered -E 'tmux|/fish|/claude/|warden' \
     | /usr/bin/jq --unbuffered -r "$FILTER" 2>>"$DIR/reader.err" >> "$LOG" &
   # Keep the raw files bounded. tail -F re-reads a truncated file from its start, and
   # eslogger appends (O_APPEND), so truncation loses at most the lines written in the
   # instant between tail's last read and the truncate.
-  local f sz
+  local f sz tick=0
   while :; do
-    sleep 60
+    sleep 10
+    _tmux_log_tick
+    tick=$((tick + 1))
+    [ $((tick % 6)) -eq 0 ] || continue
     for f in "$RAW_EXIT" "$RAW_SIGNAL"; do
       sz=$(stat -f %z "$f" 2>/dev/null || echo 0)
       [ "$sz" -gt "$RAW_CAP" ] && : > "$f"
     done
     # a pipeline that died takes the agent down so launchd restarts it whole
     [ "$(jobs -rp | wc -l)" -ge 2 ] || exit 1
+  done
+}
+
+# tmux's own server log, from the server's side of a death: the command or signal it
+# received, the client it lost, "server loop exit" — or a log that just stops, which is
+# itself the answer (an abrupt kill). SIGUSR2 TOGGLES it, so each server is signalled
+# once, recorded as "<pid>\t<start>\t<cwd>\t<socket>" in TMUX_LOGGED (start time defeats
+# pid reuse).
+#
+# tmux writes tmux-server-<pid>.log in the server's cwd (a project root here) and logs
+# every drawn cell for attached clients — megabytes a second from a busy agent — so that
+# path is a symlink into a RAM disk (RAM, never the SSD), trimmed to its last
+# TMUX_LOG_KEEP bytes past TMUX_LOG_CAP; tmux appends, so it carries on at the end. When
+# a recorded server is gone, its tail is copied once to $DIR/dead/ — the evidence — and
+# the symlink and RAM file are removed.
+TMUX_LOGGED="$DIR/tmux-logging"
+RAM=/Volumes/amux-watch
+TMUX_LOG_CAP=$((8 * 1024 * 1024))
+TMUX_LOG_KEEP=$((2 * 1024 * 1024))
+_ramdisk() {
+  [ -d "$RAM" ] && [ -w "$RAM" ] && return 0
+  local dev
+  dev=$(hdiutil attach -nobrowse -nomount ram://524288 2>/dev/null | awk '{print $1}') || return 1
+  [ -n "$dev" ] && diskutil erasevolume HFS+ "$(basename "$RAM")" "$dev" >/dev/null 2>&1
+}
+_tmux_log_point() {  # <cwd> <pid> — make the server's log path a symlink into the RAM disk
+  local link="$1/tmux-server-$2.log"
+  [ -L "$link" ] && return 0
+  rm -f "$link" && ln -s "$RAM/$2.log" "$link"
+}
+_tmux_log_tick() {
+  _ramdisk || return 0
+  : >> "$TMUX_LOGGED"
+  local pid start cwd sock rec TAB=$'\t' now
+  now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  # harvest the servers that died since the last tick
+  while IFS="$TAB" read -r pid start cwd sock; do
+    [ -n "$pid" ] || continue
+    [ "$(ps -o lstart= -p "$pid" 2>/dev/null)" = "$start" ] && continue
+    mkdir -p "$DIR/dead"
+    [ -f "$RAM/$pid.log" ] && tail -c "$TMUX_LOG_KEEP" "$RAM/$pid.log" > "$DIR/dead/$(date '+%Y%m%d-%H%M%S')-$sock-$pid.log"
+    printf '%s\tSERVER GONE\t%s %s\ttmux log tail: %s/dead/*-%s-%s.log\n' "$now" "$pid" "$sock" "$DIR" "$sock" "$pid" >> "$LOG"
+    rm -f "$RAM/$pid.log" "$cwd/tmux-server-$pid.log"
+    rec="$pid$TAB$start$TAB"
+    grep -vF "$rec" "$TMUX_LOGGED" > "$TMUX_LOGGED.tmp"; mv "$TMUX_LOGGED.tmp" "$TMUX_LOGGED"
+  done < "$TMUX_LOGGED"
+  # switch logging on for new servers, into RAM
+  for pid in $(pgrep -f '^tmux -L agentmux-[a-z]+-[0-9]+ .*new-session -d'); do
+    start=$(ps -o lstart= -p "$pid" 2>/dev/null) || continue
+    if ! grep -qF "$pid$TAB$start$TAB" "$TMUX_LOGGED"; then
+      cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+      sock=$(ps -o command= -p "$pid" | awk '{print $3}')
+      [ -n "$cwd" ] && _tmux_log_point "$cwd" "$pid" || continue
+      kill -USR2 "$pid" 2>/dev/null || continue
+      printf '%s\t%s\t%s\t%s\n' "$pid" "$start" "$cwd" "$sock" >> "$TMUX_LOGGED"
+      printf '%s\tLOGGING ON\t%s %s\t%s\n' "$now" "$pid" "$sock" "$cwd" >> "$LOG"
+    fi
+    if [ "$(stat -f %z "$RAM/$pid.log" 2>/dev/null || echo 0)" -gt "$TMUX_LOG_CAP" ]; then
+      tail -c "$TMUX_LOG_KEEP" "$RAM/$pid.log" > "$RAM/$pid.trim" && cat "$RAM/$pid.trim" > "$RAM/$pid.log"
+      rm -f "$RAM/$pid.trim"
+    fi
   done
 }
 
