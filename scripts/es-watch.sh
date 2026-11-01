@@ -15,7 +15,12 @@
 # user-owned file; a user LaunchAgent tails both, keeps only the lines that matter as one
 # TSV line each in $LOG, and truncates a raw file once it has been read past RAW_CAP.
 # Raw files are pre-created by the user so the reader can truncate them; eslogger opens
-# them O_APPEND, so it keeps writing at the new end.
+# them O_APPEND, so it keeps writing at the new end. The reader also timestamps each
+# agentmux server's death (_server_tick), which needs no daemon.
+#
+# Never tmux's own server log (SIGUSR2 / -v) as a witness: it writes a line per drawn
+# cell, and a busy agent's tmux server runs at ~35% CPU with it on against ~0.6% off —
+# the session visibly lags.
 #
 # Needs: macOS 13+ (eslogger), Full Disk Access for /usr/bin/eslogger, /usr/bin/jq.
 set -u
@@ -135,7 +140,6 @@ cmd_status() {
   done
   if launchctl print "gui/$(id -u)/$LABEL.reader" >/dev/null 2>&1; then echo "reader: loaded"; else echo "reader: NOT loaded"; fi
   echo "raw: $(du -h "$RAW_EXIT" "$RAW_SIGNAL" 2>/dev/null | awk '{printf "%s %s  ", $2, $1}')"
-  echo "tmux server logs on: $(grep -c . "$TMUX_LOGGED" 2>/dev/null || echo 0) server(s) since install"
   echo "log: $LOG"
   tail -15 "$LOG" 2>/dev/null
 }
@@ -156,9 +160,9 @@ cmd_reader() {
   # instant between tail's last read and the truncate.
   local f sz tick=0
   while :; do
-    # every 2s: a busy attached agent writes ~1.5 MB/s of tmux log into the RAM disk
+    # every 2s, so a SERVER GONE line is timed to within 2s of the death
     sleep 2
-    _tmux_log_tick
+    _server_tick
     tick=$((tick + 1))
     [ $((tick % 30)) -eq 0 ] || continue
     for f in "$RAW_EXIT" "$RAW_SIGNAL"; do
@@ -170,86 +174,26 @@ cmd_reader() {
   done
 }
 
-# tmux's own server log, from the server's side of a death: the command or signal it
-# received, the client it lost, "server loop exit" — or a log that just stops, which is
-# itself the answer (an abrupt kill). SIGUSR2 TOGGLES it, so each server is signalled
-# once, recorded as "<pid>\t<start>\t<cwd>\t<socket>" in TMUX_LOGGED (start time defeats
-# pid reuse).
-#
-# tmux writes tmux-server-<pid>.log in the server's cwd (a project root here) and logs
-# every drawn cell for attached clients — megabytes a second from a busy agent — so that
-# path is a symlink into a RAM disk (RAM, never the SSD), trimmed to its last
-# TMUX_LOG_KEEP bytes past TMUX_LOG_CAP; tmux appends, so it carries on at the end. When
-# a recorded server is gone, its tail is copied once to $DIR/dead/ — the evidence — and
-# the symlink and RAM file are removed.
-TMUX_LOGGED="$DIR/tmux-logging"
-RAM=/Volumes/amux-watch
-TMUX_LOG_CAP=$((8 * 1024 * 1024))
-TMUX_LOG_KEEP=$((2 * 1024 * 1024))
-_ramdisk() {
-  [ -d "$RAM" ] && [ -w "$RAM" ] && return 0
-  local dev
-  dev=$(hdiutil attach -nobrowse -nomount ram://524288 2>/dev/null | awk '{print $1}') || return 1
-  [ -n "$dev" ] && diskutil erasevolume HFS+ "$(basename "$RAM")" "$dev" >/dev/null 2>&1
-}
-_tmux_log_point() {  # <cwd> <pid> — make the server's log path a symlink into the RAM disk
-  local link="$1/tmux-server-$2.log"
-  [ -L "$link" ] && return 0
-  rm -f "$link" && ln -s "$RAM/$2.log" "$link"
-}
-_tmux_log_tick() {
-  _ramdisk || return 0
-  : >> "$TMUX_LOGGED"
-  local pid start cwd sock rec log TAB=$'\t' now
+# When each agentmux tmux server dies, to the second, as a SERVER GONE line — set against
+# teardown.log it splits amux's own teardowns from everything else. Live servers are
+# tracked as "<pid>\t<start>\t<socket>" in SERVERS (start time defeats pid reuse); the
+# check is one pgrep plus a ps per server, nothing the servers themselves pay for.
+SERVERS="$DIR/servers"
+_server_tick() {
+  : >> "$SERVERS"
+  local pid start sock TAB=$'\t' now
   now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  # harvest the servers that died since the last tick
-  while IFS="$TAB" read -r pid start cwd sock; do
+  while IFS="$TAB" read -r pid start sock; do
     [ -n "$pid" ] || continue
     [ "$(ps -o lstart= -p "$pid" 2>/dev/null)" = "$start" ] && continue
-    mkdir -p "$DIR/dead"
-    [ -f "$RAM/$pid.log" ] && tail -c "$TMUX_LOG_KEEP" "$RAM/$pid.log" > "$DIR/dead/$(date '+%Y%m%d-%H%M%S')-$sock-$pid.log"
-    printf '%s\tSERVER GONE\t%s %s\ttmux log tail: %s/dead/*-%s-%s.log\n' "$now" "$pid" "$sock" "$DIR" "$sock" "$pid" >> "$LOG"
-    rm -f "$RAM/$pid.log" "$cwd/tmux-server-$pid.log"
-    rec="$pid$TAB$start$TAB"
-    grep -vF "$rec" "$TMUX_LOGGED" > "$TMUX_LOGGED.tmp"; mv "$TMUX_LOGGED.tmp" "$TMUX_LOGGED"
-  done < "$TMUX_LOGGED"
-  # switch logging on for new servers, into RAM
+    printf '%s\tSERVER GONE\t%s %s\n' "$now" "$pid" "$sock" >> "$LOG"
+    grep -vF "$pid$TAB$start$TAB" "$SERVERS" > "$SERVERS.tmp"; mv "$SERVERS.tmp" "$SERVERS"
+  done < "$SERVERS"
   for pid in $(pgrep -f '^tmux -L agentmux-[a-z]+-[0-9]+ .*new-session -d'); do
     start=$(ps -o lstart= -p "$pid" 2>/dev/null) || continue
-    if ! grep -qF "$pid$TAB$start$TAB" "$TMUX_LOGGED"; then
-      cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
-      sock=$(ps -o command= -p "$pid" | awk '{print $3}')
-      [ -n "$cwd" ] && _tmux_log_point "$cwd" "$pid" || continue
-      kill -USR2 "$pid" 2>/dev/null || continue
-      printf '%s\t%s\t%s\t%s\n' "$pid" "$start" "$cwd" "$sock" >> "$TMUX_LOGGED"
-      printf '%s\tLOGGING ON\t%s %s\t%s\n' "$now" "$pid" "$sock" "$cwd" >> "$LOG"
-    fi
-    [ "$(stat -f %z "$RAM/$pid.log" 2>/dev/null || echo 0)" -gt "$TMUX_LOG_CAP" ] && _tmux_log_trim "$RAM/$pid.log"
-    # A log silent for 2 minutes is either switched off (a toggle went missing) or has a
-    # dead handle (a write that once hit a full disk stays broken). lsof tells which:
-    # not open → one USR2 turns it on; open → off then on reopens it.
-    if [ $(( $(date +%s) - $(stat -f %m "$RAM/$pid.log" 2>/dev/null || echo 0) )) -gt 120 ]; then
-      if lsof -p "$pid" 2>/dev/null | grep -qF "$RAM/$pid.log"; then
-        # a second USR2 still pending when it lands would coalesce with the first
-        kill -USR2 "$pid" 2>/dev/null; sleep 1; kill -USR2 "$pid" 2>/dev/null
-      else
-        kill -USR2 "$pid" 2>/dev/null
-      fi
-    fi
+    grep -qF "$pid$TAB$start$TAB" "$SERVERS" && continue
+    printf '%s\t%s\t%s\n' "$pid" "$start" "$(ps -o command= -p "$pid" | awk '{print $3}')" >> "$SERVERS"
   done
-  # A full disk stops every log at once, and a stalled tick lets one busy log outrun
-  # the cap — past 75% use, cut every log over TMUX_LOG_KEEP.
-  if [ "$(df -P "$RAM" | awk 'NR == 2 {print $5 + 0}')" -gt 75 ]; then
-    for log in "$RAM"/*.log; do
-      [ "$(stat -f %z "$log" 2>/dev/null || echo 0)" -gt "$TMUX_LOG_KEEP" ] && _tmux_log_trim "$log"
-    done
-  fi
-}
-# Keep a log's last TMUX_LOG_KEEP bytes, held in memory (tmux's log is text) so the trim
-# never needs free space on the disk it is freeing.
-_tmux_log_trim() {  # <log>
-  local keep; keep=$(tail -c "$TMUX_LOG_KEEP" "$1" 2>/dev/null) || keep=""
-  printf '%s\n' "$keep" > "$1" 2>/dev/null || : > "$1"
 }
 
 case "${1:-status}" in
