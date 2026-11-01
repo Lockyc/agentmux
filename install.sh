@@ -68,7 +68,7 @@ echo "file would break it. Start from ~/.agentmux/config/user.tmux.conf.example 
 echo "header has the caveats); copy it to the role file(s) you want."
 echo ""
 echo "Check dependencies:"
-echo "  which toml2json || brew install go-toml"
+echo "  which toml2json || brew install toml2json"
 echo "  which jq        || brew install jq"
 echo ""
 echo "Optional — Claude Code adapter (tab states + AI summary status lines):"

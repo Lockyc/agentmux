@@ -9,7 +9,7 @@ Configurable tmux agent launcher. Shell scripts only — no Python, Node, or oth
 
 Shell scripts only — split between bash, POSIX sh, and (for the fish integration) fish, by what each script needs:
 
-- **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `bin/amux`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `fork_session.sh`, `remote.sh`, `remote_attach.sh`).
+- **bash** (`#!/usr/bin/env bash`) — anything that uses `source`, `local`, `${BASH_SOURCE[0]}`, or arrays. That's `install.sh`, `bin/amux`, `shell/agentmux.sh`, and every config/style consumer (`agentmux-config.sh`, `agent_window_style.sh`, `tab_label.sh`, `cycle_mode.sh`, `launch_agent.sh`, `fork_session.sh`, `remote.sh`, `remote_attach.sh`). `es-watch.sh` (macOS only) is `#!/bin/bash`: its LaunchAgent runs it under `/bin/bash`, macOS's bash 3.2, so it stays within 3.2.
 - **POSIX sh** (`#!/bin/sh`) — standalone tmux-hook adapters and pure-compute utilities with no bash-only source-time dependencies (they may dot-source POSIX helpers such as `llm-config.sh`): `summarise.sh`, `summary_rows.sh`, `strip_unbacked_done.sh`, `llm-config.sh`, `tmux-status.sh`, `clear_icon.sh`, `update_colors.sh`, `colours.sh`, `frame_reattach.sh`, `version_check.sh`, `session_log.sh`, `notes.sh`, `tmux_version.sh`, `claude/{status,ctx,digest,goal}.sh`.
 - **fish** (`shell/agentmux.fish`) — the fish-shell integration only. It is a thin wrapper around `bin/amux` plus a `complete` line; it never sources bash libs (fish can't). All real logic stays in `bin/amux`.
 

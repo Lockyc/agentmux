@@ -34,7 +34,7 @@ which jq        >/dev/null 2>&1 && echo "jq: ok"        || echo "jq: MISSING"
 If either is missing, offer to install via Homebrew:
 
 ```bash
-brew install go-toml   # provides toml2json
+brew install toml2json
 brew install jq
 ```
 

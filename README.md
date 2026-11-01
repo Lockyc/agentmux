@@ -38,7 +38,7 @@ Then complete the setup:
 
 **1. Install dependencies** (if not already present):
 ```bash
-which toml2json || brew install go-toml
+which toml2json || brew install toml2json
 which jq        || brew install jq
 ```
 
@@ -69,7 +69,7 @@ amux
 ## Prerequisites
 
 - tmux >= 3.6
-- `toml2json`: `brew install go-toml`
+- `toml2json`: `brew install toml2json`
 - `jq`: `brew install jq`
 - A local OpenAI-compatible LLM endpoint (optional — for AI summary status lines; e.g. LM Studio, Ollama)
 - `reattach-to-user-namespace` (optional, macOS — only if using `reattach = true` in amux.toml)
