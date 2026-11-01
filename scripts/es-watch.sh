@@ -201,7 +201,7 @@ _tmux_log_point() {  # <cwd> <pid> — make the server's log path a symlink into
 _tmux_log_tick() {
   _ramdisk || return 0
   : >> "$TMUX_LOGGED"
-  local pid start cwd sock rec TAB=$'\t' now
+  local pid start cwd sock rec log TAB=$'\t' now
   now=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   # harvest the servers that died since the last tick
   while IFS="$TAB" read -r pid start cwd sock; do
@@ -225,11 +225,32 @@ _tmux_log_tick() {
       printf '%s\t%s\t%s\t%s\n' "$pid" "$start" "$cwd" "$sock" >> "$TMUX_LOGGED"
       printf '%s\tLOGGING ON\t%s %s\t%s\n' "$now" "$pid" "$sock" "$cwd" >> "$LOG"
     fi
-    if [ "$(stat -f %z "$RAM/$pid.log" 2>/dev/null || echo 0)" -gt "$TMUX_LOG_CAP" ]; then
-      tail -c "$TMUX_LOG_KEEP" "$RAM/$pid.log" > "$RAM/$pid.trim" && cat "$RAM/$pid.trim" > "$RAM/$pid.log"
-      rm -f "$RAM/$pid.trim"
+    [ "$(stat -f %z "$RAM/$pid.log" 2>/dev/null || echo 0)" -gt "$TMUX_LOG_CAP" ] && _tmux_log_trim "$RAM/$pid.log"
+    # A log silent for 2 minutes is either switched off (a toggle went missing) or has a
+    # dead handle (a write that once hit a full disk stays broken). lsof tells which:
+    # not open → one USR2 turns it on; open → off then on reopens it.
+    if [ $(( $(date +%s) - $(stat -f %m "$RAM/$pid.log" 2>/dev/null || echo 0) )) -gt 120 ]; then
+      if lsof -p "$pid" 2>/dev/null | grep -qF "$RAM/$pid.log"; then
+        # a second USR2 still pending when it lands would coalesce with the first
+        kill -USR2 "$pid" 2>/dev/null; sleep 1; kill -USR2 "$pid" 2>/dev/null
+      else
+        kill -USR2 "$pid" 2>/dev/null
+      fi
     fi
   done
+  # A full disk stops every log at once, and a stalled tick lets one busy log outrun
+  # the cap — past 75% use, cut every log over TMUX_LOG_KEEP.
+  if [ "$(df -P "$RAM" | awk 'NR == 2 {print $5 + 0}')" -gt 75 ]; then
+    for log in "$RAM"/*.log; do
+      [ "$(stat -f %z "$log" 2>/dev/null || echo 0)" -gt "$TMUX_LOG_KEEP" ] && _tmux_log_trim "$log"
+    done
+  fi
+}
+# Keep a log's last TMUX_LOG_KEEP bytes, held in memory (tmux's log is text) so the trim
+# never needs free space on the disk it is freeing.
+_tmux_log_trim() {  # <log>
+  local keep; keep=$(tail -c "$TMUX_LOG_KEEP" "$1" 2>/dev/null) || keep=""
+  printf '%s\n' "$keep" > "$1" 2>/dev/null || : > "$1"
 }
 
 case "${1:-status}" in
