@@ -1644,6 +1644,16 @@ _amux_kill() {
     tmux -L "$tsock" kill-session -t "=${base}-term" 2>/dev/null
     parts="${parts:+$parts + }terminal '${base}-term'"
   fi
+  # A by-dir kill is "gone for good", and that covers a crashed session's restore offer
+  # for this dir too — what `--probe` reports as exit 3 and warden paints as a ghost.
+  # `--mark` retires the offer exactly as answering the launch picker does; the ledger
+  # rows stay reachable through the ungated `amux --restore`. Suspend never burns it:
+  # leaving the session restorable is its whole point.
+  if [ "$suspend" -eq 0 ] && [ "$by_dir" -eq 1 ] \
+     && [ -n "$("$AGENTMUX_SCRIPTS/session_log.sh" dropped --pending "$PWD" 2>/dev/null)" ]; then
+    "$AGENTMUX_SCRIPTS/session_log.sh" dropped --mark "$PWD" >/dev/null 2>&1 || true
+    parts="${parts:+$parts + }restore offer"
+  fi
   if [ -n "$parts" ]; then
     if [ "$suspend" -eq 1 ]; then _amux_log_teardown "suspend: $parts"; else _amux_log_teardown "kill: $parts"; fi
     if [ "$suspend" -eq 1 ]; then echo "suspended $parts (restore with: amux)"
@@ -2026,7 +2036,8 @@ amux [(-<flag> | <agent_name>)] [session_name]
   --probe        exit 0 if a session [session] (agent or frame) exists (default: current dir); silent.
                  With no explicit session: exit 3 if absent but a crashed session here is
                  restorable (a plain `amux` launch would offer the restore picker); else exit 1.
-  --kill         kill an agent session [session] + its frame/term (default: current dir)
+  --kill         kill an agent session [session] + its frame/term (default: current dir;
+                 also discards the dir's pending crash-restore offer)
   --suspend      like --kill, but keep the agent tabs restorable: --probe exits 3 and
                  the next bare `amux` here offers the restore picker
   --kill-all     kill ALL agent sessions + all frames/terminals (asks first)
@@ -3214,6 +3225,26 @@ STUB
     AGENTMUX_SCRIPTS="$_sldir"
     _amux_probe >/dev/null 2>&1; _got=$?
     _assert "probe: absent with pending drop exits 3" "3" "$_got"
+
+    # --kill on a ghost: no session to tear down, but the offer is burned (--mark), so
+    # the probe falls back to plain absent. --suspend leaves the offer alone.
+    AGENTMUX_STATE_DIR="$_sldir/state"   # the kill's teardown log line stays out of the real log
+    cat > "$_sl_stub" <<STUB
+#!/bin/sh
+case "\$2" in
+  --pending) [ -f "$_sldir/marked" ] || printf 'pending\n' ;;
+  --mark) touch "$_sldir/marked" ;;
+esac
+STUB
+    _amux_kill --suspend >/dev/null 2>&1; _got=$?
+    _assert "kill --suspend on a ghost: nothing to suspend (exit 1)" "1" "$_got"
+    _amux_probe >/dev/null 2>&1; _got=$?
+    _assert "kill --suspend on a ghost keeps the offer" "3" "$_got"
+    _got=$(_amux_kill 2>/dev/null); _rc=$?
+    _assert "kill on a ghost succeeds" "0" "$_rc"
+    _assert "kill on a ghost names the offer" "killed restore offer" "$_got"
+    _amux_probe >/dev/null 2>&1; _got=$?
+    _assert "kill on a ghost burns the offer: probe exits 1" "1" "$_got"
   )
 
   # --probe/--kill dir-guard (basename-collision safety): amux names a session
