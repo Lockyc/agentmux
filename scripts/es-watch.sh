@@ -83,8 +83,7 @@ cmd_install() {
   for c in tmux fish claude; do
     p=$(_prefix "$c") && sel+=(--select "$p")
   done
-  local app
-  for app in /Applications/warden.app; do [ -d "$app" ] && sel+=(--select "$app/"); done
+  [ -d /Applications/warden.app ] && sel+=(--select /Applications/warden.app/)
   [ "${#sel[@]}" -gt 0 ] || { echo "es-watch: none of tmux/fish/claude found on PATH" >&2; return 1; }
 
   mkdir -p "$DIR" "$(dirname "$AGENT_PLIST")"
