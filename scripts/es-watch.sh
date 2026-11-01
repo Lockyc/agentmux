@@ -189,7 +189,9 @@ _server_tick() {
     printf '%s\tSERVER GONE\t%s %s\n' "$now" "$pid" "$sock" >> "$LOG"
     grep -vF "$pid$TAB$start$TAB" "$SERVERS" > "$SERVERS.tmp"; mv "$SERVERS.tmp" "$SERVERS"
   done < "$SERVERS"
-  for pid in $(pgrep -f '^tmux -L agentmux-[a-z]+-[0-9]+ .*new-session -d'); do
+  # -P 1: daemonised servers only (FILTER's definition); a client running the same
+  # argv is not a server, and recording it logs a false SERVER GONE.
+  for pid in $(pgrep -P 1 -f '^tmux -L agentmux-[a-z]+-[0-9]+ .*new-session -d'); do
     start=$(ps -o lstart= -p "$pid" 2>/dev/null) || continue
     grep -qF "$pid$TAB$start$TAB" "$SERVERS" && continue
     printf '%s\t%s\t%s\n' "$pid" "$start" "$(ps -o command= -p "$pid" | awk '{print $3}')" >> "$SERVERS"
