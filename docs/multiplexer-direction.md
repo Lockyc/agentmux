@@ -594,6 +594,52 @@ than re-deriving the state from the web.
       server restarts to become rare, with compatibility promises and no forced upgrades. So
       surviving restarts is up to the client, which is what amux's session ledger does for tmux
       today.
+- **2026-11-06** — X posts and the community MCP. There's still no devlog (Hashimoto promises a
+  formal update "next week"), YouTube upload, GitHub repo or new press.
+  - **Rex sessions survive server restarts** (Mac `preview.23` and Linux Server `preview.11`,
+    10-29). This falsifies the 10-28 "sessions don't survive their server". The server saves every
+    session and restores it on start with its windows, splits, floating panes, names and **ids**.
+    Each terminal comes back as a **new shell in its last directory**. Programs aren't restarted
+    and scrollback isn't restored yet. `rex server run|start --restore=false` starts without them,
+    and `rex server stop --discard` deletes them. `stop` now waits for the save. Restoring
+    programs stays deferred. On "Upgrade/restart without killing agents" (deferred 10-31)
+    Hashimoto said: "We have plans to do this but don't want to put it on the backlog yet." A
+    request to have Rex remember each pane's agent conversation and resume it ("Restore Codex
+    conversations after a server restart", 11-01, active) has testers bridging it with their own
+    hooks and add-ons (`rexurrect`, herdr's agent session restore). For agent tabs, this is the
+    same shape warden's restart handling already assumes (`docs/rex.md`, the restart row): same
+    ids, bare shells, and warden types `cmd` and wakes agents by resume.
+  - **The docs now document `data.connect`** in the Server API Methods page (30 pages, up from
+    24). They also add Linux shared and login server modes, remote access, upgrading, Mac and iOS
+    action and settings references, and built-in Tailscale. Linux and FreeBSD servers are open
+    to every tester. The wire framing (`/api/control`, `/api/data`, HELLO and WELCOME) is still
+    only in each server's own `/llms.txt`.
+  - **CLI** (11-05): `rex whoami --json` reports `api_revision`, `api_min_revision` and
+    `log_path`, and before this it always reported revision 0. `--interactive` on `run`, `split`,
+    `new` and the `* new` commands makes the shell read `~/.zshrc`. New terminals take the current
+    login shell as `SHELL`. The Linux server gained `--tailscale-control-url` for Headscale (11-02).
+  - **Rex for Windows** (Alasdair Monk and Hashimoto, 11-05): a pre-alpha native client that is
+    also a server, about two weeks from its first alpha wave. The Linux client is still to come.
+    Floating panes demo (Hashimoto, 10-30). Beta rollout (10-28): 12,000 more invited that week,
+    iOS testing open to every invitee, about 2,000 server testers, and just under half the
+    waitlist invited.
+  - **Ghostty main is 224 commits past warden's `83fb956`** (v1.4.0). There's still no release
+    after v1.4.0, and 1.4.1 is promised "soon" with most of the throughput work backported.
+    `ghostty.h` changed twice. #15039 (11-02) adds clang nullability annotations under `#pragma
+    clang assume_nonnull`. That changes no ABI, and it only touches `embedded.zig` as a comment.
+    #14208 (11-05) **appends** `GHOSTTY_ACTION_SET_WINDOW_THEME` at the end of
+    `ghostty_action_tag_e` and its union member, so existing tags keep their values. warden's
+    tags are bindgen-generated anyway (`build.rs`). The snapshot code changed only through
+    style packing and hyperlink-map sizing. There's still no `program_status` embedding action.
+    The libghostty-vt work (#15069 to #15098) prepares tagged, ABI-checked libghostty-vt releases
+    with versioned exports. That's the 1.0 ABI-stability plan from 10-27, and it's about the VT
+    library, not `ghostty.h`. IO throughput on main is 1.4–16× v1.4.0 depending on the workload
+    (Hashimoto, 11-03). Termius mobile now runs on libghostty (10-30).
+  - **OSC 7501:** tmux #5713 stays closed, and 3.8 is still the latest tag. nicm (10-30) finds it
+    "useful for Claude and Codex" but the protocol "far too complicated and heavyweight", with
+    64 records per pane as the sticking point. A narrow patch that keeps one record per pane
+    (cosgroveb, 11-03) is waiting for his review. New adopters: kitty 0.50.0 and the Antigravity
+    CLI 1.4.0. Nothing new from Claude Code or Codex.
 
 ## What this changes here
 
@@ -621,7 +667,7 @@ as the client.
   | amux today | After |
   | --- | --- |
   | sessions that outlive the client | Rex server-side sessions (persistent, parked when idle) |
-  | the session ledger, restore after a server restart or reboot, sleeping a server | warden: each agent tab keeps its conversation id, a server restart brings tabs back asleep, wake resumes them; sleeping a server sleeps its tabs, then stops it (Rex keeps nothing across its own restart) |
+  | the session ledger, restore after a server restart or reboot, sleeping a server | warden: each agent tab keeps its conversation id, a server restart brings tabs back asleep, wake resumes them; sleeping a server sleeps its tabs, then stops it (Rex restores sessions and layout across its own restart, but every terminal comes back a bare shell) |
   | `amux @host` over ssh/et/mosh | Rex servers on each host, reached with `-S <host>` / the client's remote sessions |
   | agent state in tab names, OSC 777 attention | OSC 7501 from the agent itself, read from Rex's `program_status_changed` events |
   | presence probe (`amux --probe`) | Rex `session_created`/`destroyed` and `child_exited` events |
@@ -651,8 +697,9 @@ subprocess: it writes the stream to the surface's PTY, decoding the opening snap
 libghostty-vt, and sends input back over control. The relay beat patching libghostty because a
 patch would sit in Ghostty internals and carry a fork through every revendor, security ones
 included. warden speaks the control protocol itself; the `rex` CLI isn't on its path. A pane shows
-one block, and Rex keeps nothing across its own restart, so amux and tmux stay the session layer
-for agent tabs until warden's agent tab list (sleep/wake, conversation resume) lands.
+one block. Rex restores sessions across its own restart but not the programs in them, so an
+agent's conversation survives only through warden's agent tab list (sleep/wake, conversation
+resume).
 
 ## Inline images are not a tmux problem
 
