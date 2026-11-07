@@ -640,6 +640,43 @@ than re-deriving the state from the web.
     64 records per pane as the sticking point. A narrow patch that keeps one record per pane
     (cosgroveb, 11-03) is waiting for his review. New adopters: kitty 0.50.0 and the Antigravity
     CLI 1.4.0. Nothing new from Claude Code or Codex.
+- **2026-11-07** — libghostty-vt 1.0 and the community MCP. There's still no devlog, YouTube upload,
+  GitHub repo or new press, and the attach and protocol searches of the docs find nothing new.
+  - **libghostty-vt 1.0 shipped** (11-06, tag `vt-1.0.0` at `6b38d55`, 266 commits past warden's
+    `83fb956`; `mitchellh.com/writing/libghostty-1-0`, HN 444 points). It has its own release cycle,
+    separate from Ghostty's. 1.0 means semantic versioning and a stable C ABI. Objects are opaque
+    handles read and written through enum-keyed getters and setters, a newer header against an older
+    library gets `GHOSTTY_UNSUPPORTED`, the few public structs carry their size or reserved padding,
+    and CI checks every change against a libabigail baseline (Linux) and golden type manifests
+    (macOS, WebAssembly). Releases are a signed source tarball plus an offline dependencies tarball,
+    and macOS gets a dylib and an XCFramework. It's MIT-licensed with no copyleft dependency. Main
+    is now `1.1.0-dev` (#15128). The release covers **libghostty-vt only**. `ghostty.h` isn't part
+    of it and stays libghostty-internal, with no `program_status` action.
+    - **For warden-relay** (which vendors libghostty-vt built from `83fb956`, statically linked):
+      every function it calls still exists in 1.0 (`ghostty_snapshot_decoder_*`,
+      `ghostty_snapshot_encode_alloc`, `ghostty_formatter_*`, `ghostty_terminal_*`). The formatter
+      options did change, though. The size-carrying `GhosttyFormatterScreenExtra`/`…TerminalExtra`
+      bool structs became one `GhosttyFormatterExtras` `uint32_t` bitmask
+      (`GHOSTTY_FORMATTER_EXTRA_*`). `crates/warden-relay/src/vt.rs` hand-declares the old structs
+      (`ScreenExtra`, `TerminalExtra`), so revendoring onto `vt-1.0.0` means porting them to the
+      bitmask. The current pin builds and runs unchanged. After that port, the relay can track tagged,
+      ABI-checked releases instead of a main commit.
+    - Adopters named in the post include KDE (a Konsole replacement experiment), Turborepo, devenv,
+      OrbStack and ghostty-web. Neovim's libghostty-vt PR was waiting only on a tagged release.
+  - **Rex** (Mac `preview.26` 11-05, `preview.27` 11-06, CLI 11-06; nothing on the wire protocol,
+    events or API revision). The experimental Go to Anything / View Activity switcher (`preview.26`)
+    shows every session, tab and pane in one list, each with its program's state. It's the Activity
+    Mode from 10-16, shipping. The Done notification now skips an agent cancelled with Escape, one
+    pausing between turns, and one that exits with a sub-agent still running. That's attention policy
+    of the kind warden's `rex/attention.rs` has to make for itself. `preview.27` adds file upload to
+    remote terminals (capped at 2 GB per terminal on the server, oldest uploads evicted first) and
+    Handoff between Mac and iPhone. It also fixes server crashes when many terminals restore at once
+    on macOS. Alasdair Monk points to `neorex` (11-01, `github.com/alexrlocke/neorex`), a community
+    Neovim plugin that gives Neovim Rex-native splits and floating windows. It's a third-party Rex
+    integration, built on the API.
+  - Nothing new from tmux (#5713 stays closed, 3.8 is the latest tag), Claude Code or Codex on OSC
+    7501. Ghostty has no app release after v1.4.0. Since 11-06, nothing has touched `ghostty.h`,
+    `embedded.zig` or the snapshot code.
 
 ## What this changes here
 
