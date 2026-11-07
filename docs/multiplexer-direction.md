@@ -642,7 +642,7 @@ than re-deriving the state from the web.
     CLI 1.4.0. Nothing new from Claude Code or Codex.
 - **2026-11-07** — libghostty-vt 1.0 and the community MCP. There's still no devlog, YouTube upload,
   GitHub repo or new press, and the attach and protocol searches of the docs find nothing new.
-  - **libghostty-vt 1.0 shipped** (11-06, tag `vt-1.0.0` at `6b38d55`, 266 commits past warden's
+  - **libghostty-vt 1.0 shipped** (11-06, tag `vt-1.0.0` at `0fa3d57`, 266 commits past warden's
     `83fb956`; `mitchellh.com/writing/libghostty-1-0`, HN 444 points). It has its own release cycle,
     separate from Ghostty's. 1.0 means semantic versioning and a stable C ABI. Objects are opaque
     handles read and written through enum-keyed getters and setters, a newer header against an older
@@ -659,8 +659,9 @@ than re-deriving the state from the web.
       bool structs became one `GhosttyFormatterExtras` `uint32_t` bitmask
       (`GHOSTTY_FORMATTER_EXTRA_*`). `crates/warden-relay/src/vt.rs` hand-declares the old structs
       (`ScreenExtra`, `TerminalExtra`), so revendoring onto `vt-1.0.0` means porting them to the
-      bitmask. The current pin builds and runs unchanged. After that port, the relay can track tagged,
-      ABI-checked releases instead of a main commit.
+      bitmask, set per handle with `ghostty_formatter_set`. warden revendored to `vt-1.0.0` the same
+      day, with `vt.rs` ported. simdutf and Highway now build without libc++, so the relay no
+      longer links it. Within `vt-1.x` the relay's hand-written declarations hold.
     - Adopters named in the post include KDE (a Konsole replacement experiment), Turborepo, devenv,
       OrbStack and ghostty-web. Neovim's libghostty-vt PR was waiting only on a tagged release.
   - **Rex** (Mac `preview.26` 11-05, `preview.27` 11-06, CLI 11-06; nothing on the wire protocol,
