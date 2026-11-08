@@ -680,6 +680,22 @@ than re-deriving the state from the web.
   - Nothing new from tmux (#5713 stays closed, 3.8 is the latest tag), Claude Code or Codex on OSC
     7501. Ghostty has no app release after v1.4.0. Since 11-06, nothing has touched `ghostty.h`,
     `embedded.zig` or the snapshot code.
+- **2026-11-09** — X posts and iOS builds. There's still no devlog (the "next week" update hasn't
+  landed), YouTube upload, GitHub repo, new docs page (30) or press.
+  - **The Rex Data protocol** (Alasdair Monk, 11-07): files drag-and-drop and copy-paste between
+    devices, "built on top of our new Rex Data protocol", with no ssh, rsync or ftp. iOS builds
+    1868/1870 (11-07) paste an image into a terminal by uploading it to the terminal's host and
+    typing its path, as the Mac does. The docs don't mention it. It reads as the `/api/data`
+    channel gaining sources beyond `terminal`. That's additive for warden: `rex-client` opens only
+    `rex.data.terminal.v1` (`DATA_PROTOCOL`).
+  - **"@linear 🤝 @superlogical"** (Alasdair Monk, 11-08): the post is one image, which this check
+    couldn't fetch. Nothing else says what the tie-up is.
+  - Ghostty main is 33 commits past `0fa3d57` (`vt-1.0.0`). Of the watched files only
+    `include/ghostty/vt/version.h` changed (1.1.0-dev). Two resize fixes reach warden on the next
+    revendor: dangling pins on column growth (#15134) and scrollback not pulled down when rows grow
+    as columns shrink (#15141). libghostty-vt now publishes Windows zips (#15151). Libghostty 1.0
+    reached 1,069 points on HN. Nothing new from tmux (3.8, #5713 closed), Claude Code or Codex on
+    OSC 7501.
 
 ## What this changes here
 
