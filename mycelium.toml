@@ -1,7 +1,7 @@
 name    = "agentmux"
 summary = "A configurable tmux launcher for agent sessions. Define your AI agents — or any CLI — in TOML; each opens in its own colour-coded tmux window and prefix-m cycles between them. Runs in any terminal."
 kind    = "tool"
-status  = "active"
+status  = "dormant"
 tags    = ["tmux", "agents", "cli", "launcher"]
 stack   = ["bash", "tmux"]
 
