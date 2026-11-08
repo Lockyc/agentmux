@@ -5,13 +5,15 @@
 ![Built with tmux](https://img.shields.io/badge/built%20with-tmux-1BB91F?logo=tmux&logoColor=white)
 [![License](https://img.shields.io/github/license/lockyc/agentmux)](LICENSE)
 
+> **Dormant.** agentmux still works and stays published, but it isn't the focus: [warden](https://github.com/lockyc/warden)'s Rex tabs replace the warden → agentmux → tmux stack, with each project's agents listed beside its terminal and kept in Rex sessions.
+
 Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix m` cycles through the list. `amux @host` runs the session on a [remote machine](#remote-sessions); your laptop only carries the connection.
 
 ![agentmux overview](docs/overview.png)
 
 ![agentmux overview with sidebar](docs/overview-sidebar.png)
 
-> **Companion project: [warden](https://github.com/lockyc/warden)** — a notification-aware terminal built for this workflow. agentmux's `--notify` hook emits a standard OSC 777 escape *through* tmux; warden surfaces it as a per-tab badge plus a macOS banner tied to the agent that raised it (see [AI tab states](#ai-tab-states-claude-code)). agentmux works in any terminal — warden just makes the notifications first-class.
+> **Companion project: [warden](https://github.com/lockyc/warden)** — a notification-aware terminal. agentmux's `--notify` hook emits a standard OSC 777 escape *through* tmux; warden surfaces it as a per-tab badge plus a macOS banner tied to the agent that raised it (see [AI tab states](#ai-tab-states-claude-code)). agentmux works in any terminal — warden just makes the notifications first-class.
 
 ## Install
 
