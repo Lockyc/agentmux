@@ -19,7 +19,9 @@ research:
       note: >-
         x.com fails TLS. X is the primary channel. The hachyderm.io API (browser user-agent,
         /api/v1/accounts/lookup?acct=mitchellh) is only a partial mirror and missed every post
-        from 10-11 to 10-15. Charts are media URLs with no alt text, so read them as images.
+        from 10-11 to 10-15. Charts are media URLs with no alt text, so read them as images;
+        pbs.twimg.com and d.fxtwitter.com failed TLS on 11-09 (browser user-agent, with and
+        without ?name=orig), so an image may stay unread.
     - name: Other Superlogical staff on X
       check: the fxtwitter route above, for almonk (Alasdair Monk) and pearkes (Jack Pearkes)
       note: Activity Mode and beta-wave news surfaced through these accounts before the company's
