@@ -697,6 +697,30 @@ than re-deriving the state from the web.
     as columns shrink (#15141). libghostty-vt now publishes Windows zips (#15151). Libghostty 1.0
     reached 1,069 points on HN. Nothing new from tmux (3.8, #5713 closed), Claude Code or Codex on
     OSC 7501.
+- **2026-11-10** — the community MCP and X posts. There's still no devlog, YouTube upload, GitHub
+  repo, new docs page (30) or press, and the Linear tie-up is still only an image.
+  - **Rex connects over SSH** (Linux Server `preview.14`, 11-09). `-S ssh://[user@]host` on any CLI
+    command reaches a server through the user's own ssh and ssh config, and starts a personal
+    server there if none is running. The changelog pitches it as replacing Tailscale for many users.
+    `rex server install ssh://host` installs Rex on a systemd Linux host over ssh, starts it at
+    boot and adds it to the hosts. The Remote Access docs also describe forwarding the server's
+    Unix socket over ssh and connecting to the local end. Other changes: `install.sh --user`
+    installs without root, `rex server status` lists every listener, and stopping the service now
+    saves sessions before their shells exit on SIGTERM. For warden this is additive. `rex::server`'s
+    `host_endpoint` reads `unix:`, `https://` and bare `host[:port]`, and skips `ssh://`. So a host
+    reachable only over ssh fails to open with "no endpoint warden can reach". A forwarded socket
+    already works as a `unix:` endpoint.
+  - **The Mac client overrides API split ratios** (feedback, 11-08, active). `session.new_split`
+    and `session.move_block` honour `ratio`, then an attached Mac app rebalances the split to 0.5
+    (`Workspace.balancesSplitsOnCreation`). A session with no Mac client attached keeps the ratio.
+    This doesn't affect warden's own splits: `rex/column.rs` always asks for 0.5 and sets other
+    ratios through `session.resize_pane`, which the report gives as the workaround.
+  - OSC 7501: Paneflow (an agent orchestrator) moved from screen rules to OSC 7501 (blog, 11-03).
+    A community project, `rexmod` (11-01), turns Rex into an agent harness. Nothing new from tmux
+    (3.8, #5713 closed), Claude Code or Codex.
+  - Ghostty main is 68 commits past `0fa3d57`. Of the watched files, only
+    `src/terminal/snapshot/page.zig` changed, and only through CI test sharding. #15173 keeps a
+    pruned page's memory when grow prunes by lines. There's still no 1.4.1.
 
 ## What this changes here
 
