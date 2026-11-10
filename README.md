@@ -5,29 +5,15 @@
 ![Built with tmux](https://img.shields.io/badge/built%20with-tmux-1BB91F?logo=tmux&logoColor=white)
 [![License](https://img.shields.io/github/license/lockyc/agentmux)](LICENSE)
 
-> **Dormant.** agentmux still works and stays published, but it isn't the focus: [warden](https://github.com/lockyc/warden)'s Rex tabs replace the warden → agentmux → tmux stack, with each project's agents listed beside its terminal and kept in Rex sessions.
+> **Dormant.** agentmux still works and stays published, but it isn't under active development. Its author now keeps each project's coding agents in [warden](https://github.com/lockyc/warden), a terminal app that holds them in sessions on a Rex server (Superlogical's server-side terminal multiplexer) instead of tmux.
 
-Configurable tmux agent launcher. Define AI agents (or any CLI) in TOML; sessions auto-launch the correct agent, tabs are colour-coded per agent, and `prefix m` cycles through the list. `amux @host` runs the session on a [remote machine](#remote-sessions); your laptop only carries the connection.
+Run your coding agents — or any CLI — in tmux sessions defined in one TOML file. Each session launches the right agent for its directory, tabs are colour-coded per agent and show what each one is doing, and `prefix m` cycles through them. `amux @host` runs the session on a [remote machine](#remote-sessions); your laptop only carries the connection.
 
-![agentmux overview](docs/overview.png)
+![agentmux in a tmux session: colour-coded agent tabs along the top, the session name and agent profiles called out, and AI summary status lines below](docs/overview.png)
 
-![agentmux overview with sidebar](docs/overview-sidebar.png)
-
-> **Companion project: [warden](https://github.com/lockyc/warden)** — a notification-aware terminal. agentmux's `--notify` hook emits a standard OSC 777 escape *through* tmux; warden surfaces it as a per-tab badge plus a macOS banner tied to the agent that raised it (see [AI tab states](#ai-tab-states-claude-code)). agentmux works in any terminal — warden just makes the notifications first-class.
+![The same session with the side-terminal frame open beside the agent](docs/overview-sidebar.png)
 
 ## Install
-
-### Claude Code (interactive — recommended)
-
-Clone the repo, open it in Claude Code, and run:
-
-```
-/agentmux:install
-```
-
-The command checks dependencies, runs the installer, and interactively wires your shell config and Claude Code hooks. It then self-installs to `~/.claude/commands/` so `/agentmux:install` is available globally for future updates from any directory.
-
-### Manual
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash
@@ -67,6 +53,8 @@ source ~/.zshrc                  # or restart your shell
 ```bash
 amux
 ```
+
+**Or, in Claude Code,** clone the repo, open it, and run `/agentmux:install`: it checks dependencies, runs the installer, and wires your shell config and Claude Code hooks interactively.
 
 ## Prerequisites
 
@@ -249,7 +237,7 @@ terminal's own tab bar and amux's.
   per-field, falling back to the base `[frame]` values. e.g. a taller split that
   starts focused on the terminal in one project:
   ```toml
-  [frame.dirs."~/Developer/github.com/you/myproject"]
+  [frame.dirs."~/code/myproject"]
   left_vertical_split = 30
   focus = "terminal"
   ```
@@ -419,44 +407,7 @@ See [Remote sessions](#remote-sessions).
 
 ## Adding an agent integration
 
-`amux` and friends launch any CLI from `amux.toml`. The richer integration — tab-state emojis and the AI summary status lines — runs through a per-agent **adapter** that lives at `scripts/<agent>/status.sh`. The shipped Claude Code adapter (`scripts/claude/`) is the reference implementation.
-
-An adapter is a thin shim that:
-
-1. Exports three env vars and execs the shared core (`scripts/tmux-status.sh`):
-
-   | Env var | Purpose |
-   |---|---|
-   | `AGENTMUX_AGENT_NAME` | Label used in tab and temp-file names (e.g. `claude`, `gemini`) |
-   | `AGENTMUX_CTX_BIN` | Path to a transcript context extractor (see below) |
-   | `AGENTMUX_DIGEST_BIN` | Path to a transcript digest builder (see below) |
-
-2. Parses whatever hook payload its agent sends and re-exports:
-
-   | Env var | Purpose |
-   |---|---|
-   | `AGENTMUX_HOOK_PROMPT` | Latest user prompt (working state only) |
-   | `AGENTMUX_HOOK_TRANSCRIPT` | Filesystem path to the agent's session transcript (working state only) |
-
-The shared core reads only those env vars, never stdin — parse the hook payload in the adapter.
-
-Two optional overrides let an adapter swap in custom helpers; defaults work for everyone:
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `AGENTMUX_TAB_LABEL_BIN` | `tab_label.sh` beside `tmux-status.sh` | Resolves the tab-label suffix from `@window-agent`. Override to render labels differently. |
-| `AGENTMUX_SUMMARISE_BIN` | `summarise.sh` beside `tmux-status.sh` | LLM-summary entry point. Override to point at a different summariser. |
-
-**Contracts for the context extractor (`ctx.sh`, `AGENTMUX_CTX_BIN`) and the digest builder (`digest.sh`, `AGENTMUX_DIGEST_BIN`)** (both read the transcript path as `$1`):
-
-- `ctx.sh <transcript> <max_msgs> [percap] [head|tail|todos]` — prints prose-only turns joined by ` / `. Filters out tool noise and pasted dumps. `head`/`tail` select the earliest/most-recent turns; `todos` emits the latest task-list snapshot (the session's goal/plan). An adapter must support all three modes.
-- `digest.sh <transcript> [start_line] [char_budget]` — prints a chronological digest (prose + mutating tool one-liners) for the done/now/next summariser. Drops oldest prose first when over budget; keeps tool lines.
-
-Both must print nothing and exit 0 on any error.
-
-To add e.g. a Gemini CLI adapter: create the adapter's `{status,ctx,digest}.sh` following the Claude versions and wire your agent's hook system to call its `status.sh <state>` (by absolute path) with `state` ∈ `start|working|notify|permission|done`. `install.sh` doesn't wire adapters; your own adapter and its hook wiring are manual and live outside the clone (see below).
-
-**Keep custom adapters outside the shipped tree.** `~/.agentmux/` is a git clone and `amux --update` runs `git pull --ff-only`. Because adapters are referenced by absolute path — the hook command plus the `AGENTMUX_CTX_BIN`/`AGENTMUX_DIGEST_BIN` (and other `AGENTMUX_*_BIN`) overrides — they can live anywhere on your filesystem. Put your own under e.g. `~/.agentmux-local/<agent>/` and point your hook command and env-var overrides at those paths. Avoid authoring an adapter under `~/.agentmux/scripts/<name>/` using a name agentmux might later ship: if a future release adds a tracked `scripts/<name>/`, `amux --update` will refuse to proceed rather than overwrite your file, blocking updates until you relocate it.
+`amux` and friends launch any CLI from `amux.toml`. The richer integration — tab-state emojis and the AI summary status lines — runs through a per-agent **adapter** at `scripts/<agent>/status.sh`; the shipped Claude Code adapter (`scripts/claude/`) is the reference. The adapter contract, and how to keep your own adapters outside the clone: [docs/integration.md](docs/integration.md).
 
 ## Shell support
 
@@ -470,19 +421,7 @@ To add e.g. a Gemini CLI adapter: create the adapter's `{status,ctx,digest}.sh` 
 
 Where completion is wired, the first argument completes agent names and `-<flag>` shortcuts (`amux --complete`) plus `@host` tokens (`amux --complete-hosts`); the second completes a remote project after `@host` (`amux --complete-remote <host>`, from the local cache) or a live session name after `--kill`, `--suspend`, `--frame-kill`, `--probe`, or `attach` (`amux --complete-sessions`). Each prints one candidate per line. (bash gets the command without completion; nothing stops you adding a `complete` script for it.)
 
-### Adding another shell
-
-To support a shell that isn't listed (e.g. nushell, elvish, xonsh):
-
-1. Create `shell/agentmux.<shell>` — a thin wrapper, in that shell's own syntax, that:
-   - resolves the launcher path (default `~/.agentmux/bin/amux`, overridable via the `AGENTMUX_BIN` env var) and defines an `amux` command forwarding all arguments to it;
-   - optionally registers completion from the four `--complete*` sources above.
-
-   `shell/agentmux.sh` (bash/zsh) and `shell/agentmux.fish` (fish) are the reference implementations — both are only a few lines.
-2. Update **both** installers so the file ships and gets wired: `install.sh` (it's carried by the clone; add its source line to the printed instructions) and `.claude/commands/agentmux/install.md` (detection + wiring). They must stay in sync.
-3. Source `~/.agentmux/shell/agentmux.<shell>` from your shell's startup config.
-
-No other agentmux code needs to change — `bin/amux` and every `scripts/` helper are shell-agnostic subprocesses.
+Adding another shell (nushell, elvish, xonsh) is a few-line wrapper: [docs/integration.md](docs/integration.md#adding-another-shell).
 
 ## AI tab states (Claude Code)
 
@@ -568,7 +507,7 @@ Each session gets a status-bar colour derived from its name, so the same project
 Two projects can land on the same colour, and then share it on every run. (Several named sessions of one project always get distinct colours.) To give a project a distinct, fixed colour, **pin it**:
 
 ```toml
-[amux.dirs."~/Developer/github.com/you/myproject"]
+[amux.dirs."~/code/myproject"]
 session_colour = "blue"
 ```
 
