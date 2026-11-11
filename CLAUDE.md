@@ -157,7 +157,6 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 | `config/amux.toml.example` | Example agent config. **A new config key lands in the README `## Configuration reference` table in the same change as its parser** — the table is a second copy of the key list by construction and stays honest only by moving with the code |
 | `config/user.tmux.conf.example` | Template for the optional **per-role** user tmux overlays — `~/.agentmux/user.{agent,frame,term}.tmux.conf`, each `source-file -q`'d last by its own socket so it overrides amux's defaults without a binding leaking across roles (a shared file would break the frame's C-f layout). The escape hatch for the deliberate `~/.tmux.conf` isolation |
 | `install.sh` | Core installer: clones the repo into `~/.agentmux/` and prints setup instructions |
-| `.claude/commands/agentmux/install.md` | Claude-driven `/agentmux:install` flow |
 | `tests/mouse/` | The status-bar click suite — the only test that exercises the path a real mouse click takes (`NOTES_SELFTEST` stops short of it by design). `run.sh` is the entry point; `main.exp`/`frame.exp`/`lib.tcl` are the `expect` drivers. Its `README.md` carries the technique and the traps that make a harness of this shape silently test nothing |
 | `docs/ai-summary.md` | AI summary design rationale: invariants, ruled-out approaches, eval method — **start here when revisiting the summary feature** |
 | `docs/multiplexer-direction.md` | Architecture direction + the external evidence for it (Superlogical's design, transcribed because its sources are agent-unfetchable): why the frame layer stops being warden's path, where each amux capability goes when amux retires, what blocks warden being a Rex client, and why inline images are not a tmux problem — **start here before changing the nesting model or the frame** |
@@ -166,20 +165,12 @@ its own output (`fix #42` → `fix ##42` → `fix ####42`).
 
 ## Install
 
-`~/.agentmux/` is a **git clone** of this repo. Two installers, kept in sync:
-
-- **`install.sh`** — clones into `~/.agentmux/` if absent, `git pull --ff-only`s an
-  existing clone, leaves a dev/symlink install untouched, and *refuses* a pre-clone
-  copy-install (pointing at `/agentmux:install` to migrate). Seeds `amux.toml` from
-  the example and prints the shell/tmux/hook wiring. Runnable locally or via
-  `curl -fsSL …/install.sh | bash`. Needs `git` (install/update only).
-- **`/agentmux:install`** (`.claude/commands/agentmux/install.md`) — interactive. Runs
-  `install.sh`, migrates an old copy-install (backup → clone → restore `amux.toml`),
-  and wires shell config, the Claude Code hooks, and `[llm]`/`[update]` (and offers to
-  remove a leftover agentmux line from `~/.tmux.conf`).
-
-**Invariant:** whenever you change what gets installed or wired, update **both**
-`install.sh` and `install.md` — they drift silently otherwise.
+`~/.agentmux/` is a **git clone** of this repo. **`install.sh`** clones into
+`~/.agentmux/` if absent, `git pull --ff-only`s an existing clone, leaves a dev/symlink
+install untouched, and *refuses* a pre-clone copy-install (printing the manual
+migration). Seeds `amux.toml` from the example and prints the shell/tmux/hook wiring.
+Runnable locally or via `curl -fsSL …/install.sh | bash`. Needs `git` (install/update
+only).
 
 Updating an installed clone: `amux --update` (= `git -C ~/.agentmux pull --ff-only`).
 

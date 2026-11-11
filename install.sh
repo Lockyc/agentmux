@@ -26,7 +26,8 @@ elif _is_symlink_dev; then
   echo "Detected dev/symlink install at $INSTALL_DIR — leaving it untouched."
 else
   echo "agentmux: existing non-clone install at $INSTALL_DIR." >&2
-  echo "Run /agentmux:install to migrate it safely (backs up your current install, preserves amux.toml)." >&2
+  echo "Move it aside (mv ~/.agentmux ~/.agentmux.bak), re-run this installer, then copy" >&2
+  echo "~/.agentmux.bak/amux.toml back into ~/.agentmux/ to keep your config." >&2
   exit 1
 fi
 

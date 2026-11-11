@@ -60,7 +60,7 @@ To support a shell that isn't listed in the README's Shell support table (e.g. n
    - optionally registers completion from the four `--complete*` sources the README lists.
 
    `shell/agentmux.sh` (bash/zsh) and `shell/agentmux.fish` (fish) are the reference implementations — both are only a few lines.
-2. Update **both** installers so the file ships and gets wired: `install.sh` (it's carried by the clone; add its source line to the printed instructions) and `.claude/commands/agentmux/install.md` (detection + wiring). They must stay in sync.
+2. Add its source line to `install.sh`'s printed instructions (the file itself ships with the clone).
 3. Source `~/.agentmux/shell/agentmux.<shell>` from your shell's startup config.
 
 No other agentmux code needs to change — `bin/amux` and every `scripts/` helper are shell-agnostic subprocesses.

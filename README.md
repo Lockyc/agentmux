@@ -54,8 +54,6 @@ source ~/.zshrc                  # or restart your shell
 amux
 ```
 
-**Or, in Claude Code,** clone the repo, open it, and run `/agentmux:install`: it checks dependencies, runs the installer, and wires your shell config and Claude Code hooks interactively.
-
 ## Prerequisites
 
 - tmux >= 3.6
