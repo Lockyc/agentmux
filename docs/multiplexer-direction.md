@@ -34,11 +34,16 @@ research:
         the page list in https://www.superlogical.com/rex/docs/llms.txt (whole text at
         llms-full.txt); https://www.superlogical.com/rex/docs/search.json?q=attach (also
         q=protocol) shows whether the unlock has been documented
+      note: docs change without a devlog post
+    - name: Beta Discord (community MCP)
+      check: >-
+        user-scope MCP `superlogical`: list_changelog and read each post since the as-of date;
+        list_activity since the as-of date; search_feedback for data.connect, protocol, snapshot,
+        program_status / OSC 7501, split ratio, restore and endpoint schemes (http, ssh)
       note: >-
-        docs change without a devlog post. The community MCP server
-        (superlogical.com/rex/community-mcp, user-scope MCP `superlogical`) carries the beta
-        Discord's feedback, #backlog and #changelog. It signs in through a Discord account that
-        is in the test program, so an agent can read it only after a human has authenticated it
+        the MCP (superlogical.com/rex/community-mcp) carries the beta Discord's feedback, #backlog
+        and #changelog. It signs in through a Discord account that is in the test program, so an
+        agent can read it only after a human has authenticated it (`/mcp`)
     - name: Superlogical GitHub org
       check: gh api orgs/superlogical/repos --jq '.[].full_name'
       note: the org exists with no public repos; a first repo is the likely home for code, a protocol spec or a license
@@ -755,6 +760,20 @@ than re-deriving the state from the web.
       (Mac `preview.28`). That limit was the Mac client's.
     - Each terminal gets its own cgroup on Linux under systemd, so systemd-oomd kills one terminal
       rather than every session.
+  - **Discord feedback** (community MCP, since 11-10):
+    - **Clients can reach a server over plain HTTP** on the bleeding-edge channel (golden, 11-12,
+      "Allow the server to be exposed over HTTP", deferred). The server has exposed an HTTP
+      listener (`--extra-listen`) for some time, and only the client side is new. It serves
+      Headscale setups that can't issue certificates. warden can't follow: `rex::server`'s
+      `host_endpoint` takes `unix:`, `https://` and a bare `host[:port]` (as https), and rejects
+      `http://`.
+    - **Codex's async questions don't show as blocked** ("Show unanswered questions in Activity
+      while agents keep working", 11-10, active). Codex 0.167 reports root `blocked:kind=question`
+      only once the agent stops running, so a question it asks while it keeps working leaves the
+      record at `working`. A Codex agent in a warden agent tab with a question pending reads as
+      working, not as needing you, in `rex/attention.rs`'s terms too.
+    - The third-party streaming thread ("Terminal streaming API: minimal client example", 10-28)
+      still has no team answer. The split-ratio reports (11-08, 11-12 on iOS) are the 11-10 item.
   - **On X**: Alasdair Monk runs 25–30 agent sessions on several machines and harnesses from the
     macOS client (11-09). Hashimoto described how Superlogical works (11-10). Nothing new on the
     Linear tie-up.
