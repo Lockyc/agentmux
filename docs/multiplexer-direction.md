@@ -721,6 +721,44 @@ than re-deriving the state from the web.
   - Ghostty main is 68 commits past `0fa3d57`. Of the watched files, only
     `src/terminal/snapshot/page.zig` changed, and only through CI test sharding. #15173 keeps a
     pruned page's memory when grow prunes by lines. There's still no 1.4.1.
+- **2026-11-13** — tmux takes OSC 7501, libghostty-vt 1.0.1, and Rex releases. There's still no
+  devlog (the "next week" update promised 10-28 hasn't landed), YouTube upload, GitHub repo or
+  press. The docs have 32 pages; the two new ones install and run the Windows server, which is open
+  to testers with Discord's Windows role. The attach and protocol searches find nothing new.
+  - **tmux master answers OSC 7501** (`434ab3a25`, 11-12, "Minimal support for OSC 7501 program
+    status", from cosgroveb's tmux/tmux#5830). nicm applied it with changes. tmux answers the `?`
+    query and keeps **one root record per pane** (reports with an `id` are ignored), exposed as the
+    `pane_program_state`, `pane_program_name` and `pane_program_message` formats and shown in tree
+    and switch mode by default. `done` and `error` survive OSC 133 A and the pane exiting. It
+    doesn't pass the report through to the outer terminal. It isn't in a tag yet (3.8 is the
+    latest). Once it ships, Claude Code and Codex under tmux emit. Under amux that reaches tmux's
+    formats, not warden, which reads status only from Rex.
+  - **libghostty-vt 1.0.1** (11-11, tag `vt-1.0.1` at `e9dc690`, a drop-in on the 1.0 ABI). It adds
+    prebuilt Windows builds and fixes: stale OSC 133 prompts after a column resize (#15199), the
+    grow-rows-shrink-columns scrollback pull (#15141), failed render updates leaving rows marked
+    clean, and a replaced Kitty image vanishing mid-transmission (#15184). A restored snapshot's last
+    page now gets its full pooled capacity (#15195), with the snapshot format unchanged. A
+    scrollback line limit is no longer slower than a byte limit. warden-relay vendors `vt-1.0.0`,
+    so these reach it on the next revendor with no code change. Ghostty main is 98 commits past
+    `0fa3d57`. Of the watched files, only `vt/version.h` and the snapshot decoder changed
+    (#15195). `ghostty.h` and `embedded.zig` are untouched, and there's still no 1.4.1.
+  - **Rex** (Mac `preview.28` 11-10 and `preview.29` 11-12; Server & CLI `preview.15` to `.18`,
+    11-10 to 11-12). Nothing changes the wire protocol, the events or the API revision. Both the
+    server and the Mac client moved to libghostty-vt 1.0.1. The parts that bear on warden:
+    - **ssh hosts mature.** Several connections to one host share one ssh login. A busy host's
+      dropped logins (sshd `MaxStartups`) are retried. The Mac app asks ssh's passphrase, password
+      and host-key questions in its command palette. Terminals on a host that went down reopen when
+      it comes back. warden's `host_endpoint` still skips `ssh://` (11-10 entry).
+    - **New terminals report their pixel size from the start** (`preview.15`), so Kitty images and
+      chafa get the right size before the first resize.
+    - **A pane holding large images no longer fails** with "snapshot exceeded the 64 MiB limit"
+      (Mac `preview.28`). That limit was the Mac client's.
+    - Each terminal gets its own cgroup on Linux under systemd, so systemd-oomd kills one terminal
+      rather than every session.
+  - **On X**: Alasdair Monk runs 25–30 agent sessions on several machines and harnesses from the
+    macOS client (11-09). Hashimoto described how Superlogical works (11-10). Nothing new on the
+    Linear tie-up.
+  - Nothing new from Claude Code or Codex on OSC 7501.
 
 ## What this changes here
 
@@ -761,9 +799,10 @@ as the client.
   unannounced commercial layer. warden reads Rex through its documented API and events,
   which keeps that layer optional.
 - **Agent status reaches warden from Rex, not from the terminal.** Claude Code emits OSC
-  7501 only to a terminal that answers its query (ledger, 2026-10-13). Rex answers it. tmux
-  and the Ghostty app don't. So under amux nothing emits, and amux doesn't grow a 7501
-  emitter for a layer that is going away. Under Rex, warden reads the events on its control
+  7501 only to a terminal that answers its query (ledger, 2026-10-13). Rex answers it. The
+  Ghostty app doesn't, and tmux does only from master (2026-11-13), keeping the state in its own
+  formats without passing it out. So under amux nothing reaches warden, and amux doesn't grow a
+  7501 bridge for a layer that is going away. Under Rex, warden reads the events on its control
   connection and renders the states as chrome, which is where warden's sidebar and tab-row dots already
   live. The events are raw states. Deciding what deserves attention takes a policy on top,
   which Rex's own Activity Mode builds from heuristics (ledger, 2026-10-16), and warden would
