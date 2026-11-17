@@ -1,13 +1,13 @@
-name    = "agentmux"
+name = "agentmux"
 summary = "A configurable tmux launcher for agent sessions. Define your AI agents — or any CLI — in TOML; each opens in its own colour-coded tmux window and prefix-m cycles between them. Runs in any terminal."
-kind    = "tool"
-status  = "dormant"
-tags    = ["tmux", "agents", "cli", "launcher"]
-stack   = ["bash", "tmux"]
+status = "dormant"
+tags = ["tmux", "agents", "cli", "launcher"]
 
 [github]
 topics_extra = ["ai-agents", "claude-code", "coding-agents", "llm", "terminal", "session-manager"]
+description = "A configurable tmux launcher for agent sessions. Define your AI agents — or any CLI — in TOML; each opens in its own colour-coded tmux window and prefix-m cycles between them. Runs in any terminal."
+topics = ["ai-agents", "bash", "claude-code", "cli", "coding-agents", "llm", "session-manager", "terminal", "tmux", "agents", "launcher"]
 
 [[provides]]
-name    = "agent-sessions"
+name = "agent-sessions"
 summary = "Spawns, probes, and kills tmux-backed agent sessions (the warden → agentmux → tmux stack)"
