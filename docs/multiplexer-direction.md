@@ -778,6 +778,64 @@ than re-deriving the state from the web.
     macOS client (11-09). Hashimoto described how Superlogical works (11-10). Nothing new on the
     Linear tie-up.
   - Nothing new from Claude Code or Codex on OSC 7501.
+- **2026-11-20** — Rex releases, a video and X posts. There's still no devlog (the update promised
+  10-28 hasn't landed) or press, and nothing moves the unlock: no change to the wire protocol, the
+  data stream or the event shapes. The docs have 33 pages (the new one is Custom UI, below), and the
+  attach and protocol searches find nothing new.
+  - **The API revision is moving fast.** A tester reports revision 13 on Server `preview.18` (11-12)
+    and 16 on the snapshot channel (11-17), against 7 on 10-27. `rex-client` says hello at
+    `API_REVISION` 7. The 10-24 compatibility layer translates between revisions both ways, so this
+    holds as long as servers keep 7 at or above their `api_min_revision`, which nothing published
+    states.
+  - **Server & CLI** (`preview.19` 11-13 to `preview.22` 11-19). Additive for warden:
+    - TCP port forwarding, `rex forward` (`-L`/`-R`, reconnecting). Terminal blocks gain a `ports`
+      method and a `ports_changed` event (each listening port and its process). The Mac app
+      forwards a remote `localhost` link on ⌘-click (`preview.31`). The 11-16 video
+      (*Rex Demo: Remote Copy/Paste, Drag/Drop, and Port Forwarding*, YouTube `pkH_WJApzH0`, 7 min,
+      not transcribed) shows this and the Lua plumbing under it. Hashimoto (X, 11-16): "the moment
+      any UI shows a selector between 'local' and 'cloud', the product has failed."
+    - A per-user **focus history** with an API method to step back through recent panes, tabs and
+      sessions (`preview.22`). Closing the focused pane or tab now returns focus to the previous one.
+    - Terminals restored while the server is slow now "come back with their contents and directory
+      instead of as new shells" (`preview.20`). That reads as restored terminals carrying their
+      screen contents, which the 11-06 entry said wasn't restored yet. Programs still aren't.
+    - Stream fixes that touch warden's relay path: a data stream that drops and reconnects no longer
+      sticks when the client stops reading partway through catching up or loses the reconnect reply
+      (`preview.19`); a terminal that paused output for a client that stopped reading resumes when
+      another client connects (`preview.21`); an over-large event no longer disconnects every client
+      in the session (`preview.21`). Control requests can be up to 1 MiB (`preview.22`).
+    - Closing a terminal kills programs that ignore SIGHUP, and stopping a server with many such
+      terminals takes about one second in total.
+  - **Mac** (`preview.30` to `.33`): copy mode (⇧⌘C), `rex.ui.input` / `rex.ui.pick` asking
+    questions in the command palette (on every attached client, first answer wins; Hashimoto and
+    Alasdair Monk, X, 11-18), every setting as an action callable by `rex do`, bottom tab bar,
+    New Session on Host, a confirm before closing a background tab with unseen output, and the app
+    renamed from Rex Beta to Rex. None of it is API warden reads.
+  - **Rex for Windows alpha began** (11-17), a native client that is also a server. Windows releases
+    are versioned `0.1.1-preview.N`.
+  - **A Superlogical repo exists:** `superlogical/Sparkle`, a fork of the macOS update framework
+    (created 11-19). It's not code for Rex's protocol or a license.
+  - **Hashimoto has a new terminal specification proposal** (X, 11-19), shared privately with a
+    group that includes people working on Claude Code. Nothing about its content is public.
+  - **Discord feedback** (community MCP, since 11-13):
+    - "Server restart drops the Terminal startup command and opens zsh" (11-13, active): restored
+      terminals start the account shell, not the Mac app's startup command. warden doesn't hit it:
+      its Rex blocks carry only `cwd` and `initial_input` (`rex/mod.rs`), so they run the account
+      shell before and after a restart alike.
+    - "Output takes 90 s to come back after a conn drop, even though the control conn resumes in
+      seconds" (11-11, active): the Mac app's `data.connect` after a drop lags control by about
+      90 s. Client-side so far; warden's relay reconnects its own data stream.
+    - "Rex's Program Status Protocol Hold / Queued Status" (11-18, active) asks for a state between
+      `working` and `blocked`. The 11-13 Codex async-question gap stays open.
+  - **OSC 7501:** tmux/tmux#5889 (cosgroveb, 11-15, open) asks tmux to forward program status to the
+    outer terminal. nicm has no plans but would take a PR that sets only the root record from the
+    current pane; a contributor offered to write it. tmux 3.8 is still the latest tag. Claude Code's
+    changelog since 10-08 adds fixes (background sessions, the trust prompt as blocked, background
+    tasks listed). Nothing new from Codex.
+  - **Ghostty:** no app release after v1.4.0. warden revendored both libraries to `vt-1.0.1`
+    (`108cacb`). Main is 53 commits past it, and of the watched files only `vt/version.h` and
+    `snapshot/page.zig` changed; `ghostty.h` and `embedded.zig` are untouched. Main moved to Zig
+    0.17.1 in Nix (#15230).
 
 ## What this changes here
 
