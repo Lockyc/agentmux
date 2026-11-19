@@ -350,3 +350,7 @@ just gate               # shellcheck + the test suite (test.sh)
 bash tests/mouse/run.sh # status-bar click tests (expect-driven pty)
 just bench              # presence-probe timing (ledger miss vs hit)
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
