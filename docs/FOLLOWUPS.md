@@ -43,52 +43,23 @@ create them with an explicit interactive shell as the pane start-command (keeps
 **Trigger to revisit:** a restored 2nd-tab pane comes up dead/blank, or before changing the
 `[[agents]] resume` convention to anything not autoloaded.
 
-## Named `--kill <basename>` can cross-fire between two live same-basename projects
+## Named commands pick the first of two live same-basename projects
 
-**Status:** deferred — a low-severity edge introduced by per-project socket sharding; the real
-fix is the already-deferred "give same-basename projects distinct names" change.
+**Status:** deferred — the real fix is the "give same-basename projects distinct names" change
+(see the `@amux_dir` guard footgun in CLAUDE.md).
 
-**Where:** `bin/amux` → `_amux_kill` (the explicit-name branch resolving `fsock`/`tsock`).
+**Where:** `_amux_sock_hosting`, used by named `amux --kill <name>`, `amux --probe <name>` and
+`amux attach <name>`.
 
-**What:** under per-project socket sharding, `amux --kill <base>` resolves the frame and term
-sockets by **two independent scans** — `_amux_frame_socks | _amux_sock_hosting "${base}-frame"`
-and `_amux_term_socks | _amux_sock_hosting "${base}-term"`. If two same-basename projects
-(`~/work/api`, `~/personal/api`) both have live frames at once, `<base>-frame` and `<base>-term`
-live on two different shards, so the two scans can land on **different** projects — `amux --kill api`
-could tear down project A's frame but project B's scratch terminal.
+**What:** with two same-basename projects (`~/work/api`, `~/personal/api`) both live, a name
+resolves to whichever project's shard sorts first in the glob, not necessarily the one the
+caller meant. Named `--kill` takes the agent, frame and terminal from that one project's
+shard, so it never splits a teardown across two projects, but it may still pick the other
+project. Warden drives kill through the CWD no-arg path, which derives every socket from
+`$PWD` and cannot mismatch; only a hand-typed name reaches this.
 
-**Why it's fine today:** warden drives kill via the **CWD no-arg** path, where `fsock`/`tsock`
-both derive from the one `$PWD` (`_amux_frame_sock`/`_amux_term_sock`) and cannot mismatch. Only an
-**explicit** same-basename `amux --kill <name>` typed by hand hits this, and running two
-same-basename projects' frames simultaneously is itself the case the CWD guard (`@amux_dir`) exists
-to disambiguate. Pre-sharding this couldn't happen (one shared socket meant only one same-basename
-project could hold a frame at all).
-
-**Fix when we act on it:** fold into the deferred "distinct session names for same-basename
-projects" work (see the `@amux_dir` guard footgun in CLAUDE.md) — once names are unique the
-cross-fire is impossible. A narrower stopgap: resolve `tsock` from the **same** shard `fsock`
-resolved to (frame `agentmux-frame-<hash>` → term `agentmux-term-<hash>`, same suffix) instead of
-an independent scan, so the pair always belongs to one project.
-
-**Trigger to revisit:** the same-basename distinct-naming change is picked up, or a hand-typed
-`amux --kill <name>` is observed killing the wrong project's terminal.
-
-**Agent sharding widens the same collision to live agent sessions, not just frame/term.**
-Before agent-socket sharding, two same-basename projects (`~/work/api`, `~/personal/api`)
-could never both hold a *live agent* session at once — one shared agent socket meant tmux's
-own session-name uniqueness made the second project's `amux` just attach to the first's
-session. Now that agents are sharded too (`agentmux-agent-<cksum $PWD>`, see the `@amux_dir`
-guard footgun in CLAUDE.md), each project gets its own agent server, so both `api` sessions
-*can* be live simultaneously. `_amux_sock_hosting` (used by named `amux --kill <name>`,
-`amux --probe <name>`, and the new `amux attach <name>`) resolves a name by scanning every
-agent shard and returning the **first** match — so with two live same-basename agents,
-`amux --kill api` / `amux attach api` deterministically addresses whichever shard sorts
-first in the glob, not necessarily the one the caller meant. Same root cause and same fix as
-the frame/term case above (distinct session names removes it outright); until then this is
-the agent-session sibling of the frame/term cross-fire, not a separate bug.
-
-**Trigger to revisit (agent case):** as above, plus any report of `amux --kill <name>` or
-`amux attach <name>` landing on the wrong same-basename project's agent session.
+**Trigger to revisit:** the distinct-naming change is picked up, or a named `--kill`/`attach`
+is reported landing on the wrong same-basename project.
 
 ## `--pending` still defers for a legacy window the ledger places in this cwd
 

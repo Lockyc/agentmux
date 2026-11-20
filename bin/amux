@@ -1587,14 +1587,28 @@ _amux_kill() {
   if [ "${1:-}" = "--suspend" ]; then suspend=1; shift; fi
   local arg base
   if [ $# -gt 0 ]; then arg=$(_amux_sanitize_session "$1"); else arg=$(_amux_default_session_name); fi
-  local fsock tsock parts="" by_dir=0
+  local fsock tsock parts="" by_dir=0 _named_asock=""
   [ $# -eq 0 ] && by_dir=1
   base=$(_amux_target_base "$arg" "$((1 - by_dir))")
   if [ "$by_dir" -eq 1 ]; then
     fsock=$(_amux_frame_sock); tsock=$(_amux_term_sock)   # CWD path: derive from $PWD
   else
-    fsock=$(_amux_frame_socks | _amux_sock_hosting "${base}-frame")  # named: scan shards
-    tsock=$(_amux_term_socks | _amux_sock_hosting "${base}-term")
+    # Named: one project's shards. agent/frame/term share a $PWD hash suffix, so the
+    # first shard hosting any of <base>'s sessions names all three; independent scans
+    # could pair one same-basename project's frame with another's terminal.
+    local _hit="" _h=""
+    _hit=$(_amux_agent_socks | _amux_sock_hosting "$base") \
+      || _hit=$(_amux_frame_socks | _amux_sock_hosting "${base}-frame") \
+      || _hit=$(_amux_term_socks | _amux_sock_hosting "${base}-term") || true
+    case "$_hit" in agentmux-agent-?* | agentmux-frame-?* | agentmux-term-?*) _h=${_hit#agentmux-*-} ;; esac
+    if [ -n "$_h" ] && [ -z "${AGENTMUX_AGENT_SOCKET:-}${AGENTMUX_FRAME_SOCKET:-}${AGENTMUX_TERM_SOCKET:-}" ]; then
+      fsock="agentmux-frame-$_h"; tsock="agentmux-term-$_h"
+      if tmux -L "agentmux-agent-$_h" has-session -t "=$base" 2>/dev/null; then _named_asock="agentmux-agent-$_h"; fi
+    else   # an override socket (tests) or unsharded names: scan each kind
+      fsock=$(_amux_frame_socks | _amux_sock_hosting "${base}-frame")
+      tsock=$(_amux_term_socks | _amux_sock_hosting "${base}-term")
+      _named_asock=$(_amux_agent_socks | _amux_sock_hosting "$base")
+    fi
   fi
   # CWD-derived kill (no explicit name → warden's call): only reap sessions whose
   # recorded @amux_dir is THIS dir, so a same-basename sibling project is never
@@ -1603,7 +1617,7 @@ _amux_kill() {
   # (`_amux_term_sock`), so the by-dir path can only ever reach THIS project's
   # scratch terminal — which may exist with no frame at all (`amux --term`).
   local _asock=""
-  if [ "$by_dir" -eq 0 ]; then _asock=$(_amux_agent_socks | _amux_sock_hosting "$base"); fi
+  if [ "$by_dir" -eq 0 ]; then _asock=$_named_asock; fi
   if { [ "$by_dir" -eq 0 ] && [ -n "$_asock" ]; } \
      || { [ "$by_dir" -eq 1 ] && _amux_agent_session_is_mine "$base"; }; then
     local _kl
@@ -3291,6 +3305,28 @@ STUB
     AGENTMUX_AGENT_SOCKET=""; AGENTMUX_FRAME_SOCKET="$_dgfsave"
   else
     echo "SKIP: dir-guard test (tmux not found)"
+  fi
+
+  # Named --kill with two live same-basename projects: the frame, terminal and agent it
+  # reaps all come from one project's shard. Project B (hash aaa, scanned first) has only
+  # a terminal; project A (hash bbb) has the frame. Killing by name must take A's frame
+  # and leave B's terminal alone.
+  if command -v tmux >/dev/null 2>&1; then
+    _nk_a="$AGENTMUX_AGENT_SOCKET" _nk_f="$AGENTMUX_FRAME_SOCKET" _nk_t="${AGENTMUX_TERM_SOCKET:-}" _nk_s="${AGENTMUX_STATE_DIR:-}"
+    AGENTMUX_AGENT_SOCKET=""; AGENTMUX_FRAME_SOCKET=""; AGENTMUX_TERM_SOCKET=""
+    AGENTMUX_STATE_DIR=$(mktemp -d)
+    tmux -L agentmux-term-aaa new-session -d -s nkapi-term 2>/dev/null
+    tmux -L agentmux-frame-bbb new-session -d -s nkapi-frame 2>/dev/null
+    _amux_kill nkapi >/dev/null 2>&1
+    if tmux -L agentmux-frame-bbb has-session -t =nkapi-frame 2>/dev/null; then _got=alive; else _got=killed; fi
+    _assert "named kill: reaps the project whose frame it found" "killed" "$_got"
+    if tmux -L agentmux-term-aaa has-session -t =nkapi-term 2>/dev/null; then _got=alive; else _got=killed; fi
+    _assert "named kill: spares a same-basename project's terminal" "alive" "$_got"
+    tmux -L agentmux-term-aaa kill-server 2>/dev/null; tmux -L agentmux-frame-bbb kill-server 2>/dev/null
+    rm -rf "$AGENTMUX_STATE_DIR"
+    AGENTMUX_AGENT_SOCKET="$_nk_a"; AGENTMUX_FRAME_SOCKET="$_nk_f"; AGENTMUX_TERM_SOCKET="$_nk_t"; AGENTMUX_STATE_DIR="$_nk_s"
+  else
+    echo "SKIP: named-kill shard test (tmux not found)"
   fi
 
   # --suspend vs --kill (real tmux + the real window-unlinked hook): --suspend must
