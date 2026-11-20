@@ -1719,22 +1719,6 @@ _amux_kill_all() {
   echo "killed $count agent session(s) + all frames/terminals"
 }
 
-# Re-source agent.conf on every LIVE agent shard, applying config changes to
-# already-running servers. tmux reads a config only when the server STARTS, so
-# an edit to agent.conf (or agentmux.conf, which agent.conf sources) doesn't
-# reach a running per-project agent server on its own — a fresh launch gets it
-# via `-f agent.conf`, but existing servers keep whatever they loaded at start.
-# Every line in the file is an idempotent `set -g`/`setw -g`/`bind`/`set-hook -g`,
-# so re-sourcing a live server is safe (same reasoning as the CLAUDE.md
-# status-format deploy footgun). Non-destructive, so no confirm.
-#
-# Agent sockets ONLY. Frame/term sockets are deliberately not touched:
-# re-sourcing frame.conf would reset the per-user `[frame] prefix` that bin/amux
-# applies per launch (frame.conf hard-codes C-f), clobbering it until the next
-# relaunch — so frame/term config changes are picked up by relaunching the frame,
-# not by --reload. terminal-features in agentmux.conf are computed at client
-# attach, so those (unchanged here) apply on the next reattach; the plain
-# `set -g` options this file adds take effect immediately.
 # Re-publish the LAUNCH-TIME config-derived session options on one live agent
 # shard, then let update_colors.sh act on them.
 #
@@ -1782,6 +1766,22 @@ EOF
   TMUX="$_sp,0,0" sh "$AGENTMUX_SCRIPTS/update_colors.sh" "$_first" 2>/dev/null
 }
 
+# Re-source agent.conf on every LIVE agent shard, applying config changes to
+# already-running servers. tmux reads a config only when the server STARTS, so
+# an edit to agent.conf (or agentmux.conf, which agent.conf sources) doesn't
+# reach a running per-project agent server on its own — a fresh launch gets it
+# via `-f agent.conf`, but existing servers keep whatever they loaded at start.
+# Every line in the file is an idempotent `set -g`/`setw -g`/`bind`/`set-hook -g`,
+# so re-sourcing a live server is safe (same reasoning as the CLAUDE.md
+# status-format deploy footgun). Non-destructive, so no confirm.
+#
+# Agent sockets ONLY. Frame/term sockets are deliberately not touched:
+# re-sourcing frame.conf would reset the per-user `[frame] prefix` that bin/amux
+# applies per launch (frame.conf hard-codes C-f), clobbering it until the next
+# relaunch — so frame/term config changes are picked up by relaunching the frame,
+# not by --reload. terminal-features in agentmux.conf are computed at client
+# attach, so those (unchanged here) apply on the next reattach; the plain
+# `set -g` options this file adds take effect immediately.
 _amux_reload() {
   local conf="$AGENTMUX_TMUX/agent.conf" _as ok=0 dead=0 fail=0
   if [ ! -f "$conf" ]; then

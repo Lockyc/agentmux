@@ -13,9 +13,7 @@ function amux --description 'agentmux session launcher'
     command $AGENTMUX_BIN $argv
 end
 
-# Disable file completion for amux (session names are free-form, not paths),
-# so non-first arguments offer nothing — matching the zsh completer, which
-# adds candidates only at CURRENT == 2.
+# No file completion: amux arguments are never paths.
 complete -c amux -f
 # Complete agent names + -<flag> shortcuts only as the first argument.
 # __fish_is_first_arg counts tokens without stripping flags, so (unlike

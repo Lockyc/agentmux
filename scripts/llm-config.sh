@@ -38,6 +38,8 @@ _amux_config_json() {
 # 45, not the original 20: the default model's stand-mode calls measure 33-43s,
 # so 20 cut off every refresh (config/amux.toml.example carries the numbers).
 _AMUX_LLM_TIMEOUT_DEFAULT=45
+_AMUX_LLM_URL_DEFAULT=http://localhost:1234/v1/chat/completions
+_AMUX_LLM_MODEL_DEFAULT=qwen2.5-14b-instruct
 
 # LLM_CONFIG_SELFTEST=1 — asserts the positional read below survives a [llm]
 # block that omits fields. Guards the `// ""` vs `// empty` trap: with `empty`,
@@ -60,8 +62,8 @@ if [ "${LLM_CONFIG_SELFTEST:-}" = "1" ]; then
       echo "selftest FAIL [$1]: want [$2|$3|$4] got [$_got]" >&2; _fail=1
     fi
   }
-  _DU=http://localhost:1234/v1/chat/completions
-  _DM=qwen2.5-14b-instruct
+  _DU=$_AMUX_LLM_URL_DEFAULT
+  _DM=$_AMUX_LLM_MODEL_DEFAULT
   _DT=$_AMUX_LLM_TIMEOUT_DEFAULT
   # Every partial block must land each key in its OWN variable, missing ones
   # falling back to defaults — not shifting into the next slot.
@@ -97,8 +99,8 @@ _amux_load_llm() {
     _llm_model=$(printf '%s\n' "$_out"   | sed -n '2p')
     _llm_timeout=$(printf '%s\n' "$_out" | sed -n '3p')
   fi
-  _llm_url="${AGENTMUX_LLM_URL:-${_llm_url:-http://localhost:1234/v1/chat/completions}}"
-  _llm_model="${AGENTMUX_LLM_MODEL:-${_llm_model:-qwen2.5-14b-instruct}}"
+  _llm_url="${AGENTMUX_LLM_URL:-${_llm_url:-$_AMUX_LLM_URL_DEFAULT}}"
+  _llm_model="${AGENTMUX_LLM_MODEL:-${_llm_model:-$_AMUX_LLM_MODEL_DEFAULT}}"
   _llm_timeout="${AGENTMUX_LLM_TIMEOUT:-${_llm_timeout:-$_AMUX_LLM_TIMEOUT_DEFAULT}}"
   case "$_llm_timeout" in ''|*[!0-9.]*) _llm_timeout=$_AMUX_LLM_TIMEOUT_DEFAULT ;; esac
 }

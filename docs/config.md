@@ -77,8 +77,8 @@ Any OpenAI-compatible `/v1/chat/completions` server (LM Studio, Ollama, llama.cp
 
 | Key | Default | What it does |
 |---|---|---|
-| `url` | `http://localhost:1234/v1/chat/completions` | Endpoint. Env: `AGENTMUX_LLM_URL` |
-| `model` | `qwen2.5-14b-instruct` | Model name sent in the request. Env: `AGENTMUX_LLM_MODEL` |
+| `url` | `http://localhost:1234/v1/chat/completions` (`_AMUX_LLM_URL_DEFAULT`) | Endpoint. Env: `AGENTMUX_LLM_URL` |
+| `model` | `qwen2.5-14b-instruct` (`_AMUX_LLM_MODEL_DEFAULT`) | Model name sent in the request. Env: `AGENTMUX_LLM_MODEL` |
 | `timeout` | `45` (`_AMUX_LLM_TIMEOUT_DEFAULT`) | Maximum seconds to wait for each request. Env: `AGENTMUX_LLM_TIMEOUT` |
 
 ### `[[hosts]]` — remote machines for `amux @<name>`

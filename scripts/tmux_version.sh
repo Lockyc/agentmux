@@ -4,10 +4,10 @@
 # Single source of truth for "is the running tmux new enough for the notes
 # feature's click-to-edit prefill" — scripts/notes.sh's `click` case uses
 # `command-prompt -l`, added in tmux 3.6 (README Prerequisites; verified
-# against tmux's own CHANGES, section "CHANGES FROM 3.5a TO 3.6"). Both
-# tests/mouse/run.sh (hard-abort preflight) and test.sh (skip-vs-fail
-# classification of the tests/mouse block) source this rather than each
-# re-encoding the floor and the parse, so the two cannot drift.
+# against tmux's own CHANGES, section "CHANGES FROM 3.5a TO 3.6").
+# tests/mouse/run.sh (hard-abort preflight), test.sh (skip-vs-fail
+# classification of the tests/mouse block) and install.sh (a warning) source
+# this rather than each re-encoding the floor and the parse, so they cannot drift.
 #
 # Pure POSIX sh — safe to source from /bin/sh or bash.
 #
