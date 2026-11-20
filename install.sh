@@ -27,11 +27,22 @@ elif _is_symlink_dev; then
 else
   echo "agentmux: existing non-clone install at $INSTALL_DIR." >&2
   echo "Move it aside (mv ~/.agentmux ~/.agentmux.bak), re-run this installer, then copy" >&2
+  # shellcheck disable=SC2088 # the path is printed for the user to type, not expanded
   echo "~/.agentmux.bak/amux.toml back into ~/.agentmux/ to keep your config." >&2
   exit 1
 fi
 
 VERSION="$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION" 2>/dev/null || true)"
+
+# Most of agentmux works on an older tmux, so a short one warns rather than stops; the
+# notes feature is what needs the floor (scripts/tmux_version.sh).
+if [ -f "$INSTALL_DIR/scripts/tmux_version.sh" ] && command -v tmux >/dev/null 2>&1; then
+  # shellcheck source=scripts/tmux_version.sh
+  . "$INSTALL_DIR/scripts/tmux_version.sh"
+  if ! _amux_tmux_capable "$(tmux -V 2>/dev/null)"; then
+    echo "agentmux: warning: tmux $AMUX_TMUX_PARSED is older than ${_AMUX_TMUX_MIN_MAJOR}.${_AMUX_TMUX_MIN_MINOR}; note editing will not work until you upgrade tmux." >&2
+  fi
+fi
 
 # Seed the user's config from the example if they don't have one yet.
 if [ -f "$INSTALL_DIR/amux.toml" ]; then

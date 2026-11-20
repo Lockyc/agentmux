@@ -181,29 +181,6 @@ values previously `rm -rf`'d the **user's real** `TMUX_TMPDIR` (the Critical tha
 **Trigger to revisit:** none identified — this is expected to stay accepted permanently
 unless dash's SIGINT/EXIT-trap semantics change.
 
-## Repo-wide minimum tmux version is documented, not enforced
-
-**Status:** deferred — the README states the requirement; nothing checks it.
-
-**Where:** `README.md` Prerequisites; the notes feature (`scripts/notes.sh`'s
-`command-prompt -l` usage, `tmux/agentmux.conf`'s format/mouse plumbing).
-
-**What:** the README documents `tmux >= 3.6` (verified against the CHANGES file shipped
-with tmux 3.7b: `-l` on `command-prompt` shipped in the section headed
-`CHANGES FROM 3.5a TO 3.6`). Nothing in the repo — `install.sh`, a selftest, a runtime
-check — verifies the installed tmux actually meets that; a user on an older tmux just
-hits the notes feature's silent-failure paths (mitigated by the `command-prompt` fallback
-message in `notes.sh`'s `click`, but still discovered at click time, not install time).
-
-**Fix when acted on:** add a version check — e.g. in `install.sh`, or an `amux --doctor`-
-style command — reusing `scripts/tmux_version.sh`'s `_amux_tmux_capable` (the one home of the
-floor and the `tmux -V` parse) — and warn (not hard-fail,
-since most of agentmux works fine on an older tmux) when it's under 3.6.
-
-**Trigger to revisit:** another feature raises the minimum further, or a user reports
-hitting the notes-feature silent-failure mode despite the README already stating the
-requirement.
-
 ## A keyboard path to edit a note
 
 **Status:** deferred — clicking already covers writing/editing a note; nothing yet opens
