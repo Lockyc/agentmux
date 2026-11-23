@@ -67,6 +67,9 @@ research:
         gh api repos/ghostty-org/ghostty/compare/<commit>...main for include/ghostty.h,
         src/apprt/embedded.zig, src/terminal/snapshot/; <commit> is in warden's
         crates/warden-app/vendor/PROVENANCE.md
+      note: >-
+        warden follows main, so a fix here that warden uses is a revendor in the same session
+        (warden's docs/surface.md), never a wait for a tag
     - name: libghostty PRs (snapshot, OSC 7501, multiplexer)
       check: gh search prs --repo ghostty-org/ghostty --merged-at '>=<as-of>'
       note: >-
