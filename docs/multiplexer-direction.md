@@ -847,9 +847,9 @@ than re-deriving the state from the web.
     With that action and the reply, a plain tab running tmux would get the active pane's status.
   - **Ghostty:** #15328 (11-23): a restored snapshot keeps the cursor's pending wrap at any column,
     not only the last one (left/right margins, DECSC/DECRC). Decode-only; the snapshot format is
-    unchanged. warden-relay decodes Rex snapshots with libghostty-vt, so the fix reaches it on the
-    next revendor; it isn't in a `vt-` tag yet. Main is 95 commits past `108cacb`; of the watched
-    files `snapshot/screen.zig` and `snapshot/snapshot.zig` changed (this fix), and `ghostty.h` and
+    unchanged. warden-relay decodes Rex snapshots with libghostty-vt, so warden revendored both
+    libraries to main `2474129` (`196f93f`), 95 commits past `108cacb`. Of the watched files only
+    `snapshot/screen.zig` and `snapshot/snapshot.zig` changed (this fix), and `ghostty.h` and
     `embedded.zig` are untouched. No app release after v1.4.0.
   - **`rex-client` now says hello at `API_REVISION` 14** (warden `0e3759d`), so the 11-20 concern
     about servers dropping revision 7 no longer applies.
