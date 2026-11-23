@@ -836,6 +836,34 @@ than re-deriving the state from the web.
     (`108cacb`). Main is 53 commits past it, and of the watched files only `vt/version.h` and
     `snapshot/page.zig` changed; `ghostty.h` and `embedded.zig` are untouched. Main moved to Zig
     0.17.1 in Nix (#15230).
+- **2026-11-24** — tmux forwards OSC 7501, plus a snapshot decoder fix. There's no devlog, docs
+  change (still 33 pages, attach and protocol searches unchanged), Mac or Server & CLI release
+  since `preview.33` / `preview.22` (11-19), and nothing moves the unlock.
+  - **tmux master forwards the active pane's OSC 7501 status to the outer terminal** (`9e5702fb`,
+    11-23, PR #5907 from cosgroveb, closing #5889). tmux sends `OSC 7501 ; ?` to the outer terminal
+    on attach and forwards only if it answers, or if the `programstatus` terminal feature is set; it
+    clears the status on detach. tmux 3.8 is still the latest tag. warden's plain tabs don't answer
+    the query (no `ghostty.h` action; warden's `docs/FOLLOWUPS.md`), so nothing reaches warden yet.
+    With that action and the reply, a plain tab running tmux would get the active pane's status.
+  - **Ghostty:** #15328 (11-23): a restored snapshot keeps the cursor's pending wrap at any column,
+    not only the last one (left/right margins, DECSC/DECRC). Decode-only; the snapshot format is
+    unchanged. warden-relay decodes Rex snapshots with libghostty-vt, so the fix reaches it on the
+    next revendor; it isn't in a `vt-` tag yet. Main is 95 commits past `108cacb`; of the watched
+    files `snapshot/screen.zig` and `snapshot/snapshot.zig` changed (this fix), and `ghostty.h` and
+    `embedded.zig` are untouched. No app release after v1.4.0.
+  - **`rex-client` now says hello at `API_REVISION` 14** (warden `0e3759d`), so the 11-20 concern
+    about servers dropping revision 7 no longer applies.
+  - **ssh install is shipped:** `rex server install ssh://<address>` installs and starts a server
+    over SSH, and every client can use it (Hashimoto, X, 11-19). warden's `host_endpoint` still
+    skips `ssh://`.
+  - **Rex Windows** `preview.33` to `.35` (11-20 to 11-23), embedding server `preview.22`. Nothing
+    warden reads.
+  - **Discord feedback** (community MCP, since 11-20): "Program status: let API clients know if a
+    done/error record has been seen" (active) asks Rex to expose whether a client has seen a
+    `done`/`error` record. warden keeps that state itself (`rex/attention.rs`). "session.recent does
+    nothing" (11-20, active) is the `preview.22` focus history, which warden doesn't call.
+  - Nothing from Claude Code or Codex on OSC 7501, and no press (the 11-23 Hacker News item reposts
+    the 10-05 devlog).
 
 ## What this changes here
 
@@ -877,8 +905,9 @@ as the client.
   which keeps that layer optional.
 - **Agent status reaches warden from Rex, not from the terminal.** Claude Code emits OSC
   7501 only to a terminal that answers its query (ledger, 2026-10-13). Rex answers it. The
-  Ghostty app doesn't, and tmux does only from master (2026-11-13), keeping the state in its own
-  formats without passing it out. So under amux nothing reaches warden, and amux doesn't grow a
+  Ghostty app doesn't. tmux master answers it (2026-11-13) and forwards the active pane's status
+  only to an outer terminal that answers tmux's own query (2026-11-24), which warden's surfaces
+  don't. So under amux nothing reaches warden, and amux doesn't grow a
   7501 bridge for a layer that is going away. Under Rex, warden reads the events on its control
   connection and renders the states as chrome, which is where warden's sidebar and tab-row dots already
   live. The events are raw states. Deciding what deserves attention takes a policy on top,
