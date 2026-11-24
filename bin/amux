@@ -2189,6 +2189,13 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   # on every entry path can never walk the dir somewhere new.
   _assert "canonical pwd: idempotent" "$_cp_real" \
     "$(cd "$_cp_tmp/real" && _amux_canonicalise_pwd && _amux_canonicalise_pwd && printf '%s' "$PWD")"
+  # `dirs` patterns match the RESOLVED path (README "dirs"): from the symlink, the
+  # target-path pattern wins and the link-path pattern never matches.
+  _cp_cfg="$_cp_tmp/amux.toml"
+  printf '[[agents]]\nname = "first"\ncmd = "x"\n\n[[agents]]\nname = "vialink"\ncmd = "x"\ndirs = ["%s"]\n\n[[agents]]\nname = "viareal"\ncmd = "x"\ndirs = ["%s"]\n' \
+    "$_cp_tmp/link" "$_cp_real" > "$_cp_cfg"
+  _assert "dirs: symlinked cwd matches the target-path pattern" "viareal" \
+    "$(cd "$_cp_tmp/link" && _amux_canonicalise_pwd && AGENTMUX_CONFIG="$_cp_cfg" _amux_json_cache="" agentmux_agent_for_dir "$PWD")"
   rm -rf "$_cp_tmp"
 
   # --complete emits agent names and -flags (newline-separated).
