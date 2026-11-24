@@ -487,9 +487,8 @@ _rm_preflight() {
 # Bootstrap
 # ---------------------------------------------------------------------------
 
-# The documented curl|bash install path, run on the remote. This string must be
-# kept in step with install.sh's published one-liner by hand — it is a hardcoded
-# duplicate, not derived from install.sh, so only one home per file, never two.
+# The documented curl|bash install path, run on the remote. README.md and
+# install.sh publish the same line; the selftest asserts both carry it verbatim.
 _rm_bootstrap_cmd() {
   printf '%s' 'curl -fsSL https://raw.githubusercontent.com/lockyc/agentmux/main/install.sh | bash'
 }
@@ -1267,6 +1266,12 @@ exec sh -c "$last"
   _assert "empty roster json succeeds" "0" "$_rm_ej_rc"
   _assert "empty roster json is []" "0" "$(printf '%s' "$_rm_ej" | jq -r 'length')"
   unset AGENTMUX_REMOTE_TRANSPORT_CMD AGENTMUX_REMOTE_TEST_PROG AGENTMUX_STATE_DIR
+
+  # ---- bootstrap one-liner matches the published install command ----
+  for _rm_pub in README.md install.sh; do
+    _assert "bootstrap cmd is the one $_rm_pub publishes" "1" \
+      "$(grep -qF -- "$(_rm_bootstrap_cmd)" "$RM_SCRIPT_DIR/../$_rm_pub" && echo 1 || echo 0)"
+  done
 
   echo "---- $pass passed, $fail failed"
   [ "$fail" -eq 0 ] || exit 1
