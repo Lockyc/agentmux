@@ -19,24 +19,37 @@ default:
 gate:
     bash test.sh
 
-# Measures `dropped --pending` for a cwd that is NOT in the ledger (the common
-# `[[window.root]]` case) vs one that IS, over a large synthetic ledger. warden forks this per
-# session-less tab every 5s; `sl_dropped`'s fast-path gate short-circuits the absent-from-ledger
-# case. The recipe IS the generator (seeds its own ledger).
-# Micro-benchmark the presence-probe hot path (ledger miss vs hit)
+# Times `dropped --pending` (warden's per-tab presence poll) for a cwd with no drop vs one
+# with a drop, first on the live-set sidecar fast path warden actually hits, then on the
+# ledger fallback (AMUX_PENDING_NO_FAST=1). The config has no [log] table and the session
+# log is not forced on, so `_sl_enabled` is timed as a real poll runs it. The recipe IS
+# the generator (seeds its own ledger, sidecars and config).
+# Micro-benchmark the presence-probe hot path (sidecar fast path vs ledger fallback)
 bench:
     #!/usr/bin/env bash
     set -euo pipefail
     dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
-    export AGENTMUX_STATE_DIR="$dir" AGENTMUX_SESSION_LOG=1
-    ledger="$dir/sessions.jsonl"; : > "$ledger"
-    # 60 dead-server windows across 60 distinct dirs (/w/p1../w/p60).
+    export AGENTMUX_STATE_DIR="$dir" AGENTMUX_CONFIG="$dir/amux.toml" SESSION_LOG_BOOT_EPOCH=1
+    unset AGENTMUX_SESSION_LOG
+    printf '[[agents]]\nname = "work"\ncmd = "claude"\n' > "$AGENTMUX_CONFIG"
+    ledger="$dir/sessions.jsonl"; : > "$ledger"; mkdir -p "$dir/live"
+    # 60 dead-server windows across 60 distinct dirs (/w/p1../w/p60), each with the
+    # live-set sidecar (+ .sock companion) its server wrote before it died.
     for i in $(seq 1 60); do
       printf '{"ts":%d,"event":"open","socket_path":"/s/%d","server_pid":%d,"session":"p%d","window_id":"@1","window_name":"claude","cwd":"/w/p%d","agent":"work"}\n' $((100+i)) "$i" $((9000+i)) "$i" "$i" >> "$ledger"
       printf '{"ts":%d,"event":"resume","socket_path":"/s/%d","server_pid":%d,"window_id":"@1","label":"d%d","resume_cmd":"claude --resume d%d"}\n' $((101+i)) "$i" $((9000+i)) "$i" "$i" >> "$ledger"
+      side="$dir/live/$(printf '/s/%d' "$i" | cksum | cut -d' ' -f1)-$((9000+i)).windows"
+      printf '@1\t/w/p%d\twork\t1\n' "$i" > "$side"; printf '/s/%d\n' "$i" > "$side.sock"
     done
-    echo "ledger lines: $(wc -l < "$ledger")"; runs=50
-    echo "== absent cwd (/w/does-not-exist) x$runs =="
-    time for _ in $(seq $runs); do SESSION_LOG_BOOT_EPOCH=1 sh scripts/session_log.sh dropped --pending /w/does-not-exist >/dev/null; done
-    echo "== present cwd (/w/p30) x$runs =="
-    time for _ in $(seq $runs); do SESSION_LOG_BOOT_EPOCH=1 sh scripts/session_log.sh dropped --pending /w/p30 >/dev/null; done
+    echo "ledger lines: $(wc -l < "$ledger" | tr -d ' '), sidecars: $(ls "$dir"/live/*.windows | wc -l | tr -d ' ')"
+    for cwd in /w/p30 /w/does-not-exist; do
+      echo "$cwd answers: '$(sh scripts/session_log.sh dropped --pending "$cwd")' (fast) / '$(AMUX_PENDING_NO_FAST=1 sh scripts/session_log.sh dropped --pending "$cwd")' (fallback)"
+    done
+    runs=50
+    for mode in fast fallback; do
+      nofast=""; [ "$mode" = fallback ] && nofast=1
+      echo "== $mode: drop present (/w/p30) x$runs =="
+      time for _ in $(seq $runs); do AMUX_PENDING_NO_FAST=$nofast sh scripts/session_log.sh dropped --pending /w/p30 >/dev/null; done
+      echo "== $mode: no drop (/w/does-not-exist) x$runs =="
+      time for _ in $(seq $runs); do AMUX_PENDING_NO_FAST=$nofast sh scripts/session_log.sh dropped --pending /w/does-not-exist >/dev/null; done
+    done

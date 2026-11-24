@@ -348,7 +348,7 @@ Needs `shellcheck` and `expect` (neither is needed to use agentmux).
 ```sh
 just gate               # shellcheck + the test suite (test.sh)
 bash tests/mouse/run.sh # status-bar click tests (expect-driven pty)
-just bench              # presence-probe timing (ledger miss vs hit)
+just bench              # presence-probe timing (sidecar fast path vs ledger fallback)
 ```
 
 ## License
