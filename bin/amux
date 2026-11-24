@@ -31,8 +31,9 @@ if [ ! -d "$AGENTMUX_SCRIPTS" ]; then
 fi
 
 # --- Lazy helper loading -----------------------------------------------------------
-# agent_window_style.sh (+ colours.sh), remote_attach.sh (+ remote.sh) and
-# agentmux-config.sh each re-resolve their own script dir with forks at source time. NOTHING on the presence-probe path touches any of
+# agent_window_style.sh (+ colours.sh) and remote_attach.sh (+ remote.sh) re-resolve
+# their own script dir with forks at source time; agentmux-config.sh is the third lazy
+# lib. NOTHING on the presence-probe path touches any of
 # them — `_amux_probe` needs only functions defined in this file — so sourcing all three
 # eagerly was the dominant cost of the command warden polls most. Load on first use.
 #
