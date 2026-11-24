@@ -114,7 +114,9 @@ _sl_enabled() {
     0|false|no|off)  return 1 ;;
     1|true|yes|on)   return 0 ;;
   esac
-  val=$(_amux_config_json | jq -r '.log.sessions // true' 2>/dev/null)
+  # Not `.log.sessions // true`: jq's `//` treats false as absent, so that read
+  # could never turn logging off.
+  val=$(_amux_config_json | jq -r '.log.sessions' 2>/dev/null)
   [ "$val" != "false" ]
 }
 
@@ -3742,6 +3744,28 @@ rm -rf "$AGENTMUX_STATE_DIR"
 
 AGENTMUX_STATE_DIR=$_ah_prev_sd; export AGENTMUX_STATE_DIR
 unset _ignore
+
+# ---- _sl_enabled: [log] sessions from amux.toml ----
+# A toml2json function shadows the binary and records each call; it delegates so
+# the config still parses.
+_en_d=$(mktemp -d)
+_en_case() {  # <toml body> -> "<0|1 exit> <parser calls>"
+  printf '%b' "$1" > "$_en_d/amux.toml"; : > "$_en_d/calls"
+  (
+    toml2json() { echo x >> "$_en_d/calls"; command toml2json; }
+    AGENTMUX_SESSION_LOG='' AGENTMUX_CONFIG="$_en_d/amux.toml" XDG_CACHE_HOME="$_en_d/cache" _sl_enabled
+    printf '%s %s' "$?" "$(wc -l < "$_en_d/calls" | tr -d ' ')"
+  )
+}
+_assert "enabled: [log] sessions = false → off" "1 1" \
+  "$(_en_case '[[agents]]\nname = "a"\ncmd = "x"\n\n[log]\nsessions = false\n')"
+_assert "enabled: dotted log.sessions = false → off" "1 1" \
+  "$(_en_case 'log.sessions = false\n')"
+_assert "enabled: [log] sessions = true → on" "0 1" \
+  "$(_en_case '[log]\nsessions = true\n')"
+_assert "enabled: missing config → on" "0" \
+  "$(AGENTMUX_SESSION_LOG='' AGENTMUX_CONFIG="$_en_d/nope.toml" _sl_enabled; echo $?)"
+rm -rf "$_en_d"
 
 echo "----"; echo "session_log selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
