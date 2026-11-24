@@ -114,6 +114,21 @@ _sl_enabled() {
     0|false|no|off)  return 1 ;;
     1|true|yes|on)   return 0 ;;
   esac
+  # The --pending hot path calls this on every poll, so a config that never mentions
+  # `log` — the common case — answers "enabled" from a builtin-only line scan with no
+  # fork. Any line that could open the log table (a `[...log...]` header, a dotted
+  # `log.` key, an inline `log =`) sends it to the real parse; a false match only
+  # costs that parse.
+  _sl_cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
+  [ -f "$_sl_cfg" ] || return 0
+  _sl_haslog=""
+  while IFS= read -r _sl_line || [ -n "$_sl_line" ]; do
+    _sl_line=${_sl_line#"${_sl_line%%[![:space:]]*}"}
+    case $_sl_line in
+      '['*log*']'*|log.*|log=*|'log '*|'"log"'*) _sl_haslog=1; break ;;
+    esac
+  done < "$_sl_cfg"
+  [ -n "$_sl_haslog" ] || return 0
   # Not `.log.sessions // true`: jq's `//` treats false as absent, so that read
   # could never turn logging off.
   val=$(_amux_config_json | jq -r '.log.sessions' 2>/dev/null)
@@ -3746,8 +3761,9 @@ AGENTMUX_STATE_DIR=$_ah_prev_sd; export AGENTMUX_STATE_DIR
 unset _ignore
 
 # ---- _sl_enabled: [log] sessions from amux.toml ----
-# A toml2json function shadows the binary and records each call; it delegates so
-# the config still parses.
+# It runs on every --pending poll, so a config that never mentions `log` (the common
+# case) must answer "enabled" without exec'ing the TOML parser. A toml2json function
+# shadows the binary and records each call; it delegates so the config still parses.
 _en_d=$(mktemp -d)
 _en_case() {  # <toml body> -> "<0|1 exit> <parser calls>"
   printf '%b' "$1" > "$_en_d/amux.toml"; : > "$_en_d/calls"
@@ -3763,6 +3779,14 @@ _assert "enabled: dotted log.sessions = false → off" "1 1" \
   "$(_en_case 'log.sessions = false\n')"
 _assert "enabled: [log] sessions = true → on" "0 1" \
   "$(_en_case '[log]\nsessions = true\n')"
+_assert "enabled: spaced [ log ] header → off" "1 1" \
+  "$(_en_case '  [ log ]\nsessions = false\n')"
+_assert "enabled: inline log = { sessions = false } → off" "1 1" \
+  "$(_en_case 'log = { sessions = false }\n')"
+_assert "enabled: no log table → on, without parsing" "0 0" \
+  "$(_en_case '[[agents]]\nname = "a"\ncmd = "x"\n')"
+_assert "enabled: commented-out [log] → on, without parsing" "0 0" \
+  "$(_en_case '# [log]\n# sessions = false\n')"
 _assert "enabled: missing config → on" "0" \
   "$(AGENTMUX_SESSION_LOG='' AGENTMUX_CONFIG="$_en_d/nope.toml" _sl_enabled; echo $?)"
 rm -rf "$_en_d"
