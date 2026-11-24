@@ -44,22 +44,29 @@ _colour_resolve() {
 
 # Lighten a 6x6x6 cube code (16..231): raise each channel halfway to max.
 # Codes outside the cube are returned unchanged.
-# update_colors.sh inlines this same cube-lighten for its @l2bg shade (kept
-# separate so that POSIX hook adapter stays source-dependency-free); mirror any
-# change to the cube math there.
 _colour_lighten() {
   c="$1"
   if [ "$c" -ge 16 ] && [ "$c" -le 231 ]; then
-    v=$((c - 16)); b=$((v % 6)); g=$(((v / 6) % 6)); r=$(((v / 36) % 6))
-    r=$((r + (6 - r) / 2)); [ "$r" -gt 5 ] && r=5
-    g=$((g + (6 - g) / 2)); [ "$g" -gt 5 ] && g=5
-    b=$((b + (6 - b) / 2)); [ "$b" -gt 5 ] && b=5
-    n=$((16 + 36 * r + 6 * g + b))
+    _colour_cube_lighten "$c"; n=$_colour_cube_lit
     [ "$n" -eq "$c" ] && n=$((c + 6)); [ "$n" -gt 231 ] && n=231
     printf '%s' "$n"
   else
     printf '%s' "$c"
   fi
+}
+
+# The per-channel cube lighten both palettes' injectivity rests on: each channel
+# of a cube code (16..231) is raised halfway to max, collapsing {0,1}->3, {2,3}->4,
+# {4,5}->5. Sets _colour_cube_lit (no fallback when the code is already at max;
+# each caller picks its own) rather than printing, so a caller pays no fork. Shared
+# by _colour_lighten and update_colors.sh's _amux_l2bg.
+_colour_cube_lighten() {
+  _ccl_v=$(($1 - 16))
+  _ccl_b=$((_ccl_v % 6)); _ccl_g=$(((_ccl_v / 6) % 6)); _ccl_r=$(((_ccl_v / 36) % 6))
+  _ccl_r=$((_ccl_r + (6 - _ccl_r) / 2)); [ "$_ccl_r" -gt 5 ] && _ccl_r=5
+  _ccl_g=$((_ccl_g + (6 - _ccl_g) / 2)); [ "$_ccl_g" -gt 5 ] && _ccl_g=5
+  _ccl_b=$((_ccl_b + (6 - _ccl_b) / 2)); [ "$_ccl_b" -gt 5 ] && _ccl_b=5
+  _colour_cube_lit=$((16 + 36 * _ccl_r + 6 * _ccl_g + _ccl_b))
 }
 
 # Choose a legible fg (16 black / 231 white) for a bg code. The 16..255 codes

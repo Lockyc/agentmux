@@ -31,6 +31,16 @@
 # dark-on-dark. Add/remove lines freely; order only affects which name maps
 # where, not correctness.
 
+# colours.sh supplies the cube math (_colour_cube_lighten). Its dir comes from $0
+# when this file runs as the hook, and from AGENTMUX_SCRIPTS when bin/amux sources
+# it ($0 is then bin/amux) — the same split the dispatch guard at the end makes.
+case "${0##*/}" in
+  update_colors.sh) _uc_dir=${0%/*}; [ "$_uc_dir" = "$0" ] && _uc_dir=. ;;
+  *) _uc_dir=$AGENTMUX_SCRIPTS ;;
+esac
+# shellcheck source=scripts/colours.sh
+. "$_uc_dir/colours.sh"
+
 # bg fg name — one entry per line. Keep backgrounds saturated, not near-black.
 #
 # Bases are confined to the {0,2,4} cube sub-lattice (every channel level in
@@ -110,21 +120,19 @@ _amux_pick_slot() {
 # fg, shift the bg lightness so contrast is >= line 0 — darker when the fg is light
 # (231), lighter when the fg is dark (16). Decompose the 6x6x6 cube
 # (idx = 16 + 36r + 6g + b), scale each channel, recompose. The fg=16 (lighten)
-# branch mirrors colours.sh `_colour_lighten`; keep them in step if you change the
-# cube math. Pure (no tmux): _amux_apply_colour uses it for the live shade, and the
-# "summary shades unique" selftest exercises it directly. Empty for a non-cube bg.
+# branch is colours.sh `_colour_cube_lighten`. Pure (no tmux): _amux_apply_colour
+# uses it for the live shade, and the "summary shades unique" selftest exercises it
+# directly. Empty for a non-cube bg.
 _amux_l2bg() {
   bg=$1 fg=$2
   case "$bg" in ''|*[!0-9]*) printf ''; return ;; esac
   if [ "$bg" -ge 16 ] && [ "$bg" -le 231 ]; then
-    c=$((bg - 16)); b=$((c % 6)); g=$(((c / 6) % 6)); r=$(((c / 36) % 6))
     if [ "$fg" = 16 ]; then
-      r=$((r + (6 - r) / 2)); g=$((g + (6 - g) / 2)); b=$((b + (6 - b) / 2))
-      [ "$r" -gt 5 ] && r=5; [ "$g" -gt 5 ] && g=5; [ "$b" -gt 5 ] && b=5
+      _colour_cube_lighten "$bg"; bg2=$_colour_cube_lit
     else
-      r=$((r / 2)); g=$((g / 2)); b=$((b / 2))
+      c=$((bg - 16)); b=$(((c % 6) / 2)); g=$(((c / 6) % 6 / 2)); r=$(((c / 36) % 6 / 2))
+      bg2=$((16 + 36 * r + 6 * g + b))
     fi
-    bg2=$((16 + 36 * r + 6 * g + b))
     if [ "$bg2" -eq "$bg" ]; then
       [ "$fg" = 16 ] && bg2=252 || bg2=234
     fi
