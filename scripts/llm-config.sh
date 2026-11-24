@@ -3,30 +3,32 @@
 # Resolves the [llm] settings into _llm_url / _llm_model / _llm_timeout.
 # Precedence: AGENTMUX_LLM_URL / AGENTMUX_LLM_MODEL / AGENTMUX_LLM_TIMEOUT
 # env vars > [llm] in amux.toml > built-in defaults.
-# Also exposes _amux_config_json — a shared config-JSON loader used by
-# _amux_load_llm and other [section] consumers (e.g. version_check.sh's
-# [update] check).
-# Reads the disk cache (config-<phash>-<mtime>.json under XDG_CACHE_HOME) populated
-# by agentmux-config.sh; falls back to live toml2json if cache is cold.
-# Pure POSIX sh — safe to source from /bin/sh scripts.
+# Also owns the amux.toml JSON disk cache: _amux_config_cache_file names the entry
+# (agentmux-config.sh's _amux_json writes it) and _amux_config_json reads it for every
+# POSIX consumer.
+# Pure POSIX sh — safe to source from /bin/sh scripts and from bash.
 
-# Echo the parsed amux.toml as JSON — disk cache (config-<phash>-<mtime>.json under
-# XDG_CACHE_HOME) if present, else live toml2json. Empty output + non-zero if the
-# config is missing or no parser is available. Shared by _amux_load_llm and other
-# [section] consumers (e.g. version_check.sh's [update] check).
+# Set _amux_cache_file to the disk-cache entry for config <cfg>:
+# config-<cksum of path>-<mtime>.json under XDG_CACHE_HOME. The path hash is
+# load-bearing: keying on mtime alone aliases two configs whose mtimes land in the
+# same second, serving one project's agents for another. Sets a variable rather than
+# printing so a bash caller pays no command-substitution fork for it.
+_amux_config_cache_file() {
+  _acf_mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0)
+  _acf_phash=$(printf '%s' "$1" | cksum | cut -d' ' -f1)
+  _amux_cache_file="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_acf_phash}-${_acf_mtime}.json"
+}
+
+# Echo the parsed amux.toml as JSON — the disk cache if warm, else live toml2json.
+# Empty output + non-zero if the config is missing or no parser is available.
 _amux_config_json() {
-  _cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
-  [ -f "$_cfg" ] || return 1
-  _mtime=$(stat -c %Y "$_cfg" 2>/dev/null || stat -f %m "$_cfg" 2>/dev/null || echo 0)
-  # Key must match agentmux-config.sh's _amux_json (the cache writer): PATH hash
-  # (cksum, no extra dep) + mtime. Keying on mtime alone aliases distinct configs
-  # sharing a one-second mtime; a divergent key here would silently miss the cache.
-  _phash=$(printf '%s' "$_cfg" | cksum | cut -d' ' -f1)
-  _cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux/config-${_phash}-${_mtime}.json"
-  if [ -f "$_cache" ] && [ -s "$_cache" ]; then
-    cat "$_cache"
+  _acj_cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
+  [ -f "$_acj_cfg" ] || return 1
+  _amux_config_cache_file "$_acj_cfg"
+  if [ -s "$_amux_cache_file" ]; then
+    cat "$_amux_cache_file"
   elif command -v toml2json >/dev/null 2>&1; then
-    toml2json < "$_cfg" 2>/dev/null
+    toml2json < "$_acj_cfg" 2>/dev/null
   else
     return 1
   fi

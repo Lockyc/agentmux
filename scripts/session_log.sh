@@ -83,6 +83,12 @@ TAB=${_SL_SEPS%?}
 # non-whitespace, so each one delimits exactly one field, empty or not.
 _SL_US=${_SL_SEPS#?}
 
+# amux.toml is read through llm-config.sh's _amux_config_json (the shared disk cache).
+# Dir by parameter expansion, not dirname: this runs on every poll.
+case $0 in */*) _SL_DIR=${0%/*} ;; *) _SL_DIR=. ;; esac
+# shellcheck source=scripts/llm-config.sh
+. "$_SL_DIR/llm-config.sh"
+
 _sl_state_dir() {
   printf '%s' "${AGENTMUX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agentmux}"
 }
@@ -108,9 +114,7 @@ _sl_enabled() {
     0|false|no|off)  return 1 ;;
     1|true|yes|on)   return 0 ;;
   esac
-  cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
-  [ -f "$cfg" ] || return 0
-  val=$(toml2json < "$cfg" 2>/dev/null | jq -r '.log.sessions // true' 2>/dev/null)
+  val=$(_amux_config_json | jq -r '.log.sessions // true' 2>/dev/null)
   [ "$val" != "false" ]
 }
 
@@ -521,9 +525,8 @@ _sl_resume_map() {
     printf '%s\n' "$SESSION_LOG_RESUME_MAP"
     return 0
   fi
-  cfg="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
-  [ -f "$cfg" ] || return 0
-  toml2json < "$cfg" 2>/dev/null \
+  _sl_cfg_json=$(_amux_config_json) || return 0
+  printf '%s' "$_sl_cfg_json" \
     | jq -r '.agents[]? | select(.resume) | [.name, .resume] | @tsv' 2>/dev/null
 }
 

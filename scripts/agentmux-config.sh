@@ -24,24 +24,23 @@ _AMUX_LOADED_CONFIG=1
 
 AGENTMUX_CONFIG="${AGENTMUX_CONFIG:-$HOME/.agentmux/amux.toml}"
 
+# llm-config.sh owns the disk-cache key (_amux_config_cache_file). Resolved by
+# parameter expansion, not dirname: no fork at source time.
+_amux_cfg_dir="${BASH_SOURCE[0]%/*}"
+[ "$_amux_cfg_dir" = "${BASH_SOURCE[0]}" ] && _amux_cfg_dir=.
+# shellcheck source=scripts/llm-config.sh
+. "$_amux_cfg_dir/llm-config.sh"
+
 _amux_json_cache=""
 _amux_json() {
   if [ -n "$_amux_json_cache" ]; then
     printf '%s' "$_amux_json_cache"; return 0
   fi
 
-  # Disk cache in a user-private dir, keyed on config PATH + mtime.
-  # Avoids toml2json on every hook invocation (in-memory cache only lives per-process).
-  # The path hash (cksum, no extra dep) is load-bearing: keying on mtime alone
-  # aliases two different configs whose mtimes land in the same second, serving
-  # one project's agents for another. Must match llm-config.sh's _amux_config_json.
-  local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentmux"
-  local mtime phash
-  mtime=$(stat -c %Y "$AGENTMUX_CONFIG" 2>/dev/null \
-       || stat -f %m "$AGENTMUX_CONFIG" 2>/dev/null \
-       || echo "0")
-  phash=$(printf '%s' "$AGENTMUX_CONFIG" | cksum | cut -d' ' -f1)
-  local cache_file="$cache_dir/config-${phash}-${mtime}.json"
+  # Disk cache, so a hook invocation skips toml2json (the in-memory cache above
+  # only lives per-process). This is the cache's only writer.
+  _amux_config_cache_file "$AGENTMUX_CONFIG"
+  local cache_file="$_amux_cache_file" cache_dir="${_amux_cache_file%/*}"
 
   if [ -f "$cache_file" ]; then
     _amux_json_cache=$(cat "$cache_file")
@@ -60,7 +59,8 @@ _amux_json() {
   _amux_json_cache="$json"
   mkdir -p "$cache_dir" 2>/dev/null
   # Only prune this config's own stale entries, not every config's.
-  find "$cache_dir" -maxdepth 1 -name "config-${phash}-*.json" -delete 2>/dev/null
+  local stem="${cache_file##*/}"; stem="${stem%-*}"   # config-<phash>
+  find "$cache_dir" -maxdepth 1 -name "${stem}-*.json" -delete 2>/dev/null
   # Write via tmp + rename so concurrent readers see either no file (and
   # fall through to live toml2json) or the complete new one, never a partial.
   _tmp="$cache_file.tmp.$$"
