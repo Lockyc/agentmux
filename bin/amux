@@ -2213,7 +2213,7 @@ if [ "${AMUX_SELFTEST:-}" = "1" ]; then
   case "$help" in *"-h, --help"*) _got="present" ;; *) _got="absent" ;; esac
   _assert "help advertises --help only" "absent" "$_got"
 
-  # --version reads ~/.agentmux/VERSION (or 'unknown'); just assert prefix.
+  # --version reads the running checkout's VERSION (or 'unknown'); just assert prefix.
   ver=$(amux --version)
   case "$ver" in "agentmux "*) _got="ok" ;; *) _got="bad" ;; esac
   _assert "version prefix" "ok" "$_got"

@@ -12,15 +12,16 @@
 # Enable:  [update] check = true in amux.toml, or AGENTMUX_VERSION_CHECK=1.
 # Disable: AGENTMUX_VERSION_CHECK=0 (overrides config).
 
+_VC_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+. "$_VC_DIR/llm-config.sh"
+
 VC_RAW_URL="https://raw.githubusercontent.com/lockyc/agentmux/main/VERSION"
-VC_VERSION_FILE="${AGENTMUX_VERSION_FILE:-$HOME/.agentmux/VERSION}"
+# The running checkout's VERSION, the same file `amux --version` reports.
+VC_VERSION_FILE="${AGENTMUX_VERSION_FILE:-${_VC_DIR%/*}/VERSION}"
 VC_STATE_DIR="${AGENTMUX_VERSION_STATE:-${XDG_CACHE_HOME:-$HOME/.cache}/agentmux}"
 VC_LATEST="$VC_STATE_DIR/latest"
 VC_STAMP="$VC_STATE_DIR/version-check-stamp"
 VC_MAX_AGE=86400   # 24h
-
-_VC_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
-. "$_VC_DIR/llm-config.sh"
 
 # Strictly-newer semver compare (numeric, dot-separated). Pure POSIX — avoids
 # `sort -V`, which BSD/macOS sort lacks. Returns 0 if REMOTE > LOCAL.
@@ -116,6 +117,13 @@ if [ "${VERSION_CHECK_SELFTEST:-}" = "1" ]; then
   _assert "0.9.9 < 1.0.0"      yes "$(_isnew 0.9.9 1.0.0)"
   _assert "0.3 < 0.3.1"        yes "$(_isnew 0.3 0.3.1)"
   _assert "0.3.1 not < 0.3"    no  "$(_isnew 0.3.1 0.3)"
+
+  # The local version compared is the one the running `amux --version` reports.
+  if [ -z "${AGENTMUX_VERSION_FILE:-}" ]; then
+    _assert "local version is the running checkout's" \
+      "$(env -u AMUX_SELFTEST bash "${_VC_DIR%/*}/bin/amux" --version 2>/dev/null)" \
+      "agentmux $(tr -d '[:space:]' < "$VC_VERSION_FILE")"
+  fi
 
   _td=$(mktemp -d)
   VC_VERSION_FILE="$_td/VERSION"; VC_LATEST="$_td/latest"
