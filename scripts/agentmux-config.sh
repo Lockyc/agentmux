@@ -186,12 +186,6 @@ agentmux_list_agent_completions() {
   _amux_json | jq -r '(.agents // [])[] | .name, (if .flag then "-" + .flag else empty end)'
 }
 
-# Field value from [llm] table. Returns empty string if field absent.
-# Usage: agentmux_llm_field <field>
-agentmux_llm_field() {
-  _amux_json | jq -r ".llm.${1} // empty"
-}
-
 # Field value from a directory-scoped config table, optionally directory-scoped.
 # Usage: _agentmux_scoped_field <table> <field> [dir]
 #
@@ -318,10 +312,6 @@ if [ "${AGENTMUX_CONFIG_SELFTEST:-}" = "1" ]; then
   _assert "build_cmd work"      "CLAUDE_CONFIG_DIR=~/.claude-work claude" "$(agentmux_build_cmd 1)"
   _assert "build_cmd ollama"    'ollama launch claude --model kimi-k2.6:cloud' "$(agentmux_build_cmd 2)"
   _assert "build_cmd opencode"  "opencode" "$(agentmux_build_cmd 3)"
-  _assert "llm_field url"       "http://localhost:1234/v1/chat/completions" "$(agentmux_llm_field url)"
-  _assert "llm_field model"     "qwen2.5-14b-instruct"                     "$(agentmux_llm_field model)"
-  _assert "llm_field timeout"   "45"                                        "$(agentmux_llm_field timeout)"
-  _assert "llm_field absent"    ""                                          "$(agentmux_llm_field nonexistent)"
   _assert "frame_field left"    "30"                                        "$(agentmux_frame_field left)"
   _assert "frame_field absent"  ""                                          "$(agentmux_frame_field nonexistent)"
   _assert "notes_field row"     "false"                                     "$(agentmux_notes_field row)"
