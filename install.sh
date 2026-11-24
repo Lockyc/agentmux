@@ -95,8 +95,10 @@ echo "  \"Stop\":              claude/status.sh done --notify 'Claude has finish
 echo ""
 echo "  Hook command path: ~/.agentmux/scripts/claude/status.sh <state>"
 echo ""
+# shellcheck source=scripts/llm-config.sh
+. "$INSTALL_DIR/scripts/llm-config.sh"
 echo "AI summary status lines require an OpenAI-compatible endpoint (LM Studio,"
-echo "Ollama, llama.cpp, etc.). Default: http://localhost:1234/v1/chat/completions."
+echo "Ollama, llama.cpp, etc.). Default: ${_AMUX_LLM_URL_DEFAULT}."
 echo "Configure via [llm] in ~/.agentmux/amux.toml or AGENTMUX_LLM_URL."
 echo ""
 echo "Optional — enable a once-daily update check: set [update] check = true"
