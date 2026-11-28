@@ -1000,7 +1000,8 @@ included. warden speaks the control protocol itself; the `rex` CLI isn't on its 
 one block. Rex restores sessions across its own restart and resumes programs that report through
 OSC 7577 (ledger, 2026-11-28), but warden keeps its own resume record (its hook's report plus
 `agents::RESUME_SHAPES`), so an agent's conversation survives through warden's agent tab list
-(sleep/wake, conversation resume). Reading Rex's `program_resume_records` instead is open.
+(sleep/wake, conversation resume). Reading Rex's `program_resume_records` instead waits on Rex
+resuming a Claude Code that runs from a per-profile home (warden's `docs/FOLLOWUPS.md`).
 
 ## Inline images are not a tmux problem
 
