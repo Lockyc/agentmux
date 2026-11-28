@@ -867,6 +867,77 @@ than re-deriving the state from the web.
     nothing" (11-20, active) is the `preview.22` focus history, which warden doesn't call.
   - Nothing from Claude Code or Codex on OSC 7501, and no press (the 11-23 Hacker News item reposts
     the 10-05 devlog).
+- **2026-11-28**: Rex resumes programs across a server restart through a new open protocol, OSC
+  7577. That overlaps warden's own resume report. There's no devlog post. The docs have 36 pages,
+  and the new ones are Program Resume Protocol, Resume Rules and the Windows and FreeBSD server
+  pages. The attach and protocol searches find nothing new about the data stream.
+  - **OSC 7577, the Program Resume Protocol** (`/rex/docs/build/program-resume`, revision 0.5,
+    11-25; Hashimoto, X, 11-25: written with Herdr and reviewed by other terminal and program
+    authors). A program reports how to bring it back, and after a restart the terminal may run that
+    command:
+    - **Report.** `OSC 7577 ; pid=<owner>:time=<epoch s>:argv=<base64>,<base64>…[:cwd=<base64>]:mac=<hex> ST`,
+      or `clear=1` in place of `argv`. `mac` is SHA-256 of the body before `:mac=`, then `:`, then
+      the token. It's a plain hash, not an HMAC, so a shell can compute it with the token on stdin.
+      The terminal ignores a report whose `mac` doesn't match or whose `time` is more than about
+      60 s from its clock. Unknown keys are ignored unless `need` names them.
+    - **Detection.** The terminal sets a random `OSC7577_TOKEN` (22–64 chars) in the environment
+      of each pty's first process, new on every start and never shared between panes. There's no
+      query. A program that reports removes the token from its children, and one that runs children
+      with fewer rights (a sandbox) removes it from them too. Never forward it over ssh.
+    - **Records.** The `pid` owns the record (it validates, but isn't security). The terminal clears
+      the record when the owner exits on its own, keeps it when the terminal itself ends, and
+      prefers an ancestor's record over a descendant's.
+    - **Restore.** The terminal runs `argv` as separate arguments inside the user's shell after its
+      startup files, never as shell source, as the same user, in `cwd` if one was given (it doesn't
+      resume if that directory is gone), and never retries a failed resume. No environment is
+      carried over. A missed limit or a changed command should send `clear` first.
+  - **Rex's side** (Server `preview.25`, 11-25; the Mac app embeds it from `preview.35`). On a server
+    restart Rex resumes a program that reports and is trusted by a rule, or one a `detect` rule
+    matches by its command line. Every other terminal is a shell in its saved directory, as
+    before. Trust rules live in `init.lua` under `resume.trust.<name>`: a `command` pattern
+    (`rex.match.uuid` / `id` / `name` / `under`), `flags` set to keep, drop or refuse, `dir` and
+    `except`. Built-in rules cover `claude --resume <uuid>`, `codex resume <uuid>`, copilot, crush,
+    gemini, opencode and pi; `resume.defaults = false` turns them off. Rex refuses a program that
+    runs under anything but a shell (`wrapped`) and never tries the same record twice. **Claude Code
+    reports through the session-start hook that `rex skill setup` installs**, not by itself. Pi
+    reports natively after 1.6.1, and nothing else reports yet. The API is the `program_resume_records`
+    block method (records with `command`, `chosen`, `trusted`, `rule`, `untrusted_reason`) and a
+    `terminal.program_resume_changed` event, whose records leave the command out because it may
+    hold a secret. Saved commands sit in plain text in the server's state directory.
+  - **Bearing on warden.** warden carries its own version of this: `claude-hook.sh` writes
+    `ESC _ warden1;resume=<base64> ESC \`, the relay forwards it, and `agents::RESUME_SHAPES`
+    allowlists it (warden's `docs/rex.md`). Rex now holds the same record, with an allowlist the
+    user configures and broader harness coverage, readable over the control connection warden
+    already has. warden doesn't read it yet. This machine has only warden's hook (no `rex skill
+    setup` hook), so Rex resumes no Claude Code here, and a Rex-resumed program in a restored
+    window would meet `retire_restored`, which sleeps a resumable agent and closes its window.
+  - **Discord feedback on resume** (community MCP, 11-25 on). Resume fails when zsh startup files
+    toggle job control (SIGTTOU, active; one report deferred), when `CLAUDE_CONFIG_DIR` picks the
+    Claude home (no flag can carry it, deferred and active), when a launcher wraps `claude`
+    (`wrapped`, active), with direnv (accepted), when the login shell is a wrapper script, and for
+    tcsh. The saved command keeps the launch flags even after `/model` changes them mid-session
+    (active). `CLAUDE_CONFIG_DIR` matters on this machine, which runs Claude Code from per-profile
+    homes.
+  - **Server & CLI `preview.23` (11-23), which the 11-24 entry missed:** new terminals no longer
+    set `REX_SESSION`, and `REX_BLOCK` identifies the session wherever `-s` goes. warden's hook
+    keys on `REX_BLOCK` already. `ssh://` endpoints gain IPv6, paths with spaces and Mac hosts
+    found without naming a socket. Focus is reported only when it changes, and mouse motion only on
+    a cell change.
+  - **Server & CLI `preview.24` (11-25):** `client.undo_close` restores what a client closed in the
+    last minute or so. `session.transfer_window` / `rex window move --to` moves a window to another
+    session with its programs and scrollback, which is the accepted "Move a pane to a new session"
+    request. Also `rex cp`, kitty images compressed in transit, DNS-rebinding refusal on plain-HTTP
+    listeners, and an HTML capture that keeps only http, https, mailto and file links. warden calls
+    none of these. The Mac app (`preview.34` to `.37`), iOS 0.1.1 (now in the App Store; Hashimoto,
+    X, 11-26) and Windows (`preview.37` to `.42`) changes are client UI only.
+  - **Ghostty:** `vt-1.0.2` (11-24; Hashimoto, X) is 11 commits past warden's `2474129`: skin-tone
+    emoji widths, IL/DL wrap and prompt-mark fixes, faster scrolling in left/right margins, Zig
+    minimum lowered to 0.17.0. Main is 45 commits past `2474129`. Of the watched files only
+    `vt/unicode.h` and `vt/version.h` changed, and `ghostty.h`, `embedded.zig` and `snapshot/` are
+    untouched. No app release after v1.4.0.
+  - **Hacker News:** "Program Resume Protocol (OSC 7577)" (11-25) and "Ask HN: What do you all think
+    of Rex" (11-26). No press.
+  - Nothing new on OSC 7501 from tmux, Claude Code or Codex. Codex is on `0.174.0-alpha.9`.
 
 ## What this changes here
 
@@ -894,7 +965,7 @@ as the client.
   | amux today | After |
   | --- | --- |
   | sessions that outlive the client | Rex server-side sessions (persistent, parked when idle) |
-  | the session ledger, restore after a server restart or reboot, sleeping a server | warden: each agent tab keeps its conversation id, a server restart brings tabs back asleep, wake resumes them; sleeping a server sleeps its tabs, then stops it (Rex restores sessions and layout across its own restart, but every terminal comes back a bare shell) |
+  | the session ledger, restore after a server restart or reboot, sleeping a server | warden: each agent tab keeps its conversation id, a server restart brings tabs back asleep, wake resumes them; sleeping a server sleeps its tabs, then stops it (Rex restores sessions and layout across its own restart, and resumes only a program that reports through OSC 7577 and that a trust rule allows; warden's hook doesn't report, so its agents come back as bare shells) |
   | `amux @host` over ssh/et/mosh | Rex servers on each host, reached with `-S <host>` / the client's remote sessions |
   | agent state in tab names, OSC 777 attention | OSC 7501 from the agent itself, read from Rex's `program_status_changed` events |
   | presence probe (`amux --probe`) | Rex `session_created`/`destroyed` and `child_exited` events |
@@ -926,9 +997,10 @@ subprocess: it writes the stream to the surface's PTY, decoding the opening snap
 libghostty-vt, and sends input back over control. The relay beat patching libghostty because a
 patch would sit in Ghostty internals and carry a fork through every revendor, security ones
 included. warden speaks the control protocol itself; the `rex` CLI isn't on its path. A pane shows
-one block. Rex restores sessions across its own restart but not the programs in them, so an
-agent's conversation survives only through warden's agent tab list (sleep/wake, conversation
-resume).
+one block. Rex restores sessions across its own restart and resumes programs that report through
+OSC 7577 (ledger, 2026-11-28), but warden keeps its own resume record (its hook's report plus
+`agents::RESUME_SHAPES`), so an agent's conversation survives through warden's agent tab list
+(sleep/wake, conversation resume). Reading Rex's `program_resume_records` instead is open.
 
 ## Inline images are not a tmux problem
 
